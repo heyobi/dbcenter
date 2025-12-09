@@ -1,0 +1,3219 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DBCenter - The Embedded PostgreSQL for Modern Apps</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            900: '#0f172a', // Enterprise Dark
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <script>
+            (function () {
+                const storageKey = 'dbcenter-theme';
+                let theme = 'dark';
+                try {
+                    const stored = localStorage.getItem(storageKey);
+                    let prefersDark = null;
+                    if (window.matchMedia) {
+                        prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    }
+                    if (stored === 'light' || stored === 'dark') {
+                        theme = stored;
+                    } else if (prefersDark === true) {
+                        theme = 'dark';
+                    } else if (prefersDark === false) {
+                        theme = 'light';
+                    } else {
+                        theme = 'dark';
+                    }
+                } catch (error) {
+                    theme = 'dark';
+                }
+                document.documentElement.setAttribute('data-theme', theme);
+                document.documentElement.style.colorScheme = theme;
+            })();
+    </script>
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        .glass-nav {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .hero-gradient {
+            background: radial-gradient(circle at top right, #dbeafe 0%, transparent 40%),
+                radial-gradient(circle at bottom left, #f0f9ff 0%, transparent 40%);
+        }
+
+        .code-window {
+            box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.25);
+            border: 1px solid #334155;
+        }
+
+        /* Logo Styling */
+        .logo-container svg {
+            width: 40px;
+            height: 40px;
+            fill: #2563eb;
+            /* Brand Color */
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover .icon-box {
+            transform: scale(1.1);
+            background-color: #eff6ff;
+        }
+
+        /* Kod bloğu arka plan rengini ayarla */
+        .code-window pre {
+            background-color: #1e293b !important;
+            margin: 0;
+        }
+
+        .code-window code {
+            background-color: #1e293b !important;
+        }
+
+        /* Install section styling */
+        .install-section {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            border-bottom: 1px solid #334155;
+        }
+
+        .install-toggle {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .install-toggle:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .install-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+
+        .install-content.open {
+            max-height: 200px;
+        }
+
+        .copy-button {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .install-code:hover .copy-button {
+            opacity: 1;
+        }
+
+        body {
+            transition: background-color 0.4s ease, color 0.4s ease;
+        }
+
+        :root {
+            color-scheme: dark;
+        }
+
+        html[data-theme="light"] {
+            color-scheme: light;
+        }
+
+        html[data-theme="light"] body {
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+
+        html[data-theme="dark"] body {
+            background-color: #050b17;
+            color: #e2e8f0;
+        }
+
+        .theme-toggle {
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            background: rgba(255, 255, 255, 0.72);
+            color: #334155;
+            transition: all 0.25s ease;
+            cursor: pointer;
+            width: 44px;
+            height: 44px;
+            border-radius: 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .theme-toggle:hover {
+            border-color: #2563eb;
+            color: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        .theme-toggle svg {
+            width: 22px;
+            height: 22px;
+            transition: transform 0.25s ease;
+        }
+
+        .theme-toggle:hover svg {
+            transform: rotate(-4deg) scale(1.05);
+        }
+
+        html[data-theme="dark"] .theme-toggle {
+            background: rgba(15, 23, 42, 0.78);
+            border-color: rgba(148, 163, 184, 0.32);
+            color: #cbd5f5;
+        }
+
+        html[data-theme="dark"] .theme-toggle:hover {
+            border-color: #60a5fa;
+            color: #60a5fa;
+        }
+
+        .theme-logo {
+            filter: invert(30%) sepia(81%) saturate(1707%) hue-rotate(209deg) brightness(93%) contrast(95%);
+            transition: filter 0.3s ease;
+        }
+
+        html[data-theme="dark"] .theme-logo {
+            filter: invert(92%) sepia(20%) saturate(743%) hue-rotate(190deg) brightness(118%) contrast(95%);
+        }
+
+        .theme-logo-footer {
+            filter: invert(100%);
+            transition: filter 0.3s ease;
+        }
+
+        html[data-theme="light"] .theme-logo-footer {
+            filter: invert(8%) sepia(12%) saturate(800%) hue-rotate(190deg) brightness(90%) contrast(92%);
+        }
+
+        html[data-theme="dark"] .glass-nav {
+            background: rgba(15, 23, 42, 0.92);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+        }
+
+        html[data-theme="dark"] .hero-gradient {
+            background: radial-gradient(circle at top right, rgba(59, 130, 246, 0.16) 0%, transparent 45%),
+                radial-gradient(circle at bottom left, rgba(37, 99, 235, 0.2) 0%, transparent 50%);
+        }
+
+        html[data-theme="dark"] .code-window {
+            border-color: rgba(148, 163, 184, 0.22);
+            box-shadow: 0 35px 80px -30px rgba(15, 23, 42, 0.85);
+        }
+
+        html[data-theme="dark"] .install-section {
+            background: linear-gradient(135deg, #0f172a 0%, #1b2746 100%);
+            border-bottom-color: rgba(59, 130, 246, 0.35);
+        }
+
+        html[data-theme="dark"] .install-code {
+            background-color: rgba(30, 41, 59, 0.7);
+        }
+
+        html[data-theme="dark"] .bg-white {
+            background-color: #111c2f !important;
+        }
+
+        html[data-theme="dark"] .bg-slate-50 {
+            background-color: #0b1220 !important;
+        }
+
+        html[data-theme="dark"] .bg-slate-100 {
+            background-color: rgba(148, 163, 184, 0.08) !important;
+        }
+
+        html[data-theme="dark"] .bg-slate-900 {
+            background-color: #020817 !important;
+        }
+
+        html[data-theme="dark"] .border-slate-100,
+        html[data-theme="dark"] .border-slate-200 {
+            border-color: rgba(148, 163, 184, 0.22) !important;
+        }
+
+        html[data-theme="dark"] .text-slate-900 {
+            color: #f8fafc !important;
+        }
+
+        html[data-theme="dark"] .text-slate-700 {
+            color: #dbe5ff !important;
+        }
+
+        html[data-theme="dark"] .text-slate-600 {
+            color: #cdd6f6 !important;
+        }
+
+        html[data-theme="dark"] .text-slate-500 {
+            color: #aab8e6 !important;
+        }
+
+        html[data-theme="dark"] .text-slate-400 {
+            color: #94a3b8 !important;
+        }
+
+        html[data-theme="dark"] .bg-blue-50 {
+            background-color: rgba(59, 130, 246, 0.18) !important;
+        }
+
+        html[data-theme="dark"] .bg-violet-50,
+        html[data-theme="dark"] .bg-violet-100 {
+            background-color: rgba(139, 92, 246, 0.2) !important;
+        }
+
+        html[data-theme="dark"] .bg-emerald-50,
+        html[data-theme="dark"] .bg-emerald-100 {
+            background-color: rgba(16, 185, 129, 0.2) !important;
+        }
+
+        html[data-theme="dark"] .bg-amber-50,
+        html[data-theme="dark"] .bg-amber-100 {
+            background-color: rgba(251, 191, 36, 0.25) !important;
+        }
+
+        html[data-theme="dark"] .bg-purple-50 {
+            background-color: rgba(168, 85, 247, 0.2) !important;
+        }
+
+        html[data-theme="dark"] .bg-rose-50 {
+            background-color: rgba(244, 114, 182, 0.24) !important;
+        }
+
+        html[data-theme="dark"] .feature-card {
+            background-color: #111c2f !important;
+            box-shadow: 0 18px 45px -20px rgba(15, 23, 42, 0.85);
+        }
+
+        html[data-theme="dark"] .feature-card:hover .icon-box {
+            background-color: rgba(59, 130, 246, 0.22) !important;
+        }
+
+        html[data-theme="dark"] .bg-gradient-to-r.from-brand-600.to-cyan-600 {
+            background-image: linear-gradient(to right, #2563eb, #06b6d4) !important;
+        }
+
+        html[data-theme="dark"] .bg-brand-900 {
+            background-color: #2563eb !important;
+        }
+
+        html[data-theme="dark"] .bg-white.border-slate-200 {
+            border-color: rgba(148, 163, 184, 0.22) !important;
+        }
+
+        html[data-theme="dark"] footer {
+            background-color: #020817 !important;
+            border-top: 1px solid rgba(148, 163, 184, 0.2) !important;
+        }
+
+        html[data-theme="dark"] footer .text-white {
+            color: #f8fafc !important;
+        }
+
+        html[data-theme="dark"] footer .text-slate-400 {
+            color: #9da8c6 !important;
+        }
+
+        html[data-theme="dark"] footer a:hover {
+            color: #e0e7ff !important;
+        }
+
+        html[data-theme="dark"] .hover\:bg-slate-50:hover {
+            background-color: rgba(148, 163, 184, 0.1) !important;
+        }
+
+        html[data-theme="dark"] .hover\:text-slate-900:hover {
+            color: #e2e8f0 !important;
+        }
+
+        html[data-theme="dark"] .hover\:border-slate-300:hover {
+            border-color: rgba(148, 163, 184, 0.35) !important;
+        }
+
+        .soft-gradient {
+            background: linear-gradient(180deg, #eef2ff 0%, #f8fafc 45%, #ffffff 100%);
+        }
+
+        html[data-theme="dark"] .soft-gradient {
+            background: linear-gradient(180deg, #050b17 0%, #0a1326 45%, #0f1c36 100%);
+        }
+
+        .hero-transition::before {
+            content: "";
+            position: absolute;
+            top: -140px;
+            left: 0;
+            right: 0;
+            height: 200px;
+            background: linear-gradient(180deg, rgba(219, 234, 254, 0.65) 0%, rgba(236, 241, 255, 0.4) 40%, rgba(248, 250, 252, 0) 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        html[data-theme="dark"] .hero-transition::before {
+            background: linear-gradient(180deg, rgba(37, 99, 235, 0.35) 0%, rgba(15, 23, 42, 0.55) 40%, rgba(5, 11, 23, 0) 100%);
+        }
+
+        .vector-stage {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .vector-layer {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .vector-accent {
+            color: rgba(37, 99, 235, 0.38);
+        }
+
+        .vector-accent-secondary {
+            color: rgba(6, 182, 212, 0.36);
+        }
+
+        .vector-accent-tertiary {
+            color: rgba(168, 85, 247, 0.35);
+        }
+
+        .vector-accent-strong {
+            color: rgba(30, 64, 175, 0.48);
+        }
+
+        .vector-accent-grid {
+            color: rgba(14, 116, 144, 0.38);
+        }
+
+        .vector-accent-warm {
+            color: rgba(236, 72, 153, 0.34);
+        }
+
+        html[data-theme="dark"] .vector-accent {
+            color: rgba(59, 130, 246, 0.55);
+        }
+
+        html[data-theme="dark"] .vector-accent-secondary {
+            color: rgba(34, 211, 238, 0.48);
+        }
+
+        html[data-theme="dark"] .vector-accent-tertiary {
+            color: rgba(216, 180, 254, 0.5);
+        }
+
+        html[data-theme="dark"] .vector-accent-strong {
+            color: rgba(147, 197, 253, 0.58);
+        }
+
+        html[data-theme="dark"] .vector-accent-grid {
+            color: rgba(45, 212, 191, 0.46);
+        }
+
+        html[data-theme="dark"] .vector-accent-warm {
+            color: rgba(249, 168, 212, 0.5);
+        }
+
+        .hero-vector-layer svg {
+            opacity: 0.6;
+            transition: opacity 0.4s ease, transform 0.6s ease;
+        }
+
+        @keyframes hero-arrow-flick {
+            0% {
+                transform: translateX(0);
+            }
+
+            30% {
+                transform: translateX(6px);
+            }
+
+            60% {
+                transform: translateX(-4px);
+            }
+
+            100% {
+                transform: translateX(0);
+            }
+        }
+
+        .hero-install-arrow.is-animating {
+            animation: hero-arrow-flick 0.6s ease;
+        }
+
+        @media (min-width: 1024px) {
+            .hero-vector-layer svg {
+                opacity: 0.9;
+            }
+        }
+
+        @media (min-width: 1440px) {
+            .hero-vector-layer svg {
+                transform: scale(1.05);
+            }
+        }
+
+        .floating-logo {
+            position: absolute;
+            pointer-events: none;
+            opacity: 0.26;
+            mix-blend-mode: multiply;
+            filter: hue-rotate(-12deg) saturate(1.28) drop-shadow(0 22px 40px rgba(30, 64, 175, 0.28));
+            transform-origin: center;
+            transform: translate3d(0, 0, 0);
+            transition: opacity 0.4s ease, transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+            will-change: transform, opacity;
+        }
+
+        .floating-logo::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 18%;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+            pointer-events: none;
+            mix-blend-mode: screen;
+        }
+
+        .floating-logo-alt {
+            mix-blend-mode: screen;
+            filter: hue-rotate(-6deg) saturate(1.45) drop-shadow(0 24px 46px rgba(59, 130, 246, 0.26));
+            opacity: 0.3;
+        }
+
+        .floating-logo-cool {
+            filter: hue-rotate(-18deg) saturate(1.5) drop-shadow(0 24px 44px rgba(37, 99, 235, 0.28));
+        }
+
+        .floating-logo-warm {
+            filter: hue-rotate(18deg) saturate(1.28) drop-shadow(0 24px 44px rgba(249, 115, 22, 0.24));
+        }
+
+        .floating-logo-slate {
+            filter: grayscale(0.05) saturate(1.05) drop-shadow(0 24px 42px rgba(30, 64, 175, 0.26));
+        }
+
+        .floating-logo-lg {
+            width: 120px;
+        }
+
+        .floating-logo-md {
+            width: 96px;
+        }
+
+        .floating-logo-sm {
+            width: 76px;
+        }
+
+        @media (min-width: 768px) {
+            .floating-logo-lg {
+                width: 156px;
+            }
+
+            .floating-logo-md {
+                width: 124px;
+            }
+
+            .floating-logo-sm {
+                width: 94px;
+            }
+        }
+
+        @media (min-width: 1280px) {
+            .floating-logo-lg {
+                width: 188px;
+            }
+
+            .floating-logo-md {
+                width: 148px;
+            }
+
+            .floating-logo-sm {
+                width: 108px;
+            }
+        }
+
+        .floating-logo-mobile {
+            display: block;
+        }
+
+        @media (min-width: 1024px) {
+            .floating-logo-mobile {
+                display: none;
+            }
+        }
+
+        .floating-logo--active {
+            opacity: 0.46 !important;
+            filter: saturate(1.5) drop-shadow(0 30px 60px rgba(59, 130, 246, 0.4));
+        }
+
+        html[data-theme="dark"] .floating-logo {
+            opacity: 0.58;
+            mix-blend-mode: screen;
+            filter: hue-rotate(-6deg) saturate(1.15) brightness(1.72) drop-shadow(0 32px 64px rgba(191, 219, 254, 0.46));
+        }
+
+        html[data-theme="dark"] .floating-logo-alt {
+            filter: hue-rotate(-4deg) saturate(1.22) brightness(1.78) drop-shadow(0 34px 66px rgba(224, 242, 254, 0.48));
+            opacity: 0.62;
+        }
+
+        html[data-theme="dark"] .floating-logo-cool {
+            filter: hue-rotate(-12deg) saturate(1.34) brightness(1.82) drop-shadow(0 36px 70px rgba(226, 232, 240, 0.5));
+        }
+
+        html[data-theme="dark"] .floating-logo-warm {
+            filter: hue-rotate(12deg) saturate(1.18) brightness(1.74) drop-shadow(0 34px 64px rgba(253, 244, 215, 0.44));
+        }
+
+        html[data-theme="dark"] .floating-logo-slate {
+            filter: grayscale(0.02) saturate(1.02) brightness(1.7) drop-shadow(0 34px 66px rgba(248, 250, 252, 0.4));
+        }
+
+        .content-elevated {
+            position: relative;
+            z-index: 2;
+        }
+
+        .arch-diagram {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(14, 165, 233, 0.12));
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 1.25rem;
+            padding: 1.5rem;
+            box-shadow: 0 28px 65px -32px rgba(15, 23, 42, 0.35);
+        }
+
+        html[data-theme="dark"] .arch-diagram {
+            background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(8, 145, 178, 0.16));
+            border-color: rgba(148, 163, 184, 0.28);
+            box-shadow: 0 35px 80px -35px rgba(2, 6, 23, 0.85);
+        }
+
+        .arch-svg {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .arch-core-outer {
+            fill: rgba(37, 99, 235, 0.18);
+            stroke: rgba(37, 99, 235, 0.35);
+            stroke-width: 2;
+        }
+
+        html[data-theme="dark"] .arch-core-outer {
+            fill: rgba(37, 99, 235, 0.32);
+            stroke: rgba(96, 165, 250, 0.45);
+        }
+
+        .arch-core-inner {
+            fill: rgba(255, 255, 255, 0.95);
+            stroke: rgba(148, 163, 184, 0.45);
+            stroke-width: 1.5;
+        }
+
+        html[data-theme="dark"] .arch-core-inner {
+            fill: rgba(15, 23, 42, 0.92);
+            stroke: rgba(148, 163, 184, 0.38);
+        }
+
+        .arch-link {
+            stroke: rgba(37, 99, 235, 0.45);
+            stroke-width: 1.6;
+            stroke-linecap: round;
+            fill: none;
+        }
+
+        html[data-theme="dark"] .arch-link {
+            stroke: rgba(96, 165, 250, 0.55);
+        }
+
+        .arch-link-dashed {
+            stroke-dasharray: 6 9;
+        }
+
+        .arch-node {
+            fill: rgba(255, 255, 255, 0.92);
+            stroke: rgba(148, 163, 184, 0.45);
+            stroke-width: 1.4;
+        }
+
+        html[data-theme="dark"] .arch-node {
+            fill: rgba(15, 23, 42, 0.88);
+            stroke: rgba(96, 165, 250, 0.45);
+        }
+
+        .arch-label {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            fill: #0f172a;
+        }
+
+        html[data-theme="dark"] .arch-label {
+            fill: #e2e8f0;
+        }
+
+        .arch-label-primary {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            fill: #1d4ed8;
+        }
+
+        html[data-theme="dark"] .arch-label-primary {
+            fill: #93c5fd;
+        }
+
+        .arch-label-secondary {
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            fill: #475569;
+        }
+
+        html[data-theme="dark"] .arch-label-secondary {
+            fill: #cbd5f5;
+        }
+
+        .arch-label-core {
+            font-size: 13px;
+            font-weight: 600;
+            fill: #1e293b;
+        }
+
+        html[data-theme="dark"] .arch-label-core {
+            fill: #e2e8f0;
+        }
+
+        .arch-caption {
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.8px;
+            fill: #64748b;
+            text-transform: uppercase;
+        }
+
+        html[data-theme="dark"] .arch-caption {
+            fill: #c7d2fe;
+        }
+
+        .performance-card {
+            position: relative;
+            border-radius: 1.5rem;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            padding: 2rem;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.9));
+            box-shadow: 0 32px 80px -48px rgba(15, 23, 42, 0.55);
+            overflow: hidden;
+        }
+
+        .performance-card::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: radial-gradient(circle at top right, rgba(59, 130, 246, 0.18), transparent 62%);
+            pointer-events: none;
+        }
+
+        .performance-card-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .performance-card-header {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .performance-description {
+            margin-bottom: 1.75rem;
+        }
+
+        .performance-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            flex-shrink: 0;
+        }
+
+        .performance-icon-emerald {
+            background: linear-gradient(135deg, #34d399, #10b981);
+            box-shadow: 0 18px 34px -18px rgba(16, 185, 129, 0.65);
+        }
+
+        .performance-icon-violet {
+            background: linear-gradient(135deg, #a855f7, #6366f1);
+            box-shadow: 0 18px 34px -18px rgba(99, 102, 241, 0.65);
+        }
+
+        .performance-chip {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.35rem 0.85rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .performance-chip-positive {
+            background: rgba(187, 247, 208, 0.5);
+            color: #047857;
+        }
+
+        .performance-series+.performance-series {
+            margin-top: 1.25rem;
+        }
+
+        .performance-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            font-size: 0.915rem;
+            color: #475569;
+        }
+
+        .performance-source {
+            font-weight: 500;
+        }
+
+        .performance-value {
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+        }
+
+        .performance-value-primary {
+            color: #047857;
+        }
+
+        .performance-value-secondary {
+            color: #6d28d9;
+        }
+
+        .performance-bar-track {
+            margin-top: 0.65rem;
+            height: 0.65rem;
+            border-radius: 9999px;
+            background: rgba(226, 232, 240, 0.9);
+            overflow: hidden;
+        }
+
+        .performance-bar {
+            height: 100%;
+            border-radius: inherit;
+        }
+
+        .performance-bar-emerald {
+            background: linear-gradient(90deg, #34d399 0%, #059669 100%);
+        }
+
+        .performance-bar-violet {
+            background: linear-gradient(90deg, #a855f7 0%, #6366f1 100%);
+        }
+
+        .performance-bar-baseline {
+            background: linear-gradient(90deg, rgba(148, 163, 184, 0.9) 0%, rgba(148, 163, 184, 0.55) 100%);
+        }
+
+        html[data-theme="dark"] .performance-card {
+            border-color: rgba(96, 165, 250, 0.28);
+            background: linear-gradient(135deg, rgba(9, 13, 24, 0.96), rgba(17, 25, 44, 0.9));
+            box-shadow: 0 38px 95px -52px rgba(2, 6, 23, 0.9);
+        }
+
+        html[data-theme="dark"] .performance-card::after {
+            background: radial-gradient(circle at top right, rgba(59, 130, 246, 0.32), transparent 68%);
+            opacity: 0.85;
+        }
+
+        html[data-theme="dark"] .performance-chip {
+            border-color: rgba(34, 197, 94, 0.25);
+        }
+
+        html[data-theme="dark"] .performance-chip-positive {
+            background: rgba(34, 197, 94, 0.2);
+            color: #6ee7b7;
+        }
+
+        html[data-theme="dark"] .performance-row {
+            color: #cbd5f5;
+        }
+
+        html[data-theme="dark"] .performance-value-primary {
+            color: #86efac;
+        }
+
+        html[data-theme="dark"] .performance-value-secondary {
+            color: #c4b5fd;
+        }
+
+        html[data-theme="dark"] .performance-bar-track {
+            background: rgba(148, 163, 184, 0.18);
+        }
+    </style>
+</head>
+
+<body class="font-sans text-slate-600 antialiased bg-white selection:bg-brand-100 selection:text-brand-900">
+
+    <!-- Navigation -->
+    <nav class="fixed w-full z-50 glass-nav transition-all duration-300" id="navbar">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+                <div class="flex items-center gap-3">
+                    <div class="logo-container">
+                        <!-- SVG Logo Placeholder - Replace src with actual path if needed, or embed -->
+                        <img src="dbcenterlogo.svg" alt="DBCenter Logo" class="w-10 h-10 theme-logo">
+                    </div>
+                    <span class="font-bold text-xl tracking-tight text-slate-900">dbcenter</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="hidden md:flex items-center space-x-8">
+                        <a href="#features"
+                            class="text-sm font-medium text-slate-600 hover:text-brand-600 transition">Features</a>
+                        <a href="#architecture"
+                            class="text-sm font-medium text-slate-600 hover:text-brand-600 transition">Architecture</a>
+                        <a href="#docs"
+                            class="text-sm font-medium text-slate-600 hover:text-brand-600 transition">Documentation</a>
+                        <a href="https://github.com/heyobi/dbcenter"
+                            class="text-slate-400 hover:text-slate-900 transition">
+                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path fill-rule="evenodd"
+                                    d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+                                    clip-rule="evenodd"></path>
+                            </svg>
+                        </a>
+                        <a href="#"
+                            class="bg-brand-900 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition shadow-lg shadow-brand-900/20">Get
+                            Started</a>
+                    </div>
+                    <button id="theme-toggle" aria-label="Toggle theme" class="theme-toggle">
+                        <svg id="theme-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path id="theme-toggle-icon-path" d="M21 12.79A9 9 0 1111.21 3a7.5 7.5 0 009.79 9.79z">
+                            </path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="relative pt-32 pb-20 lg:pt-48 lg:pb-32 overflow-hidden hero-gradient vector-stage">
+        <div class="vector-layer hero-vector-layer" aria-hidden="true">
+            <svg class="vector-accent-strong"
+                style="position:absolute; top:-200px; left:-220px; width:480px; height:480px;" viewBox="0 0 460 460"
+                fill="none">
+                <circle cx="180" cy="220" r="160" stroke="currentColor" stroke-width="1.4" stroke-dasharray="14 18"
+                    opacity="0.75"></circle>
+                <circle cx="240" cy="120" r="60" stroke="currentColor" stroke-width="1.2" opacity="0.55"></circle>
+                <path d="M60 320C140 240 220 240 300 320" stroke="currentColor" stroke-width="1.1"
+                    stroke-linecap="round" opacity="0.5"></path>
+            </svg>
+            <svg class="vector-accent-grid" style="position:absolute; top:14%; right:-14%; width:420px; height:420px;"
+                viewBox="0 0 400 400" fill="none">
+                <g opacity="0.7">
+                    <path d="M40 60H360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M40 140H360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M40 220H360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M40 300H360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M80 40V360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M160 40V360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M240 40V360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                    <path d="M320 40V360" stroke="currentColor" stroke-width="0.9" stroke-linecap="round"
+                        stroke-dasharray="6 10"></path>
+                </g>
+                <rect x="150" y="150" width="100" height="100" rx="26" stroke="currentColor" stroke-width="1.3"
+                    opacity="0.55"></rect>
+            </svg>
+            <svg class="vector-accent-warm"
+                style="position:absolute; bottom:-190px; right:-140px; width:420px; height:420px;" viewBox="0 0 380 380"
+                fill="none">
+                <polygon points="60,220 150,120 260,160 320,260 190,320" stroke="currentColor" stroke-width="1.1"
+                    stroke-linecap="round" stroke-linejoin="round" opacity="0.65"></polygon>
+                <circle cx="260" cy="90" r="52" stroke="currentColor" stroke-width="1" stroke-dasharray="8 12"
+                    opacity="0.55"></circle>
+                <path d="M80 280C140 230 220 230 300 290" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.55"></path>
+            </svg>
+            <!--
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-lg floating-logo-cool"
+                style="top:8%; right:6%;" loading="lazy" data-speed="0.62" data-amplitude="1.18" data-depth="0.68"
+                data-rotate="-18" data-scale="1.08" data-opacity="0.36" data-repel-zone="hero">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-lg floating-logo-alt"
+                style="top:18%; left:10%;" loading="lazy" data-speed="0.54" data-amplitude="1.12" data-depth="0.6"
+                data-rotate="-12" data-scale="1.02" data-opacity="0.32" data-repel-zone="hero">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-alt"
+                style="bottom:12%; left:56%;" loading="lazy" data-speed="0.58" data-amplitude="1.06" data-depth="0.55"
+                data-rotate="16" data-scale="0.94" data-opacity="0.28" data-repel-zone="hero">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-cool"
+                style="bottom:18%; right:28%;" loading="lazy" data-speed="0.66" data-amplitude="1.24" data-depth="0.62"
+                data-rotate="12" data-scale="0.96" data-opacity="0.3" data-repel-zone="hero">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-sm floating-logo-warm"
+                style="top:46%; right:12%;" loading="lazy" data-speed="0.76" data-amplitude="1.38" data-depth="0.74"
+                data-rotate="34" data-scale="0.9" data-opacity="0.3" data-repel-zone="hero">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-slate"
+                style="top:24%; left:6%;" loading="lazy" data-speed="0.68" data-amplitude="1.22" data-depth="0.7"
+                data-rotate="-8" data-scale="0.86" data-opacity="0.34" data-repel-zone="hero">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-warm"
+                style="bottom:10%; right:18%;" loading="lazy" data-speed="0.82" data-amplitude="1.4" data-depth="0.64"
+                data-rotate="22" data-scale="0.92" data-opacity="0.34" data-repel-zone="hero">
+            -->
+        </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+            <div class="grid lg:grid-cols-2 gap-8 lg:gap-16 items-center">
+
+                <!-- Text Content -->
+                <div class="relative z-20 max-w-2xl w-full" data-logo-repel data-logo-repel-id="hero"
+                    data-logo-repel-padding="72">
+                    <div
+                        class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-brand-600 text-xs font-semibold mb-6">
+                        <span class="relative flex h-2 w-2">
+                            <span
+                                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                        </span>
+                        v2.0 Now Available with Watcher Pattern
+                    </div>
+                    <h1
+                        class="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-bold tracking-tight text-slate-900 mb-4 lg:mb-6 leading-[1.1]">
+                        PostgreSQL Power.<br>
+                        <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-cyan-500">Zero
+                            Dependencies.</span>
+                    </h1>
+                    <p class="text-base sm:text-lg text-slate-600 mb-6 lg:mb-8 leading-relaxed">
+                        Embed a full-featured PostgreSQL instance directly into your Python, Go, or Rust application. No
+                        Docker required. No installation headaches. Just import and run.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-3 lg:gap-4">
+                        <div class="relative group">
+                            <div
+                                class="absolute -inset-0.5 bg-gradient-to-r from-brand-600 to-cyan-600 rounded-lg blur opacity-30 group-hover:opacity-75 transition duration-200">
+                            </div>
+                            <button id="hero-install-button"
+                                class="relative w-full bg-brand-600 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-lg text-sm sm:text-base font-semibold hover:bg-brand-700 transition flex items-center justify-center gap-2"
+                                type="button">
+                                <span id="hero-install-text" class="whitespace-pre-wrap text-left leading-tight">pip
+                                    install dbcenter</span>
+                                <svg id="hero-install-arrow" class="w-4 h-4 text-blue-200 hero-install-arrow"
+                                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <button
+                            class="px-6 sm:px-8 py-3 sm:py-4 rounded-lg text-sm sm:text-base font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition">
+                            View Documentation
+                        </button>
+                    </div>
+                    <div
+                        class="mt-6 lg:mt-10 flex flex-wrap items-center gap-4 lg:gap-6 text-xs sm:text-sm text-slate-500">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <span class="font-medium text-slate-600">PostGIS Ready</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <span class="font-medium text-slate-600">AI Vector Ready</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <span class="font-medium text-slate-600">Type Safe API</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <span class="font-medium text-slate-600">Rust Core</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Code Window -->
+                <div class="relative w-full overflow-hidden">
+                    <!-- Decorative blobs -->
+                    <div
+                        class="hidden lg:block absolute -top-20 -right-20 w-72 h-72 bg-purple-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob">
+                    </div>
+                    <div
+                        class="hidden lg:block absolute -bottom-20 -left-20 w-72 h-72 bg-blue-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000">
+                    </div>
+
+                    <div class="code-window bg-[#1e293b] rounded-lg lg:rounded-xl overflow-hidden relative z-10">
+                        <!-- Install Section -->
+                        <div class="install-section">
+                            <div class="install-toggle px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between"
+                                onclick="toggleInstall()">
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                    </svg>
+                                    <span class="text-xs sm:text-sm text-slate-300 font-medium">Installation</span>
+                                </div>
+                                <svg id="chevron-icon" class="w-4 h-4 text-slate-400 transition-transform duration-300"
+                                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </div>
+                            <div id="install-content" class="install-content">
+                                <div class="px-3 sm:px-6 pb-3 sm:pb-4">
+                                    <div class="install-code relative group bg-slate-900/50 rounded-lg p-2 sm:p-3">
+                                        <code id="install-command"
+                                            class="font-mono text-xs sm:text-sm text-emerald-400">pip install dbcenter</code>
+                                        <button onclick="copyInstall()"
+                                            class="copy-button absolute right-2 top-1/2 -translate-y-1/2 p-1.5 sm:p-2 rounded bg-slate-800 hover:bg-slate-700 transition">
+                                            <svg class="w-3 h-3 sm:w-4 sm:h-4 text-slate-300" fill="none"
+                                                stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z">
+                                                </path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Window Header -->
+                        <div class="flex items-center justify-between bg-slate-900 border-b border-slate-700">
+                            <div class="flex gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-0">
+                                <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
+                                <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
+                                <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                            </div>
+                            <div class="flex overflow-x-auto">
+                                <button onclick="switchTab('python')" id="tab-python"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-white bg-slate-800 border-b-2 border-blue-500 focus:outline-none transition-colors whitespace-nowrap">Python</button>
+                                <button onclick="switchTab('rust')" id="tab-rust"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Rust</button>
+                                <button onclick="switchTab('go')" id="tab-go"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
+                                <button onclick="switchTab('c')" id="tab-c"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
+                                <button onclick="switchTab('java')" id="tab-java"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                <button onclick="switchTab('nodejs')" id="tab-nodejs"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
+                                <button onclick="switchTab('r')" id="tab-r"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                            </div>
+                        </div>
+
+                        <!-- Code Content -->
+                        <div class="p-3 sm:p-4 lg:p-6 overflow-x-auto">
+                            <pre class="!m-0"><code class="language-python font-mono text-xs sm:text-sm leading-relaxed" id="code-block">from dbcenter import DBCenter
+
+# Initialize embedded Postgres
+db = DBCenter(path="./data")
+
+# Use MongoDB-style API
+users = db.collection("users")
+users.insert_one({"name": "Alice", "role": "Engineer"})</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Grid -->
+    <section id="features" class="py-24 bg-slate-50 soft-gradient hero-transition vector-stage">
+        <div class="vector-layer">
+            <svg class="vector-accent" style="position:absolute; top:-140px; right:-40px; width:320px; height:320px;"
+                viewBox="0 0 320 320" fill="none" aria-hidden="true">
+                <circle cx="220" cy="120" r="90" stroke="currentColor" stroke-width="1.4" stroke-dasharray="12 18"
+                    opacity="0.85"></circle>
+                <path d="M120 32L200 82L168 152" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"
+                    stroke-linejoin="round" opacity="0.45"></path>
+                <polyline points="84,188 148,132 220,204" stroke="currentColor" stroke-width="1.4"
+                    stroke-linecap="round" stroke-linejoin="round" opacity="0.65"></polyline>
+            </svg>
+            <svg class="vector-accent-secondary"
+                style="position:absolute; bottom:-160px; left:-120px; width:420px; height:420px;" viewBox="0 0 420 420"
+                fill="none" aria-hidden="true">
+                <path d="M62 280L180 140L302 280" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"
+                    stroke-linejoin="round" opacity="0.4"></path>
+                <path d="M140 340C210 280 290 280 360 340" stroke="currentColor" stroke-width="1.2"
+                    stroke-linecap="round" stroke-dasharray="10 12" opacity="0.55"></path>
+                <circle cx="110" cy="180" r="48" stroke="currentColor" stroke-width="1.2" opacity="0.35"></circle>
+            </svg>
+            <svg class="vector-accent-tertiary"
+                style="position:absolute; top:35%; left:50%; transform:translate(-50%, -35%); width:360px; height:360px;"
+                viewBox="0 0 360 360" fill="none" aria-hidden="true">
+                <polygon points="120,60 240,60 300,180 180,300 60,180" stroke="currentColor" stroke-width="1"
+                    stroke-linecap="round" stroke-linejoin="round" opacity="0.35"></polygon>
+                <line x1="82" y1="210" x2="278" y2="150" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.35"></line>
+            </svg>
+            <svg class="vector-accent-strong hidden lg:block"
+                style="position:absolute; top:-220px; right:22%; width:380px; height:380px;" viewBox="0 0 380 380"
+                fill="none" aria-hidden="true">
+                <circle cx="190" cy="190" r="150" stroke="currentColor" stroke-width="1.2" stroke-dasharray="10 16"
+                    opacity="0.6"></circle>
+                <path d="M80 120L210 60L300 180" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.5"></path>
+                <path d="M110 260L220 220L280 320" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.45"></path>
+            </svg>
+            <svg class="vector-accent-grid hidden xl:block"
+                style="position:absolute; bottom:-200px; right:-140px; width:460px; height:460px;" viewBox="0 0 460 460"
+                fill="none" aria-hidden="true">
+                <g opacity="0.5">
+                    <path d="M60 120H400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M60 200H400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M60 280H400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M60 360H400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M120 80V400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M200 80V400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M280 80V400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                    <path d="M360 80V400" stroke="currentColor" stroke-width="0.9" stroke-dasharray="5 12"></path>
+                </g>
+            </svg>
+            <!--
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-lg floating-logo-slate"
+                style="top:12%; right:8%;" loading="lazy" data-speed="0.6" data-amplitude="1.32" data-depth="0.72"
+                data-rotate="26" data-scale="1.04" data-opacity="0.34">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-cool"
+                style="top:6%; left:28%;" loading="lazy" data-speed="0.66" data-amplitude="1.24" data-depth="0.58"
+                data-rotate="-14" data-scale="0.96" data-opacity="0.3">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-alt"
+                style="bottom:18%; left:22%;" loading="lazy" data-speed="0.62" data-amplitude="1.18" data-depth="0.64"
+                data-rotate="18" data-scale="0.92" data-opacity="0.28">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-sm floating-logo-warm"
+                style="bottom:10%; right:14%;" loading="lazy" data-speed="0.78" data-amplitude="1.4" data-depth="0.7"
+                data-rotate="32" data-scale="0.9" data-opacity="0.3">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-slate"
+                style="top:20%; right:22%;" loading="lazy" data-speed="0.7" data-amplitude="1.26" data-depth="0.66"
+                data-rotate="-10" data-scale="0.84" data-opacity="0.32">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-cool"
+                style="bottom:16%; left:8%;" loading="lazy" data-speed="0.82" data-amplitude="1.36" data-depth="0.6"
+                data-rotate="-18" data-scale="0.86" data-opacity="0.33">
+            -->
+        </div>
+        <div class="content-elevated max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center max-w-3xl mx-auto mb-16">
+                <h2 class="text-3xl font-bold text-slate-900 mb-4">Enterprise Grade. Developer Friendly.</h2>
+                <p class="text-slate-600">Built on the robust foundation of PostgreSQL, enhanced with the speed of Rust,
+                    and wrapped in an API you'll actually enjoy using.</p>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-8">
+                <!-- Feature 1 -->
+                <div
+                    class="feature-card bg-white p-8 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300">
+                    <div
+                        class="icon-box w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center mb-6 text-brand-600 transition duration-300">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 mb-3">Rust Core Performance</h3>
+                    <p class="text-slate-600 leading-relaxed">
+                        The core engine is rewritten in Rust for zero-cost abstractions, memory safety, and blazing fast
+                        startup times.
+                    </p>
+                </div>
+
+                <!-- Feature 2 -->
+                <div
+                    class="feature-card bg-white p-8 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300">
+                    <div
+                        class="icon-box w-12 h-12 bg-violet-50 rounded-xl flex items-center justify-center mb-6 text-violet-600 transition duration-300">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 mb-3">AI-Ready Vector Store</h3>
+                    <p class="text-slate-600 leading-relaxed">
+                        Built-in pgvector support with ChromaDB-style API. No manual extension setup - just call
+                        vector_store() and start storing embeddings.
+                    </p>
+                </div>
+
+                <!-- Feature 3 -->
+                <div
+                    class="feature-card bg-white p-8 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300">
+                    <div
+                        class="icon-box w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center mb-6 text-emerald-600 transition duration-300">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 9 0 11-18 0 9 9 0 0118 0z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 mb-3">PostGIS Support</h3>
+                    <p class="text-slate-600 leading-relaxed">
+                        Full geospatial capabilities out of the box. Perform complex spatial queries without setting up
+                        an external server.
+                    </p>
+                </div>
+
+                <!-- Feature 4 -->
+                <div
+                    class="feature-card bg-white p-8 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300">
+                    <div
+                        class="icon-box w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center mb-6 text-amber-600 transition duration-300">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 mb-3">Fuzzy Text Search</h3>
+                    <p class="text-slate-600 leading-relaxed">
+                        Built-in pg_trgm for fuzzy matching. FuzzyWuzzy-like API running on PostgreSQL - 93x faster than
+                        pure Python solutions.
+                    </p>
+                </div>
+
+                <!-- Feature 5 -->
+                <div
+                    class="feature-card bg-white p-8 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300">
+                    <div
+                        class="icon-box w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center mb-6 text-purple-600 transition duration-300">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 mb-3">Watcher Pattern</h3>
+                    <p class="text-slate-600 leading-relaxed">
+                        A dedicated sidecar process ensures your database shuts down cleanly, even if your main
+                        application crashes.
+                    </p>
+                </div>
+
+                <!-- Feature 6 -->
+                <div
+                    class="feature-card bg-white p-8 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300">
+                    <div
+                        class="icon-box w-12 h-12 bg-rose-50 rounded-xl flex items-center justify-center mb-6 text-rose-600 transition duration-300">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 mb-3">Zero Dependencies</h3>
+                    <p class="text-slate-600 leading-relaxed">
+                        No Docker, no system PostgreSQL required. Binaries are lazily downloaded to ~/.dbcenter only
+                        when needed.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Interactive Examples Section -->
+    <section class="py-24 bg-white vector-stage">
+        <div class="vector-layer">
+            <svg class="vector-accent" style="position:absolute; top:-120px; left:30%; width:280px; height:280px;"
+                viewBox="0 0 280 280" fill="none" aria-hidden="true">
+                <path d="M60 40L200 40L240 120L120 240L40 160Z" stroke="currentColor" stroke-width="1.2"
+                    stroke-linecap="round" stroke-linejoin="round" opacity="0.28"></path>
+                <circle cx="200" cy="70" r="32" stroke="currentColor" stroke-width="1.2" opacity="0.35"></circle>
+            </svg>
+            <svg class="vector-accent-secondary"
+                style="position:absolute; bottom:-140px; right:-80px; width:320px; height:320px;" viewBox="0 0 320 320"
+                fill="none" aria-hidden="true">
+                <path d="M40 260C120 180 200 180 280 260" stroke="currentColor" stroke-width="1.2"
+                    stroke-linecap="round" stroke-dasharray="14 12" opacity="0.4"></path>
+                <polyline points="60,80 160,40 220,120 140,200" stroke="currentColor" stroke-width="1"
+                    stroke-linecap="round" stroke-linejoin="round" opacity="0.3"></polyline>
+            </svg>
+            <svg class="vector-accent-strong hidden lg:block"
+                style="position:absolute; top:-200px; right:22%; width:360px; height:360px;" viewBox="0 0 360 360"
+                fill="none" aria-hidden="true">
+                <circle cx="190" cy="110" r="70" stroke="currentColor" stroke-width="1.1" stroke-dasharray="10 14"
+                    opacity="0.55"></circle>
+                <path d="M70 250L170 190L260 260" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.45"></path>
+                <path d="M120 140C160 100 220 100 280 160" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.5"></path>
+            </svg>
+            <svg class="vector-accent-grid hidden xl:block"
+                style="position:absolute; bottom:-220px; left:-140px; width:420px; height:420px;" viewBox="0 0 420 420"
+                fill="none" aria-hidden="true">
+                <g opacity="0.45">
+                    <path d="M80 120H360" stroke="currentColor" stroke-width="0.9" stroke-dasharray="6 10"></path>
+                    <path d="M80 200H360" stroke="currentColor" stroke-width="0.9" stroke-dasharray="6 10"></path>
+                    <path d="M80 280H360" stroke="currentColor" stroke-width="0.9" stroke-dasharray="6 10"></path>
+                    <path d="M120 80V360" stroke="currentColor" stroke-width="0.9" stroke-dasharray="6 10"></path>
+                    <path d="M200 80V360" stroke="currentColor" stroke-width="0.9" stroke-dasharray="6 10"></path>
+                    <path d="M280 80V360" stroke="currentColor" stroke-width="0.9" stroke-dasharray="6 10"></path>
+                </g>
+                <circle cx="300" cy="300" r="36" stroke="currentColor" stroke-width="1" opacity="0.4"></circle>
+            </svg>
+            <!--
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-lg floating-logo-cool"
+                style="top:10%; right:12%;" loading="lazy" data-speed="0.58" data-amplitude="1.2" data-depth="0.62"
+                data-rotate="-16" data-scale="1.02" data-opacity="0.32">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-warm"
+                style="top:14%; left:14%;" loading="lazy" data-speed="0.64" data-amplitude="1.28" data-depth="0.66"
+                data-rotate="22" data-scale="0.94" data-opacity="0.3">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-sm floating-logo-alt"
+                style="bottom:12%; right:20%;" loading="lazy" data-speed="0.74" data-amplitude="1.36" data-depth="0.7"
+                data-rotate="30" data-scale="0.88" data-opacity="0.28">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-slate"
+                style="top:24%; right:32%;" loading="lazy" data-speed="0.78" data-amplitude="1.34" data-depth="0.64"
+                data-rotate="-12" data-scale="0.84" data-opacity="0.34">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-warm"
+                style="bottom:18%; left:12%;" loading="lazy" data-speed="0.82" data-amplitude="1.4" data-depth="0.58"
+                data-rotate="18" data-scale="0.86" data-opacity="0.32">
+            -->
+        </div>
+        <div class="content-elevated max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center max-w-3xl mx-auto mb-16">
+                <h2 class="text-3xl font-bold text-slate-900 mb-4">See It In Action</h2>
+                <p class="text-slate-600">Explore real-world use cases with our built-in extensions. Click each example
+                    to expand.</p>
+            </div>
+
+            <!-- Example Panels -->
+            <div class="space-y-4">
+                <!-- pgvector Example -->
+                <div class="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    <button onclick="toggleExample('pgvector')"
+                        class="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center">
+                                <svg class="w-5 h-5 text-violet-600" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01">
+                                    </path>
+                                </svg>
+                            </div>
+                            <div class="text-left">
+                                <h3 class="font-semibold text-slate-900">Vector Embeddings (pgvector)</h3>
+                                <p class="text-sm text-slate-500">Store and search AI embeddings with semantic
+                                    similarity</p>
+                            </div>
+                        </div>
+                        <svg id="chevron-pgvector" class="w-5 h-5 text-slate-400 transition-transform duration-300"
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7">
+                            </path>
+                        </svg>
+                    </button>
+                    <div id="example-pgvector" class="example-content"
+                        style="max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out;">
+                        <div class="border-t border-slate-100">
+                            <!-- Code Window -->
+                            <div class="code-window bg-[#1e293b] overflow-hidden">
+                                <!-- Window Header -->
+                                <div class="flex items-center justify-between bg-slate-900 border-b border-slate-700">
+                                    <div class="flex gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-0">
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                                    </div>
+                                    <div class="flex overflow-x-auto">
+                                        <button onclick="switchExampleLang('pgvector', 'python')"
+                                            id="tab-pgvector-python"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-white bg-slate-800 border-b-2 border-blue-500 focus:outline-none transition-colors whitespace-nowrap">Python</button>
+                                        <button onclick="switchExampleLang('pgvector', 'rust')" id="tab-pgvector-rust"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Rust</button>
+                                        <button onclick="switchExampleLang('pgvector', 'go')" id="tab-pgvector-go"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
+                                        <button onclick="switchExampleLang('pgvector', 'c')" id="tab-pgvector-c"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
+                                        <button onclick="switchExampleLang('pgvector', 'java')" id="tab-pgvector-java"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                        <button onclick="switchExampleLang('pgvector', 'nodejs')"
+                                            id="tab-pgvector-nodejs"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
+                                        <button onclick="switchExampleLang('pgvector', 'r')" id="tab-pgvector-r"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                    </div>
+                                </div>
+
+                                <!-- Code Content -->
+                                <div class="p-3 sm:p-4 lg:p-6 overflow-x-auto">
+                                    <pre class="!m-0"><code id="code-pgvector-python" class="language-python font-mono text-xs sm:text-sm leading-relaxed">from dbcenter import DBCenter
+
+db = DBCenter("./data")
+
+# Create vector store (pgvector auto-loaded)
+vectors = db.vector_store("documents", dimension=1536)
+
+# Add embeddings - ChromaDB-style API
+vectors.add(
+    ids=["doc1", "doc2", "doc3"],
+    embeddings=[[0.1, 0.2, ...], [0.3, 0.4, ...], [0.5, 0.6, ...]],
+    metadatas=[
+        {"source": "blog", "author": "Alice"},
+        {"source": "docs", "author": "Bob"},
+        {"source": "paper", "author": "Charlie"}
+    ]
+)
+
+# Semantic search - no SQL needed!
+results = vectors.query(
+    query_embeddings=[[0.1, 0.2, ...]],
+    n_results=5,
+    where={"source": "blog"}  # Filter by metadata
+)
+
+print(results)  # [{"id": "doc1", "distance": 0.23, "metadata": {...}}, ...]</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-pgvector-rust" class="language-rust font-mono text-xs sm:text-sm leading-relaxed">use dbcenter::DBCenter;
+use serde_json::json;
+
+let db = DBCenter::new(Some("./data"))?;
+
+// Create vector store (pgvector auto-loaded)
+let vectors = db.vector_store("documents", 1536)?;
+
+// Add embeddings - ChromaDB-style API
+vectors.add(
+    vec!["doc1", "doc2", "doc3"],
+    vec![vec![0.1, 0.2, ...], vec![0.3, 0.4, ...], vec![0.5, 0.6, ...]],
+    vec![
+        json!({"source": "blog", "author": "Alice"}),
+        json!({"source": "docs", "author": "Bob"}),
+        json!({"source": "paper", "author": "Charlie"})
+    ]
+)?;
+
+// Semantic search - no SQL needed!
+let results = vectors.query(
+    vec![0.1, 0.2, ...],
+    5,
+    Some(json!({"source": "blog"}))
+)?;</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-pgvector-go" class="language-go font-mono text-xs sm:text-sm leading-relaxed">package main
+
+import "github.com/heyobi/dbcenter-go"
+
+func main() {
+    db := dbcenter.New("./data")
+    
+    // Create vector store (pgvector auto-loaded)
+    vectors := db.VectorStore("documents", 1536)
+    
+    // Add embeddings - ChromaDB-style API
+    vectors.Add(dbcenter.VectorAddOptions{
+        IDs: []string{"doc1", "doc2", "doc3"},
+        Embeddings: [][]float32{
+            {0.1, 0.2, ...},
+            {0.3, 0.4, ...},
+            {0.5, 0.6, ...},
+        },
+        Metadatas: []map[string]interface{}{
+            {"source": "blog", "author": "Alice"},
+            {"source": "docs", "author": "Bob"},
+            {"source": "paper", "author": "Charlie"},
+        },
+    })
+    
+    // Semantic search - no SQL needed!
+    results := vectors.Query(dbcenter.VectorQueryOptions{
+        QueryEmbeddings: []float32{0.1, 0.2, ...},
+        NResults: 5,
+        Where: map[string]interface{}{"source": "blog"},
+    })
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-pgvector-c" class="language-c font-mono text-xs sm:text-sm leading-relaxed">#include &lt;dbcenter.h&gt;
+
+int main() {
+    DBCenter* db = dbcenter_new("./data");
+    
+    // Create vector store (pgvector auto-loaded)
+    VectorStore* vectors = dbcenter_vector_store(db, "documents", 1536);
+    
+    // Add embeddings
+    const char* ids[] = {"doc1", "doc2", "doc3"};
+    float embeddings[][3] = {{0.1, 0.2, 0.3}, {0.3, 0.4, 0.5}, {0.5, 0.6, 0.7}};
+    const char* metadatas[] = {
+        "{\"source\": \"blog\", \"author\": \"Alice\"}",
+        "{\"source\": \"docs\", \"author\": \"Bob\"}",
+        "{\"source\": \"paper\", \"author\": \"Charlie\"}"
+    };
+    
+    vector_store_add(vectors, ids, embeddings, metadatas, 3);
+    
+    // Semantic search - no SQL needed!
+    float query[] = {0.1, 0.2, 0.3};
+    VectorResults* results = vector_store_query(
+        vectors, query, 5, "{\"source\": \"blog\"}"
+    );
+    
+    vector_store_free(vectors);
+    dbcenter_free(db);
+    return 0;
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-pgvector-java" class="language-java font-mono text-xs sm:text-sm leading-relaxed">import com.dbcenter.DBCenter;
+import com.dbcenter.VectorStore;
+import java.util.*;
+
+public class Main {
+    public static void main(String[] args) {
+        DBCenter db = new DBCenter("./data");
+        
+        // Create vector store (pgvector auto-loaded)
+        VectorStore vectors = db.vectorStore("documents", 1536);
+        
+        // Add embeddings - ChromaDB-style API
+        vectors.add(
+            Arrays.asList("doc1", "doc2", "doc3"),
+            Arrays.asList(
+                Arrays.asList(0.1f, 0.2f, ...),
+                Arrays.asList(0.3f, 0.4f, ...),
+                Arrays.asList(0.5f, 0.6f, ...)
+            ),
+            Arrays.asList(
+                Map.of("source", "blog", "author", "Alice"),
+                Map.of("source", "docs", "author", "Bob"),
+                Map.of("source", "paper", "author", "Charlie")
+            )
+        );
+        
+        // Semantic search - no SQL needed!
+        List&lt;VectorResult&gt; results = vectors.query(
+            Arrays.asList(0.1f, 0.2f, ...),
+            5,
+            Map.of("source", "blog")
+        );
+    }
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-pgvector-nodejs" class="language-javascript font-mono text-xs sm:text-sm leading-relaxed">const { DBCenter } = require('dbcenter');
+
+const db = new DBCenter({ path: './data' });
+
+// Create vector store (pgvector auto-loaded)
+const vectors = db.vectorStore('documents', { dimension: 1536 });
+
+// Add embeddings - ChromaDB-style API
+await vectors.add({
+  ids: ['doc1', 'doc2', 'doc3'],
+  embeddings: [
+    [0.1, 0.2, ...],
+    [0.3, 0.4, ...],
+    [0.5, 0.6, ...]
+  ],
+  metadatas: [
+    { source: 'blog', author: 'Alice' },
+    { source: 'docs', author: 'Bob' },
+    { source: 'paper', author: 'Charlie' }
+  ]
+});
+
+// Semantic search - no SQL needed!
+const results = await vectors.query({
+  queryEmbeddings: [0.1, 0.2, ...],
+  nResults: 5,
+  where: { source: 'blog' }
+});
+
+console.log(results);</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-pgvector-r" class="language-r font-mono text-xs sm:text-sm leading-relaxed">library(dbcenter)
+
+db &lt;- dbcenter_new(path = "./data")
+
+# Create vector store (pgvector auto-loaded)
+vectors &lt;- db_vector_store(db, "documents", dimension = 1536)
+
+# Add embeddings - ChromaDB-style API
+vector_store_add(vectors,
+  ids = c("doc1", "doc2", "doc3"),
+  embeddings = list(
+    c(0.1, 0.2, ...),
+    c(0.3, 0.4, ...),
+    c(0.5, 0.6, ...)
+  ),
+  metadatas = list(
+    list(source = "blog", author = "Alice"),
+    list(source = "docs", author = "Bob"),
+    list(source = "paper", author = "Charlie")
+  )
+)
+
+# Semantic search - no SQL needed!
+results &lt;- vector_store_query(vectors,
+  query_embeddings = c(0.1, 0.2, ...),
+  n_results = 5,
+  where = list(source = "blog")
+)</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- pg_trgm Example -->
+                <div class="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    <button onclick="toggleExample('fuzzy')"
+                        class="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                                <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                </svg>
+                            </div>
+                            <div class="text-left">
+                                <h3 class="font-semibold text-slate-900">Fuzzy Text Search (pg_trgm)</h3>
+                                <p class="text-sm text-slate-500">Lightning-fast fuzzy matching with similarity scores
+                                </p>
+                            </div>
+                        </div>
+                        <svg id="chevron-fuzzy" class="w-5 h-5 text-slate-400 transition-transform duration-300"
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7">
+                            </path>
+                        </svg>
+                    </button>
+                    <div id="example-fuzzy" class="example-content"
+                        style="max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out;">
+                        <div class="border-t border-slate-100">
+                            <!-- Code Window -->
+                            <div class="code-window bg-[#1e293b] overflow-hidden">
+                                <!-- Window Header -->
+                                <div class="flex items-center justify-between bg-slate-900 border-b border-slate-700">
+                                    <div class="flex gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-0">
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                                    </div>
+                                    <div class="flex overflow-x-auto">
+                                        <button onclick="switchExampleLang('fuzzy', 'python')" id="tab-fuzzy-python"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-white bg-slate-800 border-b-2 border-blue-500 focus:outline-none transition-colors whitespace-nowrap">Python</button>
+                                        <button onclick="switchExampleLang('fuzzy', 'rust')" id="tab-fuzzy-rust"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Rust</button>
+                                        <button onclick="switchExampleLang('fuzzy', 'go')" id="tab-fuzzy-go"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
+                                        <button onclick="switchExampleLang('fuzzy', 'c')" id="tab-fuzzy-c"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
+                                        <button onclick="switchExampleLang('fuzzy', 'java')" id="tab-fuzzy-java"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                        <button onclick="switchExampleLang('fuzzy', 'nodejs')" id="tab-fuzzy-nodejs"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
+                                        <button onclick="switchExampleLang('fuzzy', 'r')" id="tab-fuzzy-r"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                    </div>
+                                </div>
+
+                                <!-- Code Content -->
+                                <div class="p-3 sm:p-4 lg:p-6 overflow-x-auto">
+                                    <pre class="!m-0"><code id="code-fuzzy-python" class="language-python font-mono text-xs sm:text-sm leading-relaxed">from dbcenter import DBCenter
+
+db = DBCenter("./data")
+products = db.collection("products")
+
+# Insert some products
+products.insert_many([
+    {"name": "iPhone 15 Pro", "price": 999},
+    {"name": "Samsung Galaxy S24", "price": 899},
+    {"name": "iPad Air", "price": 599}
+])
+
+# Fuzzy search - FuzzyWuzzy-style API (pg_trgm auto-loaded)
+results = products.fuzzy_search(
+    query="ipone",  # Typo-tolerant!
+    field="name",
+    threshold=0.3
+)
+
+print(results)
+# [{"name": "iPhone 15 Pro", "similarity": 0.67, ...}, ...]
+
+# Or use direct similarity scoring
+score = products.similarity("iPhone", "ipone")
+print(score)  # 0.67</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-fuzzy-rust" class="language-rust font-mono text-xs sm:text-sm leading-relaxed">use dbcenter::DBCenter;
+
+let db = DBCenter::new(Some("./data"))?;
+let products = db.collection("products");
+
+// Insert some products
+products.insert_many(vec![
+    json!({"name": "iPhone 15 Pro", "price": 999}),
+    json!({"name": "Samsung Galaxy S24", "price": 899}),
+    json!({"name": "iPad Air", "price": 599})
+])?;
+
+// Fuzzy search - FuzzyWuzzy-style API (pg_trgm auto-loaded)
+let results = products.fuzzy_search(
+    "ipone",  // Typo-tolerant!
+    "name",
+    0.3
+)?;
+
+// Or use direct similarity scoring
+let score = products.similarity("iPhone", "ipone")?;</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-fuzzy-go" class="language-go font-mono text-xs sm:text-sm leading-relaxed">package main
+
+import "github.com/heyobi/dbcenter-go"
+
+func main() {
+    db := dbcenter.New("./data")
+    products := db.Collection("products")
+    
+    // Insert some products
+    products.InsertMany([]bson.M{
+        {"name": "iPhone 15 Pro", "price": 999},
+        {"name": "Samsung Galaxy S24", "price": 899},
+        {"name": "iPad Air", "price": 599},
+    })
+    
+    // Fuzzy search - FuzzyWuzzy-style API (pg_trgm auto-loaded)
+    results := products.FuzzySearch(dbcenter.FuzzyOptions{
+        Query: "ipone",  // Typo-tolerant!
+        Field: "name",
+        Threshold: 0.3,
+    })
+    
+    // Or use direct similarity scoring
+    score := products.Similarity("iPhone", "ipone")
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-fuzzy-c" class="language-c font-mono text-xs sm:text-sm leading-relaxed">#include &lt;dbcenter.h&gt;
+
+int main() {
+    DBCenter* db = dbcenter_new("./data");
+    Collection* products = dbcenter_collection(db, "products");
+    
+    // Fuzzy search (pg_trgm auto-loaded)
+    FuzzyResults* results = collection_fuzzy_search(
+        products,
+        "ipone",  // Typo-tolerant!
+        "name",
+        0.3
+    );
+    
+    // Or use direct similarity scoring
+    float score = collection_similarity(products, "iPhone", "ipone");
+    
+    fuzzy_results_free(results);
+    collection_free(products);
+    dbcenter_free(db);
+    return 0;
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-fuzzy-java" class="language-java font-mono text-xs sm:text-sm leading-relaxed">import com.dbcenter.DBCenter;
+import com.dbcenter.Collection;
+import java.util.*;
+
+public class Main {
+    public static void main(String[] args) {
+        DBCenter db = new DBCenter("./data");
+        Collection products = db.collection("products");
+        
+        // Insert some products
+        products.insertMany(Arrays.asList(
+            Map.of("name", "iPhone 15 Pro", "price", 999),
+            Map.of("name", "Samsung Galaxy S24", "price", 899),
+            Map.of("name", "iPad Air", "price", 599)
+        ));
+        
+        // Fuzzy search - FuzzyWuzzy-style API (pg_trgm auto-loaded)
+        List&lt;Map&lt;String, Object&gt;&gt; results = products.fuzzySearch(
+            "ipone",  // Typo-tolerant!
+            "name",
+            0.3
+        );
+        
+        // Or use direct similarity scoring
+        double score = products.similarity("iPhone", "ipone");
+    }
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-fuzzy-nodejs" class="language-javascript font-mono text-xs sm:text-sm leading-relaxed">const { DBCenter } = require('dbcenter');
+
+const db = new DBCenter({ path: './data' });
+const products = db.collection('products');
+
+// Insert some products
+await products.insertMany([
+  { name: 'iPhone 15 Pro', price: 999 },
+  { name: 'Samsung Galaxy S24', price: 899 },
+  { name: 'iPad Air', price: 599 }
+]);
+
+// Fuzzy search - FuzzyWuzzy-style API (pg_trgm auto-loaded)
+const results = await products.fuzzySearch({
+  query: 'ipone',  // Typo-tolerant!
+  field: 'name',
+  threshold: 0.3
+});
+
+console.log(results);
+// [{ name: 'iPhone 15 Pro', similarity: 0.67, ... }, ...]
+
+// Or use direct similarity scoring
+const score = await products.similarity('iPhone', 'ipone');
+console.log(score);  // 0.67</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-fuzzy-r" class="language-r font-mono text-xs sm:text-sm leading-relaxed">library(dbcenter)
+
+db &lt;- dbcenter_new(path = "./data")
+products &lt;- db_collection(db, "products")
+
+# Insert some products
+collection_insert_many(products, list(
+  list(name = "iPhone 15 Pro", price = 999),
+  list(name = "Samsung Galaxy S24", price = 899),
+  list(name = "iPad Air", price = 599)
+))
+
+# Fuzzy search - FuzzyWuzzy-style API (pg_trgm auto-loaded)
+results <- collection_fuzzy_search(products,
+  query = "ipone",  # Typo-tolerant!
+  field = "name",
+  threshold = 0.3
+)
+
+print(results)
+
+# Or use direct similarity scoring
+score &lt;- collection_similarity(products, "iPhone", "ipone")
+print(score)  # 0.67</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PostGIS Example -->
+                <div class="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    <button onclick="toggleExample('postgis')"
+                        class="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
+                                <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z">
+                                    </path>
+                                </svg>
+                            </div>
+                            <div class="text-left">
+                                <h3 class="font-semibold text-slate-900">Geospatial Queries (PostGIS)</h3>
+                                <p class="text-sm text-slate-500">Full-featured GIS without external databases</p>
+                            </div>
+                        </div>
+                        <svg id="chevron-postgis" class="w-5 h-5 text-slate-400 transition-transform duration-300"
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7">
+                            </path>
+                        </svg>
+                    </button>
+                    <div id="example-postgis" class="example-content"
+                        style="max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out;">
+                        <div class="border-t border-slate-100">
+                            <!-- Code Window -->
+                            <div class="code-window bg-[#1e293b] overflow-hidden">
+                                <!-- Window Header -->
+                                <div class="flex items-center justify-between bg-slate-900 border-b border-slate-700">
+                                    <div class="flex gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-0">
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
+                                        <div class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                                    </div>
+                                    <div class="flex overflow-x-auto">
+                                        <button onclick="switchExampleLang('postgis', 'python')" id="tab-postgis-python"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-white bg-slate-800 border-b-2 border-blue-500 focus:outline-none transition-colors whitespace-nowrap">Python</button>
+                                        <button onclick="switchExampleLang('postgis', 'rust')" id="tab-postgis-rust"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Rust</button>
+                                        <button onclick="switchExampleLang('postgis', 'go')" id="tab-postgis-go"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
+                                        <button onclick="switchExampleLang('postgis', 'c')" id="tab-postgis-c"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
+                                        <button onclick="switchExampleLang('postgis', 'java')" id="tab-postgis-java"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                        <button onclick="switchExampleLang('postgis', 'nodejs')" id="tab-postgis-nodejs"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
+                                        <button onclick="switchExampleLang('postgis', 'r')" id="tab-postgis-r"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                    </div>
+                                </div>
+
+                                <!-- Code Content -->
+                                <div class="p-3 sm:p-4 lg:p-6 overflow-x-auto">
+                                    <pre class="!m-0"><code id="code-postgis-python" class="language-python font-mono text-xs sm:text-sm leading-relaxed">from dbcenter import DBCenter
+
+db = DBCenter("./data")
+
+# Create geo collection (PostGIS auto-loaded)
+stores = db.geo_collection("stores")
+
+# Insert locations - simple dict, no SQL!
+stores.insert_many([
+    {"name": "Store A", "lat": 40.7128, "lon": -74.0060, "city": "NYC"},
+    {"name": "Store B", "lat": 34.0522, "lon": -118.2437, "city": "LA"},
+    {"name": "Store C", "lat": 40.7589, "lon": -73.9851, "city": "NYC"}
+])
+
+# Find nearby - no SQL needed!
+nearby = stores.find_within_radius(
+    lat=40.7128,
+    lon=-74.0060,
+    radius_km=5
+)
+
+# Distance calculation
+distance = stores.distance_between(
+    from_id="store_a",
+    to_id="store_b"
+)
+
+# Check if point is within polygon
+is_inside = stores.contains_point(
+    polygon_id="delivery_zone_1",
+    lat=40.7128,
+    lon=-74.0060
+)</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-postgis-rust" class="language-rust font-mono text-xs sm:text-sm leading-relaxed">use dbcenter::DBCenter;
+
+let db = DBCenter::new(Some("./data"))?;
+
+// Create geo collection (PostGIS auto-loaded)
+let stores = db.geo_collection("stores")?;
+
+// Insert locations - simple structs, no SQL!
+stores.insert_many(vec![
+    json!({"name": "Store A", "lat": 40.7128, "lon": -74.0060, "city": "NYC"}),
+    json!({"name": "Store B", "lat": 34.0522, "lon": -118.2437, "city": "LA"}),
+    json!({"name": "Store C", "lat": 40.7589, "lon": -73.9851, "city": "NYC"})
+])?;
+
+// Find nearby - no SQL needed!
+let nearby = stores.find_within_radius(40.7128, -74.0060, 5.0)?;
+
+// Distance calculation
+let distance = stores.distance_between("store_a", "store_b")?;
+
+// Check if point is within polygon
+let is_inside = stores.contains_point("delivery_zone_1", 40.7128, -74.0060)?;</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-postgis-go" class="language-go font-mono text-xs sm:text-sm leading-relaxed">package main
+
+import "github.com/heyobi/dbcenter-go"
+
+func main() {
+    db := dbcenter.New("./data")
+    
+    // Create geo collection (PostGIS auto-loaded)
+    stores := db.GeoCollection("stores")
+    
+    // Insert locations - simple maps, no SQL!
+    stores.InsertMany([]bson.M{
+        {"name": "Store A", "lat": 40.7128, "lon": -74.0060, "city": "NYC"},
+        {"name": "Store B", "lat": 34.0522, "lon": -118.2437, "city": "LA"},
+        {"name": "Store C", "lat": 40.7589, "lon": -73.9851, "city": "NYC"},
+    })
+    
+    // Find nearby - no SQL needed!
+    nearby := stores.FindWithinRadius(40.7128, -74.0060, 5.0)
+    
+    // Distance calculation
+    distance := stores.DistanceBetween("store_a", "store_b")
+    
+    // Check if point is within polygon
+    isInside := stores.ContainsPoint("delivery_zone_1", 40.7128, -74.0060)
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-postgis-c" class="language-c font-mono text-xs sm:text-sm leading-relaxed">#include &lt;dbcenter.h&gt;
+
+int main() {
+    DBCenter* db = dbcenter_new("./data");
+    
+    // Create geo collection (PostGIS auto-loaded)
+    GeoCollection* stores = dbcenter_geo_collection(db, "stores");
+    
+    // Find nearby - no SQL needed!
+    GeoResults* nearby = geo_collection_find_within_radius(
+        stores, 40.7128, -74.0060, 5.0
+    );
+    
+    // Distance calculation
+    double distance = geo_collection_distance_between(
+        stores, "store_a", "store_b"
+    );
+    
+    // Check if point is within polygon
+    bool is_inside = geo_collection_contains_point(
+        stores, "delivery_zone_1", 40.7128, -74.0060
+    );
+    
+    geo_results_free(nearby);
+    geo_collection_free(stores);
+    dbcenter_free(db);
+    return 0;
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-postgis-java" class="language-java font-mono text-xs sm:text-sm leading-relaxed">import com.dbcenter.DBCenter;
+import com.dbcenter.GeoCollection;
+import java.util.*;
+
+public class Main {
+    public static void main(String[] args) {
+        DBCenter db = new DBCenter("./data");
+        
+        // Create geo collection (PostGIS auto-loaded)
+        GeoCollection stores = db.geoCollection("stores");
+        
+        // Insert locations - simple maps, no SQL!
+        stores.insertMany(Arrays.asList(
+            Map.of("name", "Store A", "lat", 40.7128, "lon", -74.0060, "city", "NYC"),
+            Map.of("name", "Store B", "lat", 34.0522, "lon", -118.2437, "city", "LA"),
+            Map.of("name", "Store C", "lat", 40.7589, "lon", -73.9851, "city", "NYC")
+        ));
+        
+        // Find nearby - no SQL needed!
+        List&lt;Map&lt;String, Object&gt;&gt; nearby = stores.findWithinRadius(
+            40.7128, -74.0060, 5.0
+        );
+        
+        // Distance calculation
+        double distance = stores.distanceBetween("store_a", "store_b");
+        
+        // Check if point is within polygon
+        boolean isInside = stores.containsPoint("delivery_zone_1", 40.7128, -74.0060);
+    }
+}</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-postgis-nodejs" class="language-javascript font-mono text-xs sm:text-sm leading-relaxed">const { DBCenter } = require('dbcenter');
+
+const db = new DBCenter({ path: './data' });
+
+// Create geo collection (PostGIS auto-loaded)
+const stores = db.geoCollection('stores');
+
+// Insert locations - simple objects, no SQL!
+await stores.insertMany([
+  { name: 'Store A', lat: 40.7128, lon: -74.0060, city: 'NYC' },
+  { name: 'Store B', lat: 34.0522, lon: -118.2437, city: 'LA' },
+  { name: 'Store C', lat: 40.7589, lon: -73.9851, city: 'NYC' }
+]);
+
+// Find nearby - no SQL needed!
+const nearby = await stores.findWithinRadius({
+  lat: 40.7128,
+  lon: -74.0060,
+  radiusKm: 5
+});
+
+// Distance calculation
+const distance = await stores.distanceBetween('store_a', 'store_b');
+
+// Check if point is within polygon
+const isInside = await stores.containsPoint({
+  polygonId: 'delivery_zone_1',
+  lat: 40.7128,
+  lon: -74.0060
+});</code></pre>
+                                    <pre class="!m-0 hidden"><code id="code-postgis-r" class="language-r font-mono text-xs sm:text-sm leading-relaxed">library(dbcenter)
+
+db &lt;- dbcenter_new(path = "./data")
+
+# Create geo collection (PostGIS auto-loaded)
+stores &lt;- db_geo_collection(db, "stores")
+
+# Insert locations - simple lists, no SQL!
+geo_collection_insert_many(stores, list(
+  list(name = "Store A", lat = 40.7128, lon = -74.0060, city = "NYC"),
+  list(name = "Store B", lat = 34.0522, lon = -118.2437, city = "LA"),
+  list(name = "Store C", lat = 40.7589, lon = -73.9851, city = "NYC")
+))
+
+# Find nearby - no SQL needed!
+nearby &lt;- geo_collection_find_within_radius(stores,
+  lat = 40.7128,
+  lon = -74.0060,
+  radius_km = 5
+)
+
+# Distance calculation
+distance &lt;- geo_collection_distance_between(stores, "store_a", "store_b")
+
+# Check if point is within polygon
+is_inside &lt;- geo_collection_contains_point(stores,
+  polygon_id = "delivery_zone_1",
+  lat = 40.7128,
+  lon = -74.0060
+)</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Performance Comparison Section -->
+    <section class="py-24 bg-slate-50 soft-gradient vector-stage">
+        <div class="vector-layer">
+            <svg class="vector-accent" style="position:absolute; top:-120px; right:10%; width:300px; height:300px;"
+                viewBox="0 0 300 300" fill="none" aria-hidden="true">
+                <path d="M40 200L120 80L200 200" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"
+                    stroke-linejoin="round" opacity="0.45"></path>
+                <circle cx="210" cy="90" r="58" stroke="currentColor" stroke-width="1.2" stroke-dasharray="10 14"
+                    opacity="0.35"></circle>
+            </svg>
+            <svg class="vector-accent-tertiary"
+                style="position:absolute; bottom:-150px; left:15%; width:340px; height:340px;" viewBox="0 0 340 340"
+                fill="none" aria-hidden="true">
+                <polygon points="60,200 140,120 220,200 180,260 100,260" stroke="currentColor" stroke-width="1"
+                    stroke-linecap="round" stroke-linejoin="round" opacity="0.4"></polygon>
+                <line x1="80" y1="140" x2="260" y2="220" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.3"></line>
+            </svg>
+            <svg class="vector-accent-strong hidden lg:block"
+                style="position:absolute; top:-200px; left:-160px; width:420px; height:420px;" viewBox="0 0 420 420"
+                fill="none" aria-hidden="true">
+                <circle cx="210" cy="210" r="150" stroke="currentColor" stroke-width="1.2" stroke-dasharray="12 16"
+                    opacity="0.58"></circle>
+                <path d="M120 120L260 80L320 200" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.5"></path>
+                <path d="M90 280L220 230L310 320" stroke="currentColor" stroke-width="1" stroke-linecap="round"
+                    opacity="0.45"></path>
+            </svg>
+            <svg class="vector-accent-grid hidden xl:block"
+                style="position:absolute; bottom:-220px; right:-180px; width:520px; height:520px;" viewBox="0 0 520 520"
+                fill="none" aria-hidden="true">
+                <g opacity="0.4">
+                    <path d="M80 160H440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M80 240H440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M80 320H440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M80 400H440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M160 120V440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M240 120V440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M320 120V440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                    <path d="M400 120V440" stroke="currentColor" stroke-width="1" stroke-dasharray="8 14"></path>
+                </g>
+                <circle cx="360" cy="360" r="42" stroke="currentColor" stroke-width="1.1" opacity="0.45"></circle>
+            </svg>
+            <!--
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-slate"
+                style="top:8%; left:6%;" loading="lazy" data-speed="0.6" data-amplitude="1.22" data-depth="0.58"
+                data-rotate="-24" data-scale="0.96" data-opacity="0.32">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-lg floating-logo-alt"
+                style="top:30%; right:10%;" loading="lazy" data-speed="0.56" data-amplitude="1.18" data-depth="0.62"
+                data-rotate="28" data-scale="1.04" data-opacity="0.34">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-sm floating-logo-warm"
+                style="bottom:12%; right:18%;" loading="lazy" data-speed="0.74" data-amplitude="1.4" data-depth="0.68"
+                data-rotate="26" data-scale="0.9" data-opacity="0.3">
+            <img src="dbcenterlogo.svg" alt="" class="floating-logo floating-logo-md floating-logo-cool"
+                style="bottom:22%; left:28%;" loading="lazy" data-speed="0.68" data-amplitude="1.28" data-depth="0.64"
+                data-rotate="-16" data-scale="0.94" data-opacity="0.3">
+            <img src="dbcenterlogo.svg" alt=""
+                class="floating-logo floating-logo-sm floating-logo-mobile floating-logo-warm"
+                style="top:18%; right:24%;" loading="lazy" data-speed="0.82" data-amplitude="1.36" data-depth="0.6"
+                data-rotate="18" data-scale="0.86" data-opacity="0.32">
+            -->
+        </div>
+        <div class="content-elevated max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center max-w-3xl mx-auto mb-16">
+                <h2 class="text-3xl font-bold text-slate-900 mb-4">Performance That Matters</h2>
+                <p class="text-slate-600">Real-world benchmarks comparing dbcenter to popular alternatives</p>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- Fuzzy Search Benchmark -->
+                <div class="performance-card">
+                    <div class="performance-card-content">
+                        <div class="performance-card-header">
+                            <div class="performance-icon performance-icon-emerald">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8"
+                                    stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"
+                                    aria-hidden="true">
+                                    <path d="M21 21l-4.35-4.35m1.1-3.65a6 6 0 11-12 0 6 6 0 0112 0z"></path>
+                                </svg>
+                            </div>
+                            <div class="flex-1">
+                                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Fuzzy Text
+                                    Matching</p>
+                                <h3 class="text-xl font-semibold text-slate-900 mt-1">Lightning-fast trigram scoring
+                                </h3>
+                            </div>
+                            <span class="performance-chip performance-chip-positive">93x faster</span>
+                        </div>
+                        <p class="performance-description text-sm text-slate-500">10,000 records &middot; similarity
+                            threshold 0.3</p>
+                        <div class="performance-series">
+                            <div class="performance-row">
+                                <span class="performance-source">dbcenter (pg_trgm)</span>
+                                <span class="performance-value performance-value-primary">1.7ms</span>
+                            </div>
+                            <div class="performance-bar-track" role="presentation">
+                                <div class="performance-bar performance-bar-emerald" style="width: 1.1%;"></div>
+                            </div>
+                        </div>
+                        <div class="performance-series">
+                            <div class="performance-row">
+                                <span class="performance-source">FuzzyWuzzy (Python)</span>
+                                <span class="performance-value">154ms</span>
+                            </div>
+                            <div class="performance-bar-track" role="presentation">
+                                <div class="performance-bar performance-bar-baseline" style="width: 100%;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Vector Search Benchmark -->
+                <div class="performance-card">
+                    <div class="performance-card-content">
+                        <div class="performance-card-header">
+                            <div class="performance-icon performance-icon-violet">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8"
+                                    stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"
+                                    aria-hidden="true">
+                                    <path d="M12 3l7.794 4.5v9L12 21l-7.794-4.5v-9L12 3z"></path>
+                                    <path d="M12 12l7.794-4.5"></path>
+                                    <path d="M12 12v9"></path>
+                                    <path d="M12 12L4.206 7.5"></path>
+                                </svg>
+                            </div>
+                            <div class="flex-1">
+                                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Vector
+                                    Similarity Search</p>
+                                <h3 class="text-xl font-semibold text-slate-900 mt-1">Embeddings at production scale
+                                </h3>
+                            </div>
+                            <span class="performance-chip performance-chip-positive">2.4x faster</span>
+                        </div>
+                        <p class="performance-description text-sm text-slate-500">Benchmark (N=200) &middot; cosine
+                            similarity &middot; top-10</p>
+                        <div class="performance-series">
+                            <div class="performance-row">
+                                <span class="performance-source">dbcenter (pgvector)</span>
+                                <span class="performance-value performance-value-secondary">5.2ms</span>
+                            </div>
+                            <div class="performance-bar-track" role="presentation">
+                                <div class="performance-bar performance-bar-violet" style="width: 42%;"></div>
+                            </div>
+                        </div>
+                        <div class="performance-series">
+                            <div class="performance-row">
+                                <span class="performance-source">ChromaDB (SQLite)</span>
+                                <span class="performance-value">12.3ms</span>
+                            </div>
+                            <div class="performance-bar-track" role="presentation">
+                                <div class="performance-bar performance-bar-baseline" style="width: 100%;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-8 bg-gradient-to-r from-brand-600 to-cyan-600 rounded-2xl p-8 text-white">
+                <div class="flex flex-col md:flex-row items-center justify-between gap-6">
+                    <div>
+                        <h3 class="text-2xl font-bold mb-2">Ready to Experience the Speed?</h3>
+                        <p class="text-blue-100">Start building with dbcenter in less than 60 seconds</p>
+                    </div>
+                    <button
+                        class="px-8 py-4 bg-white text-brand-600 rounded-lg font-semibold hover:bg-blue-50 transition shadow-xl whitespace-nowrap">
+                        Get Started Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture Section -->
+    <section id="architecture" class="py-24 bg-white overflow-hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="lg:flex lg:items-center lg:gap-16">
+                <div class="lg:w-1/2 mb-12 lg:mb-0">
+                    <h2 class="text-3xl font-bold text-slate-900 mb-6">Architecture that Scales</h2>
+                    <div class="space-y-6">
+                        <div class="flex gap-4">
+                            <div
+                                class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-sm shrink-0">
+                                1</div>
+                            <div>
+                                <h4 class="font-semibold text-slate-900">Lazy Binary Loading</h4>
+                                <p class="text-sm text-slate-600 mt-1">Binaries are downloaded to `~/.dbcenter` only
+                                    when needed, keeping your deployment light.</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-4">
+                            <div
+                                class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-sm shrink-0">
+                                2</div>
+                            <div>
+                                <h4 class="font-semibold text-slate-900">Hybrid API Layer</h4>
+                                <p class="text-sm text-slate-600 mt-1">Use the MongoDB-like API for rapid development,
+                                    or drop down to raw SQL for complex joins and analytics.</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-4">
+                            <div
+                                class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-sm shrink-0">
+                                3</div>
+                            <div>
+                                <h4 class="font-semibold text-slate-900">Process Isolation</h4>
+                                <p class="text-sm text-slate-600 mt-1">PostgreSQL runs as a child process, managed by
+                                    the Rust core, ensuring stability and resource control.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="lg:w-1/2">
+                    <div class="arch-diagram">
+                        <svg viewBox="0 0 600 360" class="arch-svg" role="img"
+                            aria-labelledby="architecture-diagram-title architecture-diagram-desc">
+                            <title id="architecture-diagram-title">DBCenter Rust wrapper architecture</title>
+                            <desc id="architecture-diagram-desc">Rust-based dbcenter wrapper surrounds embedded
+                                PostgreSQL and exposes a unified API to multiple programming languages.</desc>
+
+                            <circle class="arch-core-outer" cx="300" cy="180" r="120"></circle>
+                            <circle class="arch-core-inner" cx="300" cy="180" r="74"></circle>
+
+                            <text class="arch-label-primary" x="300" y="118" text-anchor="middle">Rust Wrapper</text>
+                            <text class="arch-label-secondary" x="300" y="138" text-anchor="middle">dbcenter API</text>
+                            <text class="arch-label-core" x="300" y="176" text-anchor="middle">Embedded</text>
+                            <text class="arch-label-core" x="300" y="196" text-anchor="middle">PostgreSQL</text>
+
+                            <path class="arch-link" d="M300 106 C 244 70 184 62 120 70"></path>
+                            <path class="arch-link" d="M300 106 C 356 70 416 62 480 70"></path>
+                            <path class="arch-link" d="M374 180 C 430 178 482 178 530 180"></path>
+                            <path class="arch-link arch-link-dashed" d="M300 254 C 362 274 412 284 455 286"></path>
+                            <path class="arch-link arch-link-dashed" d="M300 254 C 238 274 188 284 135 286"></path>
+                            <path class="arch-link" d="M226 180 C 174 178 122 178 90 180"></path>
+
+                            <rect class="arch-node" x="55" y="44" width="130" height="48" rx="16"></rect>
+                            <text class="arch-label" x="120" y="74" text-anchor="middle">Python</text>
+
+                            <rect class="arch-node" x="415" y="44" width="130" height="48" rx="16"></rect>
+                            <text class="arch-label" x="480" y="74" text-anchor="middle">Go</text>
+
+                            <rect class="arch-node" x="470" y="154" width="120" height="48" rx="16"></rect>
+                            <text class="arch-label" x="530" y="184" text-anchor="middle">Node.js</text>
+
+                            <rect class="arch-node" x="385" y="264" width="140" height="48" rx="16"></rect>
+                            <text class="arch-label" x="455" y="294" text-anchor="middle">Java</text>
+
+                            <rect class="arch-node" x="75" y="264" width="120" height="48" rx="16"></rect>
+                            <text class="arch-label" x="135" y="294" text-anchor="middle">C</text>
+
+                            <rect class="arch-node" x="35" y="154" width="110" height="48" rx="16"></rect>
+                            <text class="arch-label" x="90" y="184" text-anchor="middle">R</text>
+
+                            <text class="arch-caption" x="300" y="326" text-anchor="middle">Client SDKs share the same
+                                Rust-powered engine</text>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 text-slate-400 py-12 border-t border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid md:grid-cols-4 gap-8 mb-8">
+                <div class="col-span-2">
+                    <div class="flex items-center gap-2 mb-4">
+                        <img src="dbcenterlogo.svg" alt="Logo" class="w-6 h-6 theme-logo-footer">
+                        <span class="text-white font-bold text-lg">dbcenter</span>
+                    </div>
+                    <p class="text-sm max-w-xs">
+                        The embedded database solution for modern engineering teams. Built with Rust, loved by Python
+                        developers.
+                    </p>
+                </div>
+                <div>
+                    <h4 class="text-white font-semibold mb-4">Resources</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#" class="hover:text-white transition">Documentation</a></li>
+                        <li><a href="#" class="hover:text-white transition">API Reference</a></li>
+                        <li><a href="#" class="hover:text-white transition">Examples</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="text-white font-semibold mb-4">Community</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#" class="hover:text-white transition">GitHub</a></li>
+                        <li><a href="#" class="hover:text-white transition">Discord</a></li>
+                        <li><a href="#" class="hover:text-white transition">Twitter</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="pt-8 border-t border-slate-800 text-sm flex justify-between items-center">
+                <p>&copy; 2025 DBCenter. All rights reserved.</p>
+                <p>Designed for Enterprise</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        const themeStorageKey = 'dbcenter-theme';
+        const sunPath = 'M12 3v2.25m0 13.5V21m8.25-9H21M3 12h2.25m12.364-6.364l-1.591 1.591M6.227 17.773l-1.591 1.591M17.773 17.773l1.591 1.591M6.227 6.227L4.636 4.636M12 7.5a4.5 4.5 0 110 9 4.5 4.5 0 010-9z';
+        const moonPath = 'M21 12.79A9 9 0 1111.21 3a7.5 7.5 0 009.79 9.79z';
+
+        function hasStoredThemePreference() {
+            try {
+                const value = localStorage.getItem(themeStorageKey);
+                return value === 'light' || value === 'dark';
+            } catch (error) {
+                return false;
+            }
+        }
+
+        function updateThemeToggle(theme) {
+            const iconPath = document.getElementById('theme-toggle-icon-path');
+            const button = document.getElementById('theme-toggle');
+            if (!iconPath || !button) {
+                return;
+            }
+            if (theme === 'light') {
+                iconPath.setAttribute('d', sunPath);
+                button.setAttribute('aria-label', 'Koyu moda geç');
+                button.setAttribute('title', 'Koyu moda geç');
+            } else {
+                iconPath.setAttribute('d', moonPath);
+                button.setAttribute('aria-label', 'Açık moda geç');
+                button.setAttribute('title', 'Açık moda geç');
+            }
+        }
+
+        function setTheme(theme, persist = false) {
+            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.style.colorScheme = theme;
+            if (persist) {
+                try {
+                    localStorage.setItem(themeStorageKey, theme);
+                } catch (error) {
+                    /* storage might be disabled */
+                }
+            }
+            updateThemeToggle(theme);
+        }
+
+        function toggleThemePreference() {
+            const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            setTheme(next, true);
+        }
+
+        function setupSystemThemeListener() {
+            if (!window.matchMedia) {
+                return;
+            }
+            const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            const listener = (event) => {
+                if (hasStoredThemePreference()) {
+                    return;
+                }
+                const nextTheme = event.matches ? 'dark' : 'light';
+                setTheme(nextTheme, false);
+            };
+            if (typeof mediaQuery.addEventListener === 'function') {
+                mediaQuery.addEventListener('change', listener);
+            } else if (typeof mediaQuery.addListener === 'function') {
+                mediaQuery.addListener(listener);
+            }
+        }
+
+        const installCommands = {
+            python: 'pip install dbcenter',
+            rust: 'cargo add dbcenter',
+            go: 'go get github.com/heyobi/dbcenter-go',
+            // Değişen satır burası:
+            // \n sadece alt satıra indirir
+            c: 'git clone https://github.com/heyobi/dbcenter && \nmake install',
+            java: 'maven: com.dbcenter:dbcenter:1.0.0',
+            nodejs: 'npm install dbcenter',
+            r: 'install.packages("dbcenter")'
+        };
+
+        const heroInstallCycle = ['python', 'rust', 'go', 'c', 'java', 'nodejs', 'r'];
+        let heroInstallIndex = 0;
+
+        const codeExamples = {
+            python: `from dbcenter import DBCenter
+
+# Initialize embedded Postgres
+db = DBCenter(path="./data")
+
+# Use MongoDB-style API
+users = db.collection("users")
+users.insert_one({"name": "Alice", "role": "Engineer"})`,
+
+            rust: `use dbcenter::DBCenter;
+use serde_json::json;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = DBCenter::new(Some("./data"))?;
+    
+    let users = db.collection("users");
+    users.insert_one(&json!({ "name": "Alice" }))?;
+    
+    Ok(())
+}`,
+
+            go: `package main
+
+import "github.com/heyobi/dbcenter-go"
+
+func main() {
+    db := dbcenter.New("./data")
+    users := db.Collection("users")
+    
+    users.InsertOne(bson.M{"name": "Alice"})
+}`,
+
+            c: `#include <dbcenter.h>
+#include <stdio.h>
+
+int main() {
+    // Initialize embedded Postgres
+    DBCenter* db = dbcenter_new("./data");
+    
+    // Get collection handle
+    Collection* users = dbcenter_collection(db, "users");
+    
+    // Insert document
+    const char* doc = "{\"name\": \"Alice\", \"role\": \"Engineer\"}";
+    collection_insert_one(users, doc);
+    
+    // Cleanup
+    collection_free(users);
+    dbcenter_free(db);
+    return 0;
+}`,
+
+            java: `import com.dbcenter.DBCenter;
+import com.dbcenter.Collection;
+import java.util.HashMap;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) {
+        // Initialize embedded Postgres
+        DBCenter db = new DBCenter("./data");
+        
+        // Get collection
+        Collection users = db.collection("users");
+        
+        // Insert document
+        Map<String, Object> doc = new HashMap<>();
+        doc.put("name", "Alice");
+        doc.put("role", "Engineer");
+        users.insertOne(doc);
+        
+        db.close();
+    }
+}`,
+
+            nodejs: `const { DBCenter } = require('dbcenter');
+
+// Initialize embedded Postgres
+const db = new DBCenter({ path: './data' });
+
+// Use MongoDB-style API
+const users = db.collection('users');
+
+await users.insertOne({
+  name: 'Alice',
+  role: 'Engineer'
+});
+
+await db.close();`,
+
+            r: `library(dbcenter)
+
+# Initialize embedded Postgres
+db <- dbcenter_new(path = "./data")
+
+# Get collection
+users <- db_collection(db, "users")
+
+# Insert document
+collection_insert_one(users, list(
+  name = "Alice",
+  role = "Engineer"
+))
+
+# Cleanup
+dbcenter_close(db)`
+        };
+
+        function switchTab(lang) {
+            // Update buttons
+            ['python', 'rust', 'go', 'c', 'java', 'nodejs', 'r'].forEach(l => {
+                const btn = document.getElementById(`tab-${l}`);
+                if (l === lang) {
+                    // Active state
+                    btn.classList.remove('text-slate-400', 'hover:text-white');
+                    btn.classList.add('text-white', 'bg-slate-800', 'border-b-2', 'border-blue-500');
+                } else {
+                    // Inactive state
+                    btn.classList.remove('text-white', 'bg-slate-800', 'border-b-2', 'border-blue-500');
+                    btn.classList.add('text-slate-400', 'hover:text-white');
+                }
+            });
+
+            // Update install command
+            document.getElementById('install-command').textContent = installCommands[lang];
+
+            // Update code
+            const codeBlock = document.getElementById('code-block');
+            // Highlight.js için dataset.highlighted özelliğini temizle
+            delete codeBlock.dataset.highlighted;
+            codeBlock.className = `language-${lang === 'nodejs' ? 'javascript' : lang} font-mono text-xs sm:text-sm leading-relaxed`;
+            codeBlock.textContent = codeExamples[lang];
+            hljs.highlightElement(codeBlock);
+        }
+
+        function toggleInstall() {
+            const content = document.getElementById('install-content');
+            const chevron = document.getElementById('chevron-icon');
+            content.classList.toggle('open');
+            chevron.style.transform = content.classList.contains('open') ? 'rotate(180deg)' : 'rotate(0deg)';
+        }
+
+        function copyInstall() {
+            const command = document.getElementById('install-command').textContent;
+            navigator.clipboard.writeText(command);
+
+            // Visual feedback
+            const btn = event.currentTarget;
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-3 h-3 sm:w-4 sm:h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+            }, 1500);
+        }
+
+        function setupHeroInstallCycle() {
+            const button = document.getElementById('hero-install-button');
+            const textEl = document.getElementById('hero-install-text');
+            const arrowEl = document.getElementById('hero-install-arrow');
+            if (!button || !textEl || !arrowEl) {
+                return;
+            }
+
+            const applyCommand = (lang) => {
+                const command = installCommands[lang] || installCommands.python;
+                textEl.textContent = command;
+                button.setAttribute('data-install-lang', lang);
+            };
+
+            applyCommand(heroInstallCycle[heroInstallIndex]);
+
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                heroInstallIndex = (heroInstallIndex + 1) % heroInstallCycle.length;
+                applyCommand(heroInstallCycle[heroInstallIndex]);
+
+                arrowEl.classList.remove('is-animating');
+                void arrowEl.offsetWidth;
+                arrowEl.classList.add('is-animating');
+            });
+        }
+
+        function initFloatingLogos() {
+            const logos = Array.from(document.querySelectorAll('.floating-logo'));
+            if (!logos.length) {
+                return null;
+            }
+
+            const parseNumber = (value, fallback) => {
+                const parsed = Number.parseFloat(value);
+                return Number.isFinite(parsed) ? parsed : fallback;
+            };
+
+            const parseZoneList = (value) => {
+                if (!value) {
+                    return [];
+                }
+                return value
+                    .split(',')
+                    .map((token) => token.trim())
+                    .filter(Boolean);
+            };
+
+            const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+            const baseState = new WeakMap();
+            const pointer = { x: 0.5, y: 0.5, active: false, strength: 0 };
+
+            logos.forEach((logo, index) => {
+                const dataset = logo.dataset;
+                const defaultOpacity = parseNumber(window.getComputedStyle(logo).opacity, 0.3);
+
+                baseState.set(logo, {
+                    index,
+                    speed: parseNumber(dataset.speed, 0.6 + (index % 5) * 0.04),
+                    amplitude: parseNumber(dataset.amplitude, 1.2),
+                    depth: parseNumber(dataset.depth, 0.6),
+                    rotate: parseNumber(dataset.rotate, 0),
+                    scale: parseNumber(dataset.scale, 1),
+                    opacity: parseNumber(dataset.opacity, defaultOpacity),
+                    offsetX: parseNumber(dataset.offsetX, 0),
+                    offsetY: parseNumber(dataset.offsetY, 0),
+                    dynamicOffsetX: 0,
+                    dynamicOffsetY: 0,
+                    repelZones: parseZoneList(dataset.repelZone),
+                    width: 0,
+                    height: 0
+                });
+            });
+
+            const repelElements = Array.from(document.querySelectorAll('[data-logo-repel]'));
+            const repelRegistry = new Map();
+
+            const computeRepelZones = () => {
+                repelRegistry.clear();
+
+                // Cache logo dimensions to avoid getBoundingClientRect in loop
+                logos.forEach(logo => {
+                    const base = baseState.get(logo);
+                    if (base) {
+                        const rect = logo.getBoundingClientRect();
+                        // Store dimensions relative to the transform origin (center)
+                        // If the element is scaled, unscale it or just use current rect.
+                        // Since we are creating custom collision logic, basic rect is fine.
+                        // However, since we are moving it with transform, we need the "base" size.
+                        // Best approximation: reading offsetWidth/offsetHeight is cheaper than getBoundingClientRect usually,
+                        // but getBoundingClientRect is safer for transformed elements.
+                        // We will execute this only on resize/scroll/init, so it's OK.
+                        base.width = rect.width;
+                        base.height = rect.height;
+                    }
+                });
+
+                repelElements.forEach((element) => {
+                    const zoneId = element.getAttribute('data-logo-repel-id') || 'global';
+                    const padding = parseNumber(element.getAttribute('data-logo-repel-padding'), 48);
+                    const rect = element.getBoundingClientRect();
+                    const zoneData = {
+                        top: rect.top - padding,
+                        right: rect.right + padding,
+                        bottom: rect.bottom + padding,
+                        left: rect.left - padding,
+                        centerX: rect.left + rect.width / 2,
+                        centerY: rect.top + rect.height / 2
+                    };
+                    if (repelRegistry.has(zoneId)) {
+                        repelRegistry.get(zoneId).push(zoneData);
+                    } else {
+                        repelRegistry.set(zoneId, [zoneData]);
+                    }
+                });
+            };
+
+            let scrollY = window.scrollY || window.pageYOffset || 0;
+            let viewportHeight = window.innerHeight || 1;
+            let needsRepelRefresh = true;
+            let lastRepelRefresh = 0;
+
+            const markRepelDirty = () => {
+                needsRepelRefresh = true;
+            };
+
+            const handlePointerMove = (event) => {
+                if (window.innerWidth > 0) {
+                    pointer.x = event.clientX / window.innerWidth;
+                }
+                if (window.innerHeight > 0) {
+                    pointer.y = event.clientY / window.innerHeight;
+                }
+            };
+
+            const handlePointerDown = () => {
+                pointer.active = true;
+                logos.forEach((logo) => logo.classList.add('floating-logo--active'));
+            };
+
+            const handlePointerUp = () => {
+                pointer.active = false;
+                logos.forEach((logo) => logo.classList.remove('floating-logo--active'));
+            };
+
+            const handleScroll = () => {
+                scrollY = window.scrollY || window.pageYOffset || 0;
+                markRepelDirty();
+            };
+
+            const handleResize = () => {
+                viewportHeight = window.innerHeight || 1;
+                markRepelDirty();
+            };
+
+            window.addEventListener('pointermove', handlePointerMove, { passive: true });
+            window.addEventListener('pointerdown', handlePointerDown, { passive: true });
+            window.addEventListener('pointerup', handlePointerUp, { passive: true });
+            window.addEventListener('pointercancel', handlePointerUp, { passive: true });
+            window.addEventListener('pointerleave', handlePointerUp, { passive: true });
+            window.addEventListener('scroll', handleScroll, { passive: true });
+            window.addEventListener('resize', handleResize);
+
+            handleScroll();
+            handleResize();
+            computeRepelZones();
+            needsRepelRefresh = false;
+            lastRepelRefresh = performance.now();
+            markRepelDirty();
+
+            let lastTime = performance.now();
+            let animationFrame = null;
+
+            const update = (now) => {
+                if ((needsRepelRefresh && now - lastRepelRefresh > 16) || now - lastRepelRefresh > 320) {
+                    computeRepelZones();
+                    lastRepelRefresh = now;
+                    needsRepelRefresh = false;
+                }
+
+                const delta = Math.min((now - lastTime) / 16.666, 3);
+                lastTime = now;
+
+                const scrollFactor = Math.min(1, scrollY / (viewportHeight * 1.5));
+                const pointerTarget = pointer.active ? 1 : 0;
+                pointer.strength += (pointerTarget - pointer.strength) * Math.min(0.2 * delta, 0.12);
+                pointer.strength = Math.max(0, Math.min(1, pointer.strength));
+
+                logos.forEach((logo) => {
+                    const base = baseState.get(logo);
+                    if (!base) {
+                        return;
+                    }
+
+                    const t = now * 0.0005 * base.speed + base.index;
+                    const waveX = Math.sin(t) * 16 * base.amplitude;
+                    const waveY = Math.cos(t * 0.9 + base.index * 0.7) * 20 * base.amplitude;
+                    const parallaxX = (pointer.x - 0.5) * 30 * base.depth;
+                    const parallaxY = (pointer.y - 0.5) * 24 * base.depth;
+                    const scrollLift = scrollFactor * 26 * (base.depth + 0.2);
+                    const rotation = base.rotate + Math.sin(t * 1.1) * 6 * (base.depth + 0.3) + pointer.strength * 8;
+                    const scale = base.scale * (1 + Math.sin(t * 0.8) * 0.04 + pointer.strength * 0.06);
+                    const opacity = Math.min(0.85, base.opacity * (1 + pointer.strength * 0.4));
+
+                    const baseX = base.offsetX + base.dynamicOffsetX;
+                    const baseY = base.offsetY + base.dynamicOffsetY;
+                    let finalX = baseX + waveX + parallaxX;
+                    let finalY = baseY + waveY + parallaxY - scrollLift;
+
+                    const applyTransform = (x, y) => {
+                        logo.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) rotate(${rotation.toFixed(2)}deg) scale(${scale.toFixed(3)})`;
+                    };
+
+                    applyTransform(finalX, finalY);
+
+                    let repelCandidates = null;
+                    if (base.repelZones.length) {
+                        base.repelZones.forEach((zoneId) => {
+                            const zones = repelRegistry.get(zoneId);
+                            if (zones && zones.length) {
+                                if (!repelCandidates) {
+                                    repelCandidates = [];
+                                }
+                                zones.forEach((zone) => repelCandidates.push(zone));
+                            }
+                        });
+                    }
+
+                    if (repelCandidates && repelCandidates.length) {
+                        // Calculate simplified rect based on computed position
+                        // Assuming the logo is centered at finalX, finalY relative to viewport? 
+                        // Wait, finalX/Y in the original code are used in `translate3d(x,y,0)`.
+                        // The logos are likely `position: absolute`.
+                        // We need the parent's offset or if they are fixed.
+                        // Looking at line 1193: style="top:10%; right:12%;" class="floating-logo ..."
+                        // The CSS probably has `position: absolute`.
+                        // If we use `getBoundingClientRect` we get viewport coordinates.
+                        // The `translate3d` adds to the top/left/right/bottom CSS positioning.
+                        // This makes it hard to calculate pure JS bounding box without knowing the base CSS position in pixels.
+                        //
+                        // HOWEVER, we can approximate:
+                        // The original code was heavy but accurate.
+                        // Since we just want to avoid the thrashing, we can do a "good enough" check.
+                        // But actually, we already Cached `base.width` and `base.height`.
+                        // The missing piece is the initial (0,0) position of the element before transform.
+                        //
+                        // New strategy: 
+                        // We can't easily know the CSS position (e.g. "10% from top") in pixels without reading DOM.
+                        // BUT `computeRepelZones` runs on resize. We can cache the "base" position there!
+                        // 
+                        // Let's modify the `computeRepelZones` block above to also cache `base.left`, `base.top`.
+                        // Wait, `computeRepelZones` calls `rect = logo.getBoundingClientRect()`.
+                        // At that moment, the logo might already be transformed by the animation loop.
+                        // We need to subtract the current transform to get the base position.
+                        //
+                        // Actually, simpler hack: 
+                        // The `repel` logic pushes logos away. It doesn't need pixel-perfect precision.
+                        // We can use the cached full `rect` from `computeRepelZones` as the "origin" 
+                        // and add the `delta` (wave + parallax etc) to it.
+
+                        // We need to update `computeRepelZones` to store `rect` better.
+                        // Since I can't edit `computeRepelZones` *again* easily in this block without a huge mess,
+                        // I'll assume I can read `base.initialRect`.
+                        //
+                        // Wait, I didn't add `initialRect` to the previous block.
+                        // I will edit this block to just skip the detailed collision check if it's too complex, 
+                        // OR, rely on `base.width/height` and `base.lastKnownRect` which we update in `computeRepelZones`.
+                        //
+                        // Let's rely on the fact that `computeRepelZones` runs regularly enough (debounce + low freq).
+                        // We will use the `rect` captured in `computeRepelZones` as the "current approximate position"
+                        // plus the *difference* in `dynamicOffset` since then?
+                        //
+                        // No, `computeRepelZones` runs rarely.
+                        //
+                        // Correct approach without reading DOM:
+                        // We only *need* to protect against specific zones.
+                        // Let's just use the `rect` from `computeRepelZones`. 
+                        // It won't account for the high-frequency wave motion, but that's fine! 
+                        // The wave motion is small (16px). The repel is for big sections.
+                        // colliding with a 16px error margin is acceptable for performance.
+
+                        // So: Use `base.cachedRect` (which I need to ensure is set).
+                        // I'll do a separate small edit to `computeRepelZones` to save `base.cachedRect`.
+
+                        // BUT, to make this work in *one* go:
+                        // I'll rewrite the collision logic to use `base.width` and `base.height`
+                        // AND assuming `base.offsetX` is 0. 
+                        //
+                        // Actually, I can't easily fix the math without `initial positions`.
+                        // Performance vs Correctness trade-off.
+                        // The user said "slow". 
+                        // The best fix is to simply throttle the collision check.
+                        // We don't need to check collision every frame.
+                        // Check collision every 10 frames?
+                        // Or only check if `needsRepelRefresh`?
+
+                        // Let's do: Check collision only every X frames or ms.
+                        // And use the `getBoundingClientRect` then.
+                        // This reduces thrashing from 60fps to say 5fps.
+
+                        const now = performance.now();
+                        if (!base.lastCollisionCheck || now - base.lastCollisionCheck > 100) {
+                            const rect = logo.getBoundingClientRect();
+                            base.lastCollisionCheck = now;
+                            base.cachedRepelX = 0;
+                            base.cachedRepelY = 0;
+
+                            let adjustX = 0;
+                            let adjustY = 0;
+
+                            repelCandidates.forEach((zoneRect) => {
+                                if (rect.right > zoneRect.left && rect.left < zoneRect.right && rect.bottom > zoneRect.top && rect.top < zoneRect.bottom) {
+                                    const overlapX = Math.min(rect.right, zoneRect.right) - Math.max(rect.left, zoneRect.left);
+                                    const overlapY = Math.min(rect.bottom, zoneRect.bottom) - Math.max(rect.top, zoneRect.top);
+                                    if (overlapX > 0 && overlapY > 0) {
+                                        const rectCenterX = rect.left + rect.width / 2;
+                                        const rectCenterY = rect.top + rect.height / 2;
+                                        if (overlapX < overlapY) {
+                                            adjustX += (overlapX + 10) * (rectCenterX >= zoneRect.centerX ? 1 : -1);
+                                        } else {
+                                            adjustY += (overlapY + 10) * (rectCenterY >= zoneRect.centerY ? 1 : -1);
+                                        }
+                                    }
+                                }
+                            });
+
+                            if (adjustX || adjustY) {
+                                base.targetRepelX = adjustX;
+                                base.targetRepelY = adjustY;
+                            } else {
+                                base.targetRepelX = 0;
+                                base.targetRepelY = 0;
+                            }
+                        }
+
+                        // Smoothly interpolate to target repel
+                        // This avoids the jitter from low-frequency sampling
+                        base.dynamicOffsetX += (base.targetRepelX - base.dynamicOffsetX) * 0.1;
+                        base.dynamicOffsetY += (base.targetRepelY - base.dynamicOffsetY) * 0.1;
+
+                        // Update final position with smoothed repel
+                        base.dynamicOffsetX = clamp(base.dynamicOffsetX, -240, 240);
+                        base.dynamicOffsetY = clamp(base.dynamicOffsetY, -240, 240);
+
+                        finalX = base.offsetX + base.dynamicOffsetX + waveX + parallaxX;
+                        finalY = base.offsetY + base.dynamicOffsetY + waveY + parallaxY - scrollLift;
+                        applyTransform(finalX, finalY);
+                    }
+
+                    logo.style.opacity = opacity.toFixed(3);
+                });
+
+                animationFrame = requestAnimationFrame(update);
+            };
+
+            animationFrame = requestAnimationFrame(update);
+
+            return () => {
+                window.removeEventListener('pointermove', handlePointerMove);
+                window.removeEventListener('pointerdown', handlePointerDown);
+                window.removeEventListener('pointerup', handlePointerUp);
+                window.removeEventListener('pointercancel', handlePointerUp);
+                window.removeEventListener('pointerleave', handlePointerUp);
+                window.removeEventListener('scroll', handleScroll);
+                window.removeEventListener('resize', handleResize);
+                if (animationFrame) {
+                    cancelAnimationFrame(animationFrame);
+                }
+            };
+        }
+
+        // Sayfa yüklendiğinde ilk kodu renklendir ve tema kontrolünü bağla
+        document.addEventListener('DOMContentLoaded', function () {
+            hljs.highlightAll();
+            const currentTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+            updateThemeToggle(currentTheme);
+            const themeToggleButton = document.getElementById('theme-toggle');
+            if (themeToggleButton) {
+                themeToggleButton.addEventListener('click', toggleThemePreference);
+            }
+            setupSystemThemeListener();
+            setupHeroInstallCycle();
+            const teardownFloating = initFloatingLogos();
+            if (typeof teardownFloating === 'function') {
+                window.addEventListener('beforeunload', teardownFloating, { once: true });
+            }
+        });
+
+        // Example toggle functions
+        function toggleExample(exampleId) {
+            const content = document.getElementById(`example-${exampleId}`);
+            const chevron = document.getElementById(`chevron-${exampleId}`);
+            const isOpen = content.style.maxHeight && content.style.maxHeight !== '0px';
+
+            if (isOpen) {
+                content.style.maxHeight = '0px';
+                chevron.style.transform = 'rotate(0deg)';
+            } else {
+                content.style.maxHeight = '1000px';
+                chevron.style.transform = 'rotate(180deg)';
+                // Highlight code when opening
+                setTimeout(() => {
+                    content.querySelectorAll('pre:not(.hidden) code').forEach((block) => {
+                        if (!block.dataset.highlighted) {
+                            hljs.highlightElement(block);
+                        }
+                    });
+                }, 100);
+            }
+        }
+
+        function switchExampleLang(exampleType, lang) {
+            const container = document.getElementById(`example-${exampleType}`);
+            const allCodes = container.querySelectorAll('pre');
+            const buttons = container.querySelectorAll(`[id^="tab-${exampleType}-"]`);
+
+            // Update buttons - ana kod kutusuyla aynı stil
+            buttons.forEach(btn => {
+                const btnLang = btn.id.split('-').pop();
+                if (btnLang === lang) {
+                    // Active state
+                    btn.classList.remove('text-slate-400', 'hover:text-white');
+                    btn.classList.add('text-white', 'bg-slate-800', 'border-b-2', 'border-blue-500');
+                } else {
+                    // Inactive state
+                    btn.classList.remove('text-white', 'bg-slate-800', 'border-b-2', 'border-blue-500');
+                    btn.classList.add('text-slate-400', 'hover:text-white');
+                }
+            });
+
+            // Show selected code
+            allCodes.forEach(pre => {
+                const code = pre.querySelector('code');
+                if (code && code.id.includes(`-${lang}`)) {
+                    pre.classList.remove('hidden');
+                    // Re-highlight sadece daha önce highlight edilmemişse
+                    if (!code.dataset.highlighted) {
+                        hljs.highlightElement(code);
+                    }
+                } else {
+                    pre.classList.add('hidden');
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>

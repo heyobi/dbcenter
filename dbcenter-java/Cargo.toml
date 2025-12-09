@@ -1,0 +1,15 @@
+[package]
+name = "dbcenter-java"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+dbcenter-core = { path = "../dbcenter-core" }
+tokio = { workspace = true }

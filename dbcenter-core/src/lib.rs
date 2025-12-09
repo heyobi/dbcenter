@@ -1,0 +1,581 @@
+pub mod binary;
+pub mod collection;
+pub mod config;
+pub mod error;
+pub mod extensions;
+pub mod geo_collection;
+pub mod vector_store;
+pub mod process;
+pub mod query;
+pub mod utils;
+
+pub use config::DBCenterConfig;
+pub use error::{DBCenterError, Result};
+
+use once_cell::sync::Lazy;
+use postgres::{Client, NoTls};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+
+// Global instance registry for singleton pattern
+static INSTANCES: Lazy<Mutex<HashMap<PathBuf, Arc<DBCenter>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Main DBCenter struct - Embedded PostgreSQL database
+pub struct DBCenter {
+    config: DBCenterConfig,
+    client: Mutex<Client>,
+    process: Arc<Mutex<process::PostgresProcess>>,
+    path: PathBuf,
+    instance_id: String,
+}
+
+impl DBCenter {
+    /// Create a new DBCenter instance
+    pub fn new<P: AsRef<Path>>(
+        path: Option<P>,
+        persist: bool,
+        daemon_mode: bool,
+        host: Option<String>,
+        port: Option<u16>,
+        password: Option<String>,
+        postgres_version: Option<String>,
+    ) -> Result<Arc<Self>> {
+        // Validation: service mode requires persist
+        if daemon_mode && !persist {
+            return Err(DBCenterError::ConfigError(
+                "Invalid configuration: service=True requires persist=True. \
+                Service mode keeps the database running, so files must be persisted."
+                    .to_string(),
+            ));
+        }
+
+        let (path_buf, path_hint) = match path {
+            Some(p) => {
+                let requested = p.as_ref().to_path_buf();
+                // Create directory first if it doesn't exist, so canonicalize works consistently
+                if !requested.exists() {
+                    std::fs::create_dir_all(&requested).map_err(DBCenterError::IoError)?;
+                }
+                let canonical = requested
+                    .canonicalize()
+                    .unwrap_or_else(|_| requested.clone());
+                (canonical, Some(requested))
+            }
+            None => {
+                let temp = tempfile::tempdir().map_err(|e| DBCenterError::IoError(e))?;
+                let temp_path = temp.path().to_path_buf();
+                (temp_path.clone(), Some(temp_path))
+            }
+        };
+
+        // Check if database directory exists and has a running PostgreSQL
+        if path_buf.exists() {
+            let postmaster_pid = path_buf.join("postmaster.pid");
+            if postmaster_pid.exists() {
+                // Read PID from file
+                if let Ok(pid_content) = std::fs::read_to_string(&postmaster_pid) {
+                    if let Some(pid_line) = pid_content.lines().next() {
+                        if let Ok(pid) = pid_line.trim().parse::<u32>() {
+                            // Check if process is actually running
+                            let is_running = process::is_process_running_global(pid);
+
+                            if is_running {
+                                let hint_path = path_hint.as_ref().unwrap_or(&path_buf);
+                                let shutdown_hint = format!(
+                                    "DBCenter.force_shutdown(\"{}\")",
+                                    escape_quotes(hint_path)
+                                );
+                                return Err(DBCenterError::ProcessError(format!(
+                                    "PostgreSQL is already running at {:?} (PID: {}). Please shut it down first using {}.",
+                                    path_buf,
+                                    pid,
+                                    shutdown_hint
+                                )));
+                            } else {
+                                // Process not running, clean up stale PID file
+                                tracing::info!("Removing stale postmaster.pid file");
+                                let _ = std::fs::remove_file(&postmaster_pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let existing_major = binary::detect_existing_major_version(&path_buf);
+        let requested_version = match postgres_version {
+            Some(version) => Some(binary::normalize_postgres_version(&version)?),
+            None => None,
+        };
+
+        // Create new instance
+        let mut config = DBCenterConfig::default();
+        config.data_dir = path_buf.clone();
+        config.persist = persist;
+        config.daemon_mode = daemon_mode;
+        config.host = host;
+        config.port = port;
+        config.password = password;
+
+        let (resolved_version, warning) =
+            binary::resolve_artifact_version(requested_version.as_deref(), existing_major)?;
+        config.postgres_version = resolved_version;
+
+        if let Some(message) = warning {
+            tracing::warn!(target: "dbcenter", "{}", message);
+        }
+
+        // Ensure binaries are available
+        binary::ensure_binaries(&config)?;
+
+        // Initialize database if needed
+        process::initialize_db(&config)?;
+
+        // Generate and persist a unique instance identifier for watcher coordination
+        let instance_id = Uuid::new_v4().to_string();
+        let marker_path = config.data_dir.join("dbcenter.instance");
+        std::fs::write(&marker_path, &instance_id).map_err(DBCenterError::IoError)?;
+
+        // Start PostgreSQL process
+        let pg_process = process::PostgresProcess::start(&config)?;
+
+        // Connect to database
+        let conn_str = pg_process.connection_string(&config);
+        let client = Client::connect(&conn_str, NoTls)
+            .map_err(|e| DBCenterError::ConnectionError(e.to_string()))?;
+
+        let db_center = Arc::new(DBCenter {
+            config,
+            client: Mutex::new(client),
+            process: Arc::new(Mutex::new(pg_process)),
+            path: path_buf.clone(),
+            instance_id: instance_id.clone(),
+        });
+
+        // Register instance in global registry for force_shutdown capability
+        let mut instances = INSTANCES.lock().map_err(|_| DBCenterError::LockError)?;
+        instances.insert(path_buf, Arc::clone(&db_center));
+        drop(instances);
+
+        Ok(db_center)
+    }
+
+    /// Get the database path
+    pub fn get_path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Get the unique instance identifier for this PostgreSQL run
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// Get configured PostgreSQL distribution version string
+    pub fn postgres_version(&self) -> &str {
+        &self.config.postgres_version
+    }
+
+    /// Get the underlying PostgreSQL process ID, if running
+    pub fn postgres_pid(&self) -> Option<u32> {
+        self.process.lock().ok().and_then(|process| process.pid())
+    }
+
+    /// Get a collection (MongoDB-style)
+    pub fn collection(&self, name: &str) -> collection::Collection {
+        collection::Collection::new(self, name)
+    }
+
+    /// Get a specific GeoCollection (Geospatial API)
+    pub fn geo_collection(&self, name: &str) -> geo_collection::GeoCollection {
+        geo_collection::GeoCollection::new(self, name)
+    }
+
+    /// Get a VectorStore (pgvector API)
+    pub fn vector_store(&self, name: &str, dimension: usize) -> Result<vector_store::VectorStore> {
+        vector_store::VectorStore::new(self, name, dimension)
+    }
+
+    /// Execute raw SQL query
+    pub fn query(
+        &self,
+        sql: &str,
+        params: &[&(dyn postgres::types::ToSql + Sync)],
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut client = self.client.lock().map_err(|_| DBCenterError::LockError)?;
+
+        let rows = client
+            .query(sql, params)
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let mut map = serde_json::Map::new();
+            for (idx, column) in row.columns().iter().enumerate() {
+                let col_name = column.name();
+                let value = utils::row_value_to_json(&row, idx);
+                map.insert(col_name.to_string(), value);
+            }
+            results.push(serde_json::Value::Object(map));
+        }
+
+        Ok(results)
+    }
+
+    /// List all collections (tables)
+    pub fn list_collections(&self) -> Result<Vec<String>> {
+        let sql = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename";
+        let mut client = self.client.lock().map_err(|_| DBCenterError::LockError)?;
+
+        let rows = client
+            .query(sql, &[])
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+
+        Ok(rows.iter().map(|row| row.get(0)).collect())
+    }
+
+    /// Drop a collection (table)
+    pub fn drop_collection(&self, name: &str) -> Result<()> {
+        let sql = format!("DROP TABLE IF EXISTS \"{}\" CASCADE", name);
+        let mut client = self.client.lock().map_err(|_| DBCenterError::LockError)?;
+
+        client
+            .execute(&sql, &[])
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+
+        tracing::info!("Dropped collection: {}", name);
+        Ok(())
+    }
+
+    /// Install PostgreSQL extension (e.g., PostGIS)
+    pub fn install_extension(&self, name: &str) -> Result<()> {
+        extensions::install_extension(self, name)
+    }
+
+    /// Install PostgreSQL extension with optional version
+    pub fn install_extension_with_version(&self, name: &str, version: Option<&str>) -> Result<()> {
+        extensions::install_extension_with_version(self, name, version)
+    }
+
+    /// Add entry to pg_hba.conf and reload configuration
+    ///
+    /// # Arguments
+    /// * `entry_type` - Type of connection: "local", "host", "hostssl", "hostnossl"
+    /// * `database` - Database name or "all"
+    /// * `user` - User name or "all"
+    /// * `address` - CIDR address (e.g., "0.0.0.0/0", "192.168.1.0/24") - use None for local
+    /// * `auth_method` - Authentication method: "trust", "md5", "scram-sha-256", "password", etc.
+    pub fn add_pg_hba_entry(
+        &self,
+        entry_type: &str,
+        database: &str,
+        user: &str,
+        address: Option<&str>,
+        auth_method: &str,
+    ) -> Result<()> {
+        let pg_hba_path = self.config.data_dir.join("pg_hba.conf");
+
+        // Build the entry line
+        let entry = if entry_type == "local" {
+            format!(
+                "{:<7} {:<15} {:<15} {}\n",
+                entry_type, database, user, auth_method
+            )
+        } else {
+            let addr = address.unwrap_or("127.0.0.1/32");
+            format!(
+                "{:<7} {:<15} {:<15} {:<18} {}\n",
+                entry_type, database, user, addr, auth_method
+            )
+        };
+
+        // Append to pg_hba.conf
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&pg_hba_path)
+            .map_err(|e| DBCenterError::IoError(e))?;
+
+        file.write_all(entry.as_bytes())
+            .map_err(|e| DBCenterError::IoError(e))?;
+
+        tracing::info!("Added pg_hba.conf entry: {}", entry.trim());
+
+        // Reload configuration
+        self.reload_config()?;
+
+        Ok(())
+    }
+
+    /// Reload PostgreSQL configuration (pg_hba.conf, postgresql.conf)
+    pub fn reload_config(&self) -> Result<()> {
+        let mut client = self.client.lock().map_err(|_| DBCenterError::LockError)?;
+
+        client
+            .execute("SELECT pg_reload_conf()", &[])
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+
+        tracing::info!("PostgreSQL configuration reloaded");
+        Ok(())
+    }
+
+    /// Set or update user password
+    pub fn set_user_password(&self, username: &str, password: &str) -> Result<()> {
+        let mut client = self.client.lock().map_err(|_| DBCenterError::LockError)?;
+
+        let sql = format!("ALTER USER {} WITH PASSWORD '{}'", username, password);
+        client
+            .execute(&sql, &[])
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+
+        tracing::info!("Password set for user: {}", username);
+        Ok(())
+    }
+
+    /// Shutdown the database
+    pub fn shutdown(&self) -> Result<()> {
+        tracing::info!("Shutting down DBCenter instance for {:?}", self.path);
+
+        let process = self.process.lock().map_err(|_| DBCenterError::LockError)?;
+
+        process.shutdown(&self.config)?;
+        drop(process); // Release lock before removing from registry
+
+        // Remove from registry
+        let mut instances = INSTANCES.lock().map_err(|_| DBCenterError::LockError)?;
+        instances.remove(&self.path);
+        drop(instances); // Release lock before potential file deletion
+
+        tracing::info!("DBCenter instance removed from registry");
+
+        // If persist is false, delete the database directory
+        if !self.config.persist {
+            tracing::info!(
+                "persist=false, deleting database directory: {:?}",
+                self.path
+            );
+            if self.path.exists() {
+                std::fs::remove_dir_all(&self.path).map_err(|e| DBCenterError::IoError(e))?;
+                tracing::info!("Database directory deleted successfully");
+            }
+        } else {
+            tracing::info!("persist=true, keeping database directory: {:?}", self.path);
+        }
+
+        Ok(())
+    }
+
+    /// Shutdown database by path (for atexit cleanup)
+    pub fn shutdown_by_path<P: AsRef<Path>>(path: P) -> Result<()> {
+        let path_buf = path
+            .as_ref()
+            .to_path_buf()
+            .canonicalize()
+            .unwrap_or_else(|_| path.as_ref().to_path_buf());
+
+        let instances = INSTANCES.lock().map_err(|_| DBCenterError::LockError)?;
+
+        if let Some(instance) = instances.get(&path_buf).cloned() {
+            drop(instances); // Release lock before calling shutdown
+            instance.shutdown()
+        } else {
+            Ok(()) // Already shut down or doesn't exist
+        }
+    }
+
+    /// Force shutdown a specific path without deleting files
+    pub fn force_shutdown<P: AsRef<Path>>(path: P) -> Result<()> {
+        let raw_path = path.as_ref();
+        let path_buf = raw_path
+            .canonicalize()
+            .unwrap_or_else(|_| raw_path.to_path_buf());
+
+        // Remove from registry first if exists
+        {
+            let mut instances = INSTANCES.lock().map_err(|_| DBCenterError::LockError)?;
+            instances.remove(&path_buf);
+        }
+
+        // Always use pg_ctl stop -w for reliable shutdown (blocks until complete)
+        let postmaster_pid = path_buf.join("postmaster.pid");
+        if !postmaster_pid.exists() {
+            tracing::info!(
+                "No postmaster.pid found at {:?}, nothing to shutdown",
+                path_buf
+            );
+            return Ok(());
+        }
+
+        // Try pg_ctl stop -w first - this is the most reliable method
+        let pg_ctl_path = binary::find_pg_ctl_for_data_dir(&path_buf);
+
+        if let Some(pg_ctl) = pg_ctl_path {
+            tracing::info!("Using pg_ctl stop -w for shutdown at {:?}", path_buf);
+            let output = std::process::Command::new(&pg_ctl)
+                .arg("stop")
+                .arg("-D")
+                .arg(&path_buf)
+                .arg("-m")
+                .arg("immediate") // immediate mode for force shutdown
+                .arg("-w") // wait for shutdown to complete
+                .output();
+
+            match output {
+                Ok(result) if result.status.success() => {
+                    tracing::info!("PostgreSQL shut down successfully via pg_ctl");
+                    return Ok(());
+                }
+                Ok(result) => {
+                    tracing::warn!(
+                        "pg_ctl stop failed: {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to execute pg_ctl: {}", e);
+                }
+            }
+        }
+
+        // Fallback: kill process directly
+        if let Ok(pid_content) = std::fs::read_to_string(&postmaster_pid) {
+            if let Some(pid_line) = pid_content.lines().next() {
+                if let Ok(pid) = pid_line.trim().parse::<u32>() {
+                    tracing::info!("Fallback: killing PostgreSQL process {}", pid);
+
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(&["/F", "/T", "/PID", &pid.to_string()])
+                            .output();
+                    }
+
+                    #[cfg(unix)]
+                    {
+                        let _ = std::process::Command::new("kill")
+                            .args(&["-9", &pid.to_string()])
+                            .output();
+                    }
+
+                    // Clean up postmaster.pid
+                    let _ = std::fs::remove_file(&postmaster_pid);
+                }
+            }
+        }
+
+        tracing::info!("Force shutdown completed for {:?}", path_buf);
+        Ok(())
+    }
+
+    /// Forcefully remove a database directory after ensuring the instance is shut down
+    pub fn force_remove<P: AsRef<Path>>(path: P) -> Result<()> {
+        let raw_path = path.as_ref();
+        let path_buf = raw_path
+            .canonicalize()
+            .unwrap_or_else(|_| raw_path.to_path_buf());
+
+        tracing::info!("Force remove requested for {:?}", path_buf);
+
+        // pg_ctl stop -w blocks until PostgreSQL is fully stopped
+        Self::force_shutdown(&path_buf)?;
+
+        if path_buf.exists() {
+            tracing::info!("Force remove: deleting database directory {:?}", path_buf);
+            utils::remove_dir_all_with_retry(&path_buf)?;
+            tracing::info!("Successfully deleted {:?}", path_buf);
+        } else {
+            tracing::info!("Directory {:?} does not exist, nothing to remove", path_buf);
+        }
+
+        Ok(())
+    }
+
+    /// Get internal client for advanced operations
+    pub(crate) fn get_client(&self) -> std::sync::MutexGuard<Client> {
+        self.client.lock().unwrap()
+    }
+}
+
+impl Drop for DBCenter {
+    fn drop(&mut self) {
+        tracing::debug!("DBCenter instance dropped for {:?}", self.path);
+
+        // If daemon_mode is disabled, shutdown automatically
+        if !self.config.daemon_mode {
+            // Check if this instance still owns the database by comparing instance_id
+            let marker_path = self.path.join("dbcenter.instance");
+            let should_shutdown = match std::fs::read_to_string(&marker_path) {
+                Ok(current_id) => {
+                    let matches = current_id.trim() == self.instance_id;
+                    if !matches {
+                        tracing::info!(
+                            "Drop: instance_id mismatch (ours: {}, current: {}), skipping shutdown for {:?}",
+                            self.instance_id,
+                            current_id.trim(),
+                            self.path
+                        );
+                    }
+                    matches
+                }
+                Err(_) => {
+                    // Marker file doesn't exist (directory was deleted), skip shutdown
+                    tracing::info!(
+                        "Drop: instance marker not found, skipping shutdown for {:?}",
+                        self.path
+                    );
+                    false
+                }
+            };
+
+            if should_shutdown {
+                tracing::info!(
+                    "Auto-shutting down DBCenter (daemon_mode=false) for {:?}",
+                    self.path
+                );
+
+                if let Ok(process) = self.process.lock() {
+                    let _ = process.shutdown(&self.config);
+                }
+
+                // Remove from registry
+                if let Ok(mut instances) = INSTANCES.lock() {
+                    instances.remove(&self.path);
+                }
+
+                // If persist is false, delete the database directory
+                if !self.config.persist {
+                    tracing::info!(
+                        "Drop: persist=false, deleting database directory: {:?}",
+                        self.path
+                    );
+                    if self.path.exists() {
+                        if let Err(e) = std::fs::remove_dir_all(&self.path) {
+                            tracing::error!("Failed to delete database directory in Drop: {}", e);
+                        } else {
+                            tracing::info!("Database directory deleted successfully in Drop");
+                        }
+                    }
+                }
+            }
+        } else {
+            tracing::info!(
+                "DBCenter in daemon mode - keeping PostgreSQL running for {:?}",
+                self.path
+            );
+        }
+    }
+}
+
+fn escape_quotes(path: &Path) -> String {
+    let mut escaped = String::new();
+    for ch in path.to_string_lossy().chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}

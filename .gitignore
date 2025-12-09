@@ -1,0 +1,32 @@
+.idea/
+.vscode/
+target/
+**/*.rs.bk
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Python
+*.egg-info/
+dist/
+build/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Go
+*.test
+*.out
+
+# Data directories
+testdata/
+testdata_rust/
+testdata_c/
+testdata_go/
+*.db
+
+# Logs
+*.log
+server.log

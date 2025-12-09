@@ -1,0 +1,7 @@
+2025-12-07 09:27:36.630 +03 [23876] LOG:  starting PostgreSQL 17.7 on x86_64-windows, compiled by msvc-19.44.35219, 64-bit
+2025-12-07 09:27:36.631 +03 [23876] LOG:  listening on IPv4 address "127.0.0.1", port 59878
+2025-12-07 09:27:36.706 +03 [19956] LOG:  database system was shut down at 2025-12-07 09:27:32 +03
+2025-12-07 09:27:36.745 +03 [23876] LOG:  database system is ready to accept connections
+2025-12-07 09:27:37.111 +03 [27296] ERROR:  function postgis_version() does not exist at character 8
+2025-12-07 09:27:37.111 +03 [27296] HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+2025-12-07 09:27:37.111 +03 [27296] STATEMENT:  SELECT PostGIS_Version() as version

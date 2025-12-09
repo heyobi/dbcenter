@@ -1,0 +1,12 @@
+language = "C"
+after_includes = """
+typedef struct CDBCenter CDBCenter;
+typedef struct CVectorStore CVectorStore;
+"""
+
+[parse]
+parse_deps = true
+include = ["dbcenter-ffi"]
+
+[export]
+item_types = ["structs", "enums", "functions"]
