@@ -50,16 +50,15 @@ Write-Host "`n--- Linux Tests (Remote: $RemoteHost) ---" -ForegroundColor Cyan
 
 # A. Prepare Remote
 Write-Host "Cleaning remote directory..."
-ssh $RemoteUser@$RemoteHost "rm -rf $RemoteDir && mkdir -p $RemoteDir"
+# Set 777 permissions on host directory to allow any Docker user to write
+ssh $RemoteUser@$RemoteHost "rm -rf $RemoteDir && mkdir -p $RemoteDir && chmod 777 $RemoteDir"
 
 # B. Transfer Artifacts
 Write-Host "Transferring artifacts..."
 # We need:
 # 1. Linux Wheel
 # 2. Go Test Binary (test_go_linux)
-# 3. Rust .so (libdbcenter_ffi.so) - required for Go binary? 
-#    Actually, if we built test_go_linux, checking if it needs .so.
-#    Usually cgo builds are dynamic. 
+# 3. Rust .so (libdbcenter_ffi.so)
 # 4. Python Test Script (test_final.py)
 
 $LinWheel = Get-ChildItem "$DistLin/*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -69,23 +68,23 @@ if (-not $LinWheel) { throw "No Linux wheel found in $DistLin" }
 scp $LinWheel $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/test_go_linux" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/libdbcenter_ffi.so" $RemoteUser@$RemoteHost`:$RemoteDir/
+scp "$DistLin/dbcenter-watcher" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$ProjectRoot/python_tests/test_final.py" $RemoteUser@$RemoteHost`:$RemoteDir/
 
 # C. Run Remote Tests (Docker)
 Write-Host "Running Remote Tests in Docker..."
 
 # Define the remote command script
-# using multi-line string for readability
 $RemoteScript = @"
 set -e
 echo '[Remote] Starting Docker container for tests...'
 
 # 1. Run Python Tests
+# We rely on host dir being 777 permissions.
 docker run --rm -v ${RemoteDir}:/work python:3.11-bookworm bash -c '
     cd /work
     pip install *.whl
-    useradd testuser
-    chown -R testuser /work
+    useradd -ms /bin/bash testuser
     su testuser -c "python test_final.py"
 '
 
@@ -94,9 +93,8 @@ docker run --rm -v ${RemoteDir}:/work python:3.11-bookworm bash -c '
 docker run --rm -v ${RemoteDir}:/work -e LD_LIBRARY_PATH=/work debian:bookworm-slim bash -c '
     cd /work
     apt-get update && apt-get install -y postgresql-common
-    chmod +x test_go_linux
-    useradd testuser
-    chown -R testuser /work
+    chmod +x test_go_linux dbcenter-watcher
+    useradd -ms /bin/bash testuser
     su testuser -c "./test_go_linux"
 '
 "@

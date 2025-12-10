@@ -18,6 +18,11 @@ docker run --rm -v $ROOT:/volume -w /volume/dbcenter-ffi rust:1-bookworm cargo b
 # Copy .so to dist
 cp $ROOT/dbcenter-ffi/target/release/libdbcenter_ffi.so $ROOT/dist/linux/ || cp $ROOT/target/release/libdbcenter_ffi.so $ROOT/dist/linux/
 
+# 1b. Build dbcenter-watcher
+echo "[Remote] Building dbcenter-watcher..."
+docker run --rm -v $ROOT:/volume -w /volume/dbcenter-watcher rust:1-bookworm cargo build --release
+cp $ROOT/dbcenter-watcher/target/release/dbcenter-watcher $ROOT/dist/linux/ || cp $ROOT/target/release/dbcenter-watcher $ROOT/dist/linux/
+
 # 2. Build Python Wheel
 echo "[Remote] Building Python Wheel (via Docker: ghcr.io/pyo3/maturin)..."
 # This image is designed for maturin builds.
