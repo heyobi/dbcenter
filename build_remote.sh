@@ -55,6 +55,15 @@ docker run --rm -v $ROOT:/volume -w /volume/examples gcc:latest bash -c "
     echo 'C test binary built successfully.'
 "
 
+# 5. Build Rust Example Binary
+echo "[Remote] Building Rust Example Binary (via Docker: rust:1-bookworm)..."
+docker run --rm -v $ROOT:/volume -w /volume rust:1-bookworm bash -c "
+    echo 'Building Rust example...'
+    cargo build --example test_rust -p dbcenter-core --release
+    cp target/release/examples/test_rust dist/linux/test_rust_linux
+    echo 'Rust example built successfully.'
+"
+
 # Copy header file for reference
 cp $ROOT/dbcenter-ffi/dbcenter.h $ROOT/dist/linux/
 

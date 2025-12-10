@@ -68,6 +68,7 @@ if (-not $LinWheel) { throw "No Linux wheel found in $DistLin" }
 scp $LinWheel $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/test_go_linux" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/test_c_linux" $RemoteUser@$RemoteHost`:$RemoteDir/
+scp "$DistLin/test_rust_linux" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/libdbcenter_ffi.so" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/dbcenter-watcher" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$ProjectRoot/python_tests/test_final.py" $RemoteUser@$RemoteHost`:$RemoteDir/
@@ -94,7 +95,7 @@ docker run --rm -v ${RemoteDir}:/work python:3.11-bookworm bash -c '
 docker run --rm -v ${RemoteDir}:/work -e LD_LIBRARY_PATH=/work debian:bookworm-slim bash -c '
     cd /work
     apt-get update && apt-get install -y postgresql-common
-    chmod +x test_go_linux dbcenter-watcher test_c_linux
+    chmod +x test_go_linux dbcenter-watcher test_c_linux test_rust_linux
     useradd -ms /bin/bash testuser
     su testuser -c "./test_go_linux"
 '
@@ -105,6 +106,14 @@ docker run --rm -v ${RemoteDir}:/work -e LD_LIBRARY_PATH=/work debian:bookworm-s
     chmod +x test_c_linux dbcenter-watcher
     useradd -ms /bin/bash testuser
     su testuser -c "./test_c_linux"
+'
+
+# 4. Run Rust Tests
+docker run --rm -v ${RemoteDir}:/work -e LD_LIBRARY_PATH=/work debian:bookworm-slim bash -c '
+    cd /work
+    chmod +x test_rust_linux
+    useradd -ms /bin/bash testuser
+    su testuser -c "./test_rust_linux"
 '
 "@
 

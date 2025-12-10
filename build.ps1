@@ -82,7 +82,15 @@ finally {
 }
 
 # ==========================================
-# 3. LINUX BUILD (Remote)
+# 3. RUST EXAMPLE BUILD (Windows)
+# ==========================================
+Write-Host "`n[Rust] Building test example for Windows..." -ForegroundColor Cyan
+cargo build --example test_rust -p dbcenter-core --release
+if ($LASTEXITCODE -ne 0) { throw "Rust Example Build Failed" }
+Copy-Item "$ProjectRoot/target/release/examples/test_rust.exe" "$DistDir/windows/"
+
+# ==========================================
+# 4. LINUX BUILD (Remote)
 # ==========================================
 Write-Host "`n[Linux] Building on Remote Host ($RemoteHost)..." -ForegroundColor Cyan
 

@@ -30,3 +30,7 @@ indicatif.workspace = true
 [lib]
 name = "dbcenter_core"
 crate-type = ["rlib", "staticlib"]
+
+[[example]]
+name = "test_rust"
+path = "examples/test_rust.rs"
