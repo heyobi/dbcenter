@@ -3,9 +3,19 @@ use libc::{c_char, c_void};
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
 use std::ptr;
-use std::io::Write; // Added Write trait
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::fs;
 use serde_json;
-// use tokio::runtime::Runtime;
+
+#[cfg(target_os = "windows")]
+const WATCHER_BASENAME: &str = "dbcenter-watcher.exe";
+#[cfg(not(target_os = "windows"))]
+const WATCHER_BASENAME: &str = "dbcenter-watcher";
+
+const WATCHER_BYTES: &[u8] = include_bytes!(env!("DBCENTER_WATCHER_EMBED"));
+static EMBEDDED_WATCHER_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 // Opaque pointer types for C
 #[repr(C)]
@@ -39,85 +49,65 @@ unsafe fn c_str_to_opt_string(ptr: *const c_char) -> Option<String> {
     }
 }
 
+/// Ensure embedded watcher binary is extracted and return its path
+fn ensure_embedded_watcher_path() -> Result<PathBuf, String> {
+    if let Some(path) = EMBEDDED_WATCHER_PATH.get() {
+        return Ok(path.clone());
+    }
+
+    let mut base_dir = std::env::temp_dir();
+    base_dir.push("dbcenter-ffi");
+    fs::create_dir_all(&base_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+
+    let watcher_path = base_dir.join(WATCHER_BASENAME);
+    if !watcher_path.exists() {
+        fs::write(&watcher_path, WATCHER_BYTES)
+            .map_err(|e| format!("Failed to write watcher binary: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o755);
+            fs::set_permissions(&watcher_path, perms)
+                .map_err(|e| format!("Failed to set watcher permissions: {}", e))?;
+        }
+    }
+
+    let _ = EMBEDDED_WATCHER_PATH.set(watcher_path.clone());
+    Ok(watcher_path)
+}
+
 fn resolve_watcher_path() -> Result<std::path::PathBuf, String> {
-    let basename = if cfg!(windows) { "dbcenter-watcher.exe" } else { "dbcenter-watcher" };
-    
-    // 1. Env var
+    // 1. Check environment variable first
     if let Ok(path) = std::env::var("DBCENTER_WATCHER_PATH") {
-        let pb = std::path::PathBuf::from(path);
+        let pb = std::path::PathBuf::from(&path);
         if pb.exists() { 
             eprintln!("[DBCenter-FFI] Found watcher via env var: {:?}", pb);
             return Ok(pb); 
         }
     }
 
-    let mut candidates = Vec::new();
-
-    // 2. Relative to current executable
+    // 2. Check next to the current executable (where .dll/.so is)
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.join(basename));
-        }
-    }
-
-    // 3. Current Working Directory and parents
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(basename));
-        candidates.push(cwd.join(format!("./{}", basename)));
-        if let Some(parent) = cwd.parent() {
-            candidates.push(parent.join(basename));
-        }
-    }
-    
-    // 4. Relative paths
-    candidates.push(std::path::PathBuf::from(format!("../{}", basename)));
-    candidates.push(std::path::PathBuf::from(format!("dbcenter-watcher/target/release/{}", basename))); 
-    candidates.push(std::path::PathBuf::from(format!("../target/release/{}", basename)));
-
-    for c in &candidates {
-        if c.exists() {
-            if let Ok(abs) = std::fs::canonicalize(c) {
-                eprintln!("[DBCenter-FFI] Found watcher at: {:?}", abs);
-                return Ok(abs);
+            let candidate = parent.join(WATCHER_BASENAME);
+            if candidate.exists() {
+                eprintln!("[DBCenter-FFI] Found watcher next to executable: {:?}", candidate);
+                return Ok(candidate);
             }
         }
     }
-    
-    eprintln!("[DBCenter-FFI] Watcher binary not found. Searched: {:?}", candidates);
-    
-    // Fallback
-    Ok(std::path::PathBuf::from(basename))
-}
 
-
-
-fn _unused_resolve_watcher_path() -> Result<std::path::PathBuf, String> {
-    let basename = if cfg!(windows) { "dbcenter-watcher.exe" } else { "dbcenter-watcher" };
-    
-    // 1. Env var
-    if let Ok(path) = std::env::var("DBCENTER_WATCHER_PATH") {
-        let pb = std::path::PathBuf::from(path);
-        if pb.exists() { return Ok(pb); }
+    // 3. Check current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join(WATCHER_BASENAME);
+        if candidate.exists() {
+            eprintln!("[DBCenter-FFI] Found watcher in cwd: {:?}", candidate);
+            return Ok(candidate);
+        }
     }
 
-    // 2. Local directory and relatives
-    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let current_dir = current_exe.parent().unwrap_or(std::path::Path::new("."));
-    
-    let candidates = vec![
-        current_dir.join(basename),
-        std::path::PathBuf::from(basename),
-        std::path::PathBuf::from(format!("./{}", basename)),
-        // Assuming we might be in go-trial or similar, and watcher is in root or sibling
-        std::path::PathBuf::from(format!("../{}", basename)),
-    ];
-
-    for c in candidates {
-        if c.exists() { return Ok(c); }
-    }
-    
-    // Fallback: assume it's next to the DLL or executable even if we didn't find it (maybe just created)
-    Ok(std::path::PathBuf::from(basename))
+    // 4. Extract embedded watcher as fallback
+    ensure_embedded_watcher_path()
 }
 
 fn spawn_watcher(
