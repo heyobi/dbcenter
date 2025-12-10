@@ -1,0 +1,13 @@
+Senin durumun için
+Test ortamında .so'yu çalışma dizinine koymak tamamen normal. Docker'da LD_LIBRARY_PATH=/work ayarı zaten bunu yapıyor.
+
+Production için kullanıcılara şöyle söylersin:
+
+bash
+# Kurulum
+sudo cp libdbcenter_ffi.so /usr/local/lib/
+sudo cp dbcenter.h /usr/local/include/
+sudo ldconfig
+# Derleme
+gcc myapp.c -ldbcenter_ffi -o myapp
+Özet: Acemice değil, C dünyasının gerçeği bu. Python/Go bu karmaşıklığı gizliyor, C'de kullanıcı bunu bilmek zorunda. 👍
