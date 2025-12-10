@@ -1055,7 +1055,12 @@
                             Dependencies.</span>
                     </h1>
                     <p class="text-base sm:text-lg text-slate-600 mb-6 lg:mb-8 leading-relaxed">
-                        Embed a full-featured PostgreSQL instance directly into your Python, Go, or Rust application. No
+                        Embed a full-featured PostgreSQL instance directly into your <strong
+                            class="font-semibold text-slate-900">Python</strong>, <strong
+                            class="font-semibold text-slate-900">C</strong>, <strong
+                            class="font-semibold text-slate-900">Go</strong>, or <strong
+                            class="font-semibold text-slate-900">Rust</strong> application.
+                        No
                         Docker required. No installation headaches. Just import and run.
                     </p>
                     <div class="flex flex-col sm:flex-row gap-3 lg:gap-4">
@@ -1177,12 +1182,13 @@
                                     class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
                                 <button onclick="switchTab('c')" id="tab-c"
                                     class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
-                                <button onclick="switchTab('java')" id="tab-java"
-                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                <!-- <button onclick="switchTab('java')" id="tab-java"
+                                    class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button> 
                                 <button onclick="switchTab('nodejs')" id="tab-nodejs"
                                     class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
                                 <button onclick="switchTab('r')" id="tab-r"
                                     class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                    -->
                             </div>
                         </div>
 
@@ -1512,13 +1518,14 @@ users.insert_one({"name": "Alice", "role": "Engineer"})</code></pre>
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
                                         <button onclick="switchExampleLang('pgvector', 'c')" id="tab-pgvector-c"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
-                                        <button onclick="switchExampleLang('pgvector', 'java')" id="tab-pgvector-java"
-                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                        <!-- <button onclick="switchExampleLang('pgvector', 'java')" id="tab-pgvector-java"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button> 
                                         <button onclick="switchExampleLang('pgvector', 'nodejs')"
                                             id="tab-pgvector-nodejs"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
                                         <button onclick="switchExampleLang('pgvector', 'r')" id="tab-pgvector-r"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                            -->
                                     </div>
                                 </div>
 
@@ -1779,12 +1786,12 @@ results &lt;- vector_store_query(vectors,
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
                                         <button onclick="switchExampleLang('fuzzy', 'c')" id="tab-fuzzy-c"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
-                                        <button onclick="switchExampleLang('fuzzy', 'java')" id="tab-fuzzy-java"
-                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
+                                        <!-- <button onclick="switchExampleLang('fuzzy', 'java')" id="tab-fuzzy-java"
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button> 
                                         <button onclick="switchExampleLang('fuzzy', 'nodejs')" id="tab-fuzzy-nodejs"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
                                         <button onclick="switchExampleLang('fuzzy', 'r')" id="tab-fuzzy-r"
-                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                            class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>-->
                                     </div>
                                 </div>
 
@@ -2010,12 +2017,14 @@ print(score)  # 0.67</code></pre>
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Go</button>
                                         <button onclick="switchExampleLang('postgis', 'c')" id="tab-postgis-c"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">C</button>
+                                        <!--
                                         <button onclick="switchExampleLang('postgis', 'java')" id="tab-postgis-java"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Java</button>
                                         <button onclick="switchExampleLang('postgis', 'nodejs')" id="tab-postgis-nodejs"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">Node.js</button>
                                         <button onclick="switchExampleLang('postgis', 'r')" id="tab-postgis-r"
                                             class="px-3 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-slate-400 hover:text-white focus:outline-none transition-colors whitespace-nowrap">R</button>
+                                        -->
                                     </div>
                                 </div>
 
@@ -2130,6 +2139,7 @@ int main() {
     dbcenter_free(db);
     return 0;
 }</code></pre>
+                                    <!--
                                     <pre class="!m-0 hidden"><code id="code-postgis-java" class="language-java font-mono text-xs sm:text-sm leading-relaxed">import com.dbcenter.DBCenter;
 import com.dbcenter.GeoCollection;
 import java.util.*;
@@ -2220,6 +2230,7 @@ is_inside &lt;- geo_collection_contains_point(stores,
   lat = 40.7128,
   lon = -74.0060
 )</code></pre>
+                                    -->
                                 </div>
                             </div>
                         </div>
@@ -2469,17 +2480,24 @@ is_inside &lt;- geo_collection_contains_point(stores,
                             <rect class="arch-node" x="415" y="44" width="130" height="48" rx="16"></rect>
                             <text class="arch-label" x="480" y="74" text-anchor="middle">Go</text>
 
+                            <!--
                             <rect class="arch-node" x="470" y="154" width="120" height="48" rx="16"></rect>
                             <text class="arch-label" x="530" y="184" text-anchor="middle">Node.js</text>
+                            -->
 
+
+                            <!--
                             <rect class="arch-node" x="385" y="264" width="140" height="48" rx="16"></rect>
                             <text class="arch-label" x="455" y="294" text-anchor="middle">Java</text>
+                            -->
 
                             <rect class="arch-node" x="75" y="264" width="120" height="48" rx="16"></rect>
                             <text class="arch-label" x="135" y="294" text-anchor="middle">C</text>
 
+                            <!--
                             <rect class="arch-node" x="35" y="154" width="110" height="48" rx="16"></rect>
                             <text class="arch-label" x="90" y="184" text-anchor="middle">R</text>
+                            -->
 
                             <text class="arch-caption" x="300" y="326" text-anchor="middle">Client SDKs share the same
                                 Rust-powered engine</text>
@@ -2604,12 +2622,14 @@ is_inside &lt;- geo_collection_contains_point(stores,
             // Değişen satır burası:
             // \n sadece alt satıra indirir
             c: 'git clone https://github.com/heyobi/dbcenter && \nmake install',
+            /*
             java: 'maven: com.dbcenter:dbcenter:1.0.0',
             nodejs: 'npm install dbcenter',
             r: 'install.packages("dbcenter")'
+            */
         };
 
-        const heroInstallCycle = ['python', 'rust', 'go', 'c', 'java', 'nodejs', 'r'];
+        const heroInstallCycle = ['python', 'rust', 'go', 'c'];
         let heroInstallIndex = 0;
 
         const codeExamples = {
@@ -2622,15 +2642,19 @@ db = DBCenter(path="./data")
 users = db.collection("users")
 users.insert_one({"name": "Alice", "role": "Engineer"})`,
 
-            rust: `use dbcenter::DBCenter;
+            rust: `use dbcenter_core::DBCenter;
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = DBCenter::new(Some("./data"))?;
-    
+    // Initialize embedded Postgres
+    let db = DBCenter::builder()
+        .path("./data")
+        .build()?;
+
+    // Use MongoDB-style API
     let users = db.collection("users");
-    users.insert_one(&json!({ "name": "Alice" }))?;
-    
+    users.insert_one(&json!({"name": "Alice", "role": "Engineer"}))?;
+
     Ok(())
 }`,
 
@@ -2639,91 +2663,98 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 import "github.com/heyobi/dbcenter-go"
 
 func main() {
-    db := dbcenter.New("./data")
-    users := db.Collection("users")
-    
-    users.InsertOne(bson.M{"name": "Alice"})
+	// Initialize embedded Postgres
+	db, _ := dbcenter.New("./data")
+	defer db.Close()
+
+	// Use MongoDB-style API
+	users := db.Collection("users")
+	users.InsertOne(map[string]interface{}{
+		"name": "Alice",
+		"role": "Engineer",
+	})
 }`,
 
-            c: `#include <dbcenter.h>
-#include <stdio.h>
+            c: `#include "dbcenter.h"
 
 int main() {
     // Initialize embedded Postgres
-    DBCenter* db = dbcenter_new("./data");
+    CDBCenterResult result = dbcenter_new("./data", 1);
+    CDBCenter* db = (CDBCenter*)result.ptr;
+
+    // Use MongoDB-style API
+    CCollectionResult coll_result = dbcenter_get_collection(db, "users");
+    CCollection* users = (CCollection*)coll_result.ptr;
     
-    // Get collection handle
-    Collection* users = dbcenter_collection(db, "users");
-    
-    // Insert document
-    const char* doc = "{\"name\": \"Alice\", \"role\": \"Engineer\"}";
-    collection_insert_one(users, doc);
-    
+    dbcenter_collection_insert_one(users, "{\"name\":\"Alice\",\"role\":\"Engineer\"}");
+
     // Cleanup
-    collection_free(users);
+    dbcenter_collection_free(users);
     dbcenter_free(db);
     return 0;
 }`,
 
-            java: `import com.dbcenter.DBCenter;
-import com.dbcenter.Collection;
-import java.util.HashMap;
-import java.util.Map;
-
-public class Main {
-    public static void main(String[] args) {
-        // Initialize embedded Postgres
-        DBCenter db = new DBCenter("./data");
-        
-        // Get collection
-        Collection users = db.collection("users");
-        
-        // Insert document
-        Map<String, Object> doc = new HashMap<>();
-        doc.put("name", "Alice");
-        doc.put("role", "Engineer");
-        users.insertOne(doc);
-        
-        db.close();
-    }
-}`,
-
-            nodejs: `const { DBCenter } = require('dbcenter');
-
-// Initialize embedded Postgres
-const db = new DBCenter({ path: './data' });
-
-// Use MongoDB-style API
-const users = db.collection('users');
-
-await users.insertOne({
-  name: 'Alice',
-  role: 'Engineer'
-});
-
-await db.close();`,
-
-            r: `library(dbcenter)
-
-# Initialize embedded Postgres
-db <- dbcenter_new(path = "./data")
-
-# Get collection
-users <- db_collection(db, "users")
-
-# Insert document
-collection_insert_one(users, list(
-  name = "Alice",
-  role = "Engineer"
-))
-
-# Cleanup
-dbcenter_close(db)`
+            /*
+                        java: `import com.dbcenter.DBCenter;
+            import com.dbcenter.Collection;
+            import java.util.HashMap;
+            import java.util.Map;
+            
+            public class Main {
+                public static void main(String[] args) {
+                    // Initialize embedded Postgres
+                    DBCenter db = new DBCenter("./data");
+                    
+                    // Get collection
+                    Collection users = db.collection("users");
+                    
+                    // Insert document
+                    Map<String, Object> doc = new HashMap<>();
+                    doc.put("name", "Alice");
+                    doc.put("role", "Engineer");
+                    users.insertOne(doc);
+                    
+                    db.close();
+                }
+            }`,
+            
+                        nodejs: `const { DBCenter } = require('dbcenter');
+            
+            // Initialize embedded Postgres
+            const db = new DBCenter({ path: './data' });
+            
+            // Use MongoDB-style API
+            const users = db.collection('users');
+            
+            await users.insertOne({
+              name: 'Alice',
+              role: 'Engineer'
+            });
+            
+            await db.close();`,
+            
+                        r: `library(dbcenter)
+            
+            # Initialize embedded Postgres
+            db <- dbcenter_new(path = "./data")
+            
+            # Get collection
+            users <- db_collection(db, "users")
+            
+            # Insert document
+            collection_insert_one(users, list(
+              name = "Alice",
+              role = "Engineer"
+            ))
+            
+            # Cleanup
+            dbcenter_close(db)`
+            */
         };
 
         function switchTab(lang) {
             // Update buttons
-            ['python', 'rust', 'go', 'c', 'java', 'nodejs', 'r'].forEach(l => {
+            ['python', 'rust', 'go', 'c'].forEach(l => {
                 const btn = document.getElementById(`tab-${l}`);
                 if (l === lang) {
                     // Active state
