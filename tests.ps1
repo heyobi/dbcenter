@@ -67,6 +67,7 @@ if (-not $LinWheel) { throw "No Linux wheel found in $DistLin" }
 # Copy items
 scp $LinWheel $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/test_go_linux" $RemoteUser@$RemoteHost`:$RemoteDir/
+scp "$DistLin/test_c_linux" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/libdbcenter_ffi.so" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$DistLin/dbcenter-watcher" $RemoteUser@$RemoteHost`:$RemoteDir/
 scp "$ProjectRoot/python_tests/test_final.py" $RemoteUser@$RemoteHost`:$RemoteDir/
@@ -93,9 +94,17 @@ docker run --rm -v ${RemoteDir}:/work python:3.11-bookworm bash -c '
 docker run --rm -v ${RemoteDir}:/work -e LD_LIBRARY_PATH=/work debian:bookworm-slim bash -c '
     cd /work
     apt-get update && apt-get install -y postgresql-common
-    chmod +x test_go_linux dbcenter-watcher
+    chmod +x test_go_linux dbcenter-watcher test_c_linux
     useradd -ms /bin/bash testuser
     su testuser -c "./test_go_linux"
+'
+
+# 3. Run C Tests
+docker run --rm -v ${RemoteDir}:/work -e LD_LIBRARY_PATH=/work debian:bookworm-slim bash -c '
+    cd /work
+    chmod +x test_c_linux dbcenter-watcher
+    useradd -ms /bin/bash testuser
+    su testuser -c "./test_c_linux"
 '
 "@
 

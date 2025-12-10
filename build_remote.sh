@@ -47,5 +47,16 @@ docker run --rm -v $ROOT:/volume -w /volume/examples golang:latest bash -c "
     go build -o ../dist/linux/test_go_linux test_go.go
 "
 
+# 4. Build C Test Binary
+echo "[Remote] Building C Test Binary (via Docker: gcc)..."
+docker run --rm -v $ROOT:/volume -w /volume/examples gcc:latest bash -c "
+    echo 'Compiling test_c.c...'
+    gcc -o ../dist/linux/test_c_linux test_c.c -I../dbcenter-ffi -L../dist/linux -ldbcenter_ffi -Wl,-rpath,. -Wl,-rpath,/work
+    echo 'C test binary built successfully.'
+"
+
+# Copy header file for reference
+cp $ROOT/dbcenter-ffi/dbcenter.h $ROOT/dist/linux/
+
 echo "--- Remote Build Complete ---"
 ls -l $ROOT/dist/linux

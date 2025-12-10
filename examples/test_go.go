@@ -3,9 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"os"
 
 	"github.com/heyobi/dbcenter-go"
 )
@@ -14,29 +12,6 @@ func main() {
 	fmt.Println("\n" + "======================================================================")
 	fmt.Println("DBCenter Go API Test - Rust Edition")
 	fmt.Println("======================================================================\n")
-
-	files, err := ioutil.ReadDir(".")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Silmek istediğiniz dosyaların isimlerini tanımlayın
-	filesToDelete := map[string]struct{}{
-		"dbcenter-watcher":   {},
-		"libdbcenter_ffi.so": {},
-	}
-
-	// Dosyaları kontrol et ve sil
-	for _, file := range files {
-		if _, exists := filesToDelete[file.Name()]; exists {
-			err := os.Remove(file.Name())
-			if err != nil {
-				log.Printf("Hata: %s silinemedi: %v\n", file.Name(), err)
-			} else {
-				fmt.Printf("%s başarıyla silindi\n", file.Name())
-			}
-		}
-	}
 
 	// Create database
 	fmt.Println("--- Creating database ---")
@@ -78,16 +53,6 @@ func main() {
 		log.Fatalf("Insert failed: %v", err)
 	}
 	fmt.Println("✓ Inserted document (Zeynep)")
-
-	files, err = ioutil.ReadDir(".")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Dosyaları yazdır
-	for _, file := range files {
-		fmt.Println(file.Name())
-	}
 
 	// Query via SQL to verify
 	// Assuming table name is same as collection name (or lowercased)

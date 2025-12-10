@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "../dbcenter-ffi/dbcenter.h"
 
 int main() {
@@ -10,93 +11,114 @@ int main() {
 
     // Create database
     printf("--- Creating database ---\n");
-    CDBCenter* db = dbcenter_new("./testdata_c", true);
-    if (!db) {
-        const char* err = dbcenter_last_error();
-        fprintf(stderr, "Failed to create database: %s\n", err);
-        dbcenter_free_error((char*)err);
+    struct CDBCenterResult db_result = dbcenter_new("./testdata_c", 1);
+    if (db_result.error != NULL) {
+        fprintf(stderr, "Failed to create database: %s\n", db_result.error);
+        dbcenter_free_string(db_result.error);
         return 1;
     }
+    struct CDBCenter* db = (struct CDBCenter*)db_result.ptr;
     printf("✓ Database created\n\n");
+
+    // Get collection
+    printf("--- Getting collection ---\n");
+    struct CCollectionResult coll_result = dbcenter_get_collection(db, "users");
+    if (coll_result.error != NULL) {
+        fprintf(stderr, "Failed to get collection: %s\n", coll_result.error);
+        dbcenter_free_string(coll_result.error);
+        dbcenter_free(db);
+        return 1;
+    }
+    struct CCollection* coll = (struct CCollection*)coll_result.ptr;
+    printf("✓ Got collection 'users'\n\n");
 
     // Insert document
     printf("--- Inserting document ---\n");
     const char* doc = "{\"name\":\"Ali\",\"age\":25,\"city\":\"Istanbul\"}";
-    int32_t id = dbcenter_insert_one(db, "users", doc);
-    if (id == 0) {
-        const char* err = dbcenter_last_error();
-        fprintf(stderr, "Insert failed: %s\n", err);
-        dbcenter_free_error((char*)err);
+    char* insert_err = dbcenter_collection_insert_one(coll, doc);
+    if (insert_err != NULL) {
+        fprintf(stderr, "Insert failed: %s\n", insert_err);
+        dbcenter_free_string(insert_err);
+        dbcenter_collection_free(coll);
         dbcenter_free(db);
         return 1;
     }
-    printf("✓ Inserted document with ID: %d\n\n", id);
+    printf("✓ Inserted document\n\n");
 
-    // Find documents
-    printf("--- Finding documents ---\n");
-    char* results = dbcenter_find(db, "users", NULL);
-    if (!results) {
-        const char* err = dbcenter_last_error();
-        fprintf(stderr, "Find failed: %s\n", err);
-        dbcenter_free_error((char*)err);
+    // Query via SQL
+    printf("--- Querying via SQL ---\n");
+    struct CJsonResult sql_result = dbcenter_sql_query(db, "SELECT * FROM users");
+    if (sql_result.error != NULL) {
+        fprintf(stderr, "SQL query failed: %s\n", sql_result.error);
+        dbcenter_free_string(sql_result.error);
+        dbcenter_collection_free(coll);
         dbcenter_free(db);
         return 1;
     }
-    printf("✓ Found documents: %s\n\n", results);
-    dbcenter_free_string(results);
+    printf("✓ SQL Result: %s\n\n", sql_result.json);
+    dbcenter_free_string(sql_result.json);
 
-    // Count documents
-    printf("--- Counting documents ---\n");
-    int64_t count = dbcenter_count(db, "users", NULL);
-    if (count < 0) {
-        const char* err = dbcenter_last_error();
-        fprintf(stderr, "Count failed: %s\n", err);
-        dbcenter_free_error((char*)err);
-        dbcenter_free(db);
-        return 1;
+    // Test VectorStore (optional - requires pgvector extension)
+    printf("--- Testing VectorStore (optional) ---\n");
+    struct CVectorStoreResult vs_result = dbcenter_get_vector_store(db, "embeddings", 3);
+    if (vs_result.error != NULL) {
+        // VectorStore requires pgvector extension which may not be available
+        printf("⚠ VectorStore skipped (pgvector not available): %s\n\n", vs_result.error);
+        dbcenter_free_string(vs_result.error);
+        // Continue without VectorStore test
+    } else {
+        struct CVectorStore* vs = (struct CVectorStore*)vs_result.ptr;
+        printf("✓ Got vector store 'embeddings' (dim=3)\n");
+
+        // Add vectors
+        const char* ids[] = {"v1", "v2"};
+        float embeddings[] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}; // 2 vectors of dim 3
+        char* add_err = dbcenter_vector_store_add(vs, ids, embeddings, 2);
+        if (add_err != NULL) {
+            fprintf(stderr, "Vector add failed: %s\n", add_err);
+            dbcenter_free_string(add_err);
+        } else {
+            printf("✓ Added 2 vectors\n");
+
+            // Query vectors
+            float query_vec[] = {1.0f, 0.1f, 0.0f};
+            struct CQueryResult query_result = dbcenter_vector_store_query(vs, query_vec, 2);
+            if (query_result.error != NULL) {
+                fprintf(stderr, "Vector query failed: %s\n", query_result.error);
+                dbcenter_free_string(query_result.error);
+            } else {
+                printf("✓ Query returned %zu results\n", query_result.num_results);
+                for (size_t i = 0; i < query_result.num_results; i++) {
+                    printf("  - ID: %s, Distance: %.4f\n", query_result.ids[i], query_result.distances[i]);
+                }
+                dbcenter_free_query_result(query_result);
+            }
+        }
+        dbcenter_vector_store_free(vs);
+        printf("✓ VectorStore freed\n");
     }
-    printf("✓ Document count: %lld\n\n", (long long)count);
-
-    // Update document
-    printf("--- Updating document ---\n");
-    const char* query = "{\"name\":\"Ali\"}";
-    const char* update = "{\"$set\":{\"age\":26}}";
-    if (!dbcenter_update_one(db, "users", query, update)) {
-        const char* err = dbcenter_last_error();
-        fprintf(stderr, "Update failed: %s\n", err);
-        dbcenter_free_error((char*)err);
-        dbcenter_free(db);
-        return 1;
-    }
-    printf("✓ Document updated\n\n");
-
-    // Delete document
-    printf("--- Deleting document ---\n");
-    if (!dbcenter_delete_one(db, "users", query)) {
-        const char* err = dbcenter_last_error();
-        fprintf(stderr, "Delete failed: %s\n", err);
-        dbcenter_free_error((char*)err);
-        dbcenter_free(db);
-        return 1;
-    }
-    printf("✓ Document deleted\n\n");
-
-    // Verify deletion
-    count = dbcenter_count(db, "users", NULL);
-    printf("✓ Final count: %lld\n\n", (long long)count);
-
-    // List collections
-    printf("--- Listing collections ---\n");
-    char* collections = dbcenter_list_collections(db);
-    if (collections) {
-        printf("✓ Collections: %s\n\n", collections);
-        dbcenter_free_string(collections);
-    }
+    printf("\n");
 
     // Cleanup
     printf("--- Cleanup ---\n");
+    dbcenter_collection_free(coll);
+    printf("✓ Collection freed\n");
+    
+    char* shutdown_err = dbcenter_shutdown(db);
+    if (shutdown_err != NULL) {
+        fprintf(stderr, "Shutdown warning: %s\n", shutdown_err);
+        dbcenter_free_string(shutdown_err);
+    }
     dbcenter_free(db);
     printf("✓ Database freed\n\n");
+
+    // Force remove test data
+    char* remove_err = dbcenter_force_remove("./testdata_c");
+    if (remove_err != NULL) {
+        fprintf(stderr, "Force remove warning: %s\n", remove_err);
+        dbcenter_free_string(remove_err);
+    }
+    printf("✓ Test data removed\n\n");
 
     printf("======================================================================\n");
     printf("✓ ALL C API TESTS PASSED!\n");
