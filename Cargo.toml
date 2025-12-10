@@ -44,8 +44,8 @@ walkdir = "2.4"
 libc = "0.2"
 
 # Python bindings
-pyo3 = { version = "0.22", features = ["extension-module", "serde", "abi3-py38"] }
-pyo3-asyncio = { version = "0.22", features = ["tokio-runtime"] }
+# Python bindings
+pyo3 = { version = "0.23.5", features = ["extension-module", "serde", "abi3-py38"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
