@@ -32,7 +32,115 @@ pub struct DBCenter {
     instance_id: String,
 }
 
+/// Builder for creating DBCenter instances with a fluent API
+/// 
+/// # Example
+/// ```no_run
+/// use dbcenter_core::DBCenter;
+/// 
+/// let db = DBCenter::builder()
+///     .path("./my_database")
+///     .persist(true)
+///     .build()
+///     .expect("Failed to create database");
+/// ```
+#[derive(Default)]
+pub struct DBCenterBuilder {
+    path: Option<PathBuf>,
+    persist: bool,
+    daemon_mode: bool,
+    host: Option<String>,
+    port: Option<u16>,
+    password: Option<String>,
+    postgres_version: Option<String>,
+}
+
+impl DBCenterBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            path: None,
+            persist: true,  // Default to persistent
+            daemon_mode: false,
+            host: None,
+            port: None,
+            password: None,
+            postgres_version: None,
+        }
+    }
+
+    /// Set the database path
+    pub fn path<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Set whether to persist the database (default: true)
+    pub fn persist(mut self, persist: bool) -> Self {
+        self.persist = persist;
+        self
+    }
+
+    /// Set daemon mode - keeps PostgreSQL running after program exits
+    pub fn daemon_mode(mut self, daemon: bool) -> Self {
+        self.daemon_mode = daemon;
+        self
+    }
+
+    /// Set the host address
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
+    }
+
+    /// Set the port number
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    /// Set the database password
+    pub fn password(mut self, password: impl Into<String>) -> Self {
+        self.password = Some(password.into());
+        self
+    }
+
+    /// Set the PostgreSQL version
+    pub fn postgres_version(mut self, version: impl Into<String>) -> Self {
+        self.postgres_version = Some(version.into());
+        self
+    }
+
+    /// Build the DBCenter instance
+    pub fn build(self) -> Result<Arc<DBCenter>> {
+        DBCenter::new(
+            self.path,
+            self.persist,
+            self.daemon_mode,
+            self.host,
+            self.port,
+            self.password,
+            self.postgres_version,
+        )
+    }
+}
+
 impl DBCenter {
+    /// Create a new DBCenterBuilder for fluent configuration
+    /// 
+    /// # Example
+    /// ```no_run
+    /// use dbcenter_core::DBCenter;
+    /// 
+    /// let db = DBCenter::builder()
+    ///     .path("./data")
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn builder() -> DBCenterBuilder {
+        DBCenterBuilder::new()
+    }
+
     /// Create a new DBCenter instance
     pub fn new<P: AsRef<Path>>(
         path: Option<P>,

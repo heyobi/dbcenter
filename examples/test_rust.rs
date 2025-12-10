@@ -14,19 +14,15 @@ fn main() {
     println!("======================================================================");
     println!();
 
-    // Create database
+    // Create database using builder pattern
     println!("--- Creating database ---");
-    let db = match DBCenter::new(
-        Some("./testdata_rust"),
-        true,   // persist
-        false,  // daemon_mode
-        None,   // host
-        None,   // port
-        None,   // password
-        None,   // postgres_version
-    ) {
+    let db = match DBCenter::builder()
+        .path("./testdata_rust")
+        .persist(true)
+        .build()
+    {
         Ok(db) => {
-            println!("✓ Database created");
+            println!("✓ Database created (using builder pattern)");
             db
         }
         Err(e) => {
