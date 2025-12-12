@@ -914,6 +914,93 @@
         html[data-theme="dark"] .performance-bar-track {
             background: rgba(148, 163, 184, 0.18);
         }
+
+        /* Coming Soon Toast */
+        .coming-soon-toast {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            z-index: 9999;
+            opacity: 0;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease;
+            pointer-events: none;
+        }
+
+        .coming-soon-toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .coming-soon-toast-content {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 24px;
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #f1f5f9;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .coming-soon-toast-icon {
+            width: 20px;
+            height: 20px;
+            color: #60a5fa;
+            flex-shrink: 0;
+        }
+
+        html[data-theme="dark"] .coming-soon-toast-content {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        /* OS Platform Badges */
+        .os-badges {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+            padding-left: 12px;
+        }
+
+        .os-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            background: rgba(100, 116, 139, 0.1);
+            transition: background 0.2s ease;
+        }
+
+        .os-badge svg {
+            width: 14px;
+            height: 14px;
+            opacity: 0.7;
+        }
+
+        .os-badge-windows svg {
+            color: #0078d4;
+        }
+
+        .os-badge-linux svg {
+            color: #f59e0b;
+        }
+
+        html[data-theme="dark"] .os-badge {
+            background: rgba(148, 163, 184, 0.15);
+        }
+
+        html[data-theme="dark"] .os-badge svg {
+            opacity: 0.85;
+        }
     </style>
 </head>
 
@@ -936,17 +1023,16 @@
                             class="text-sm font-medium text-slate-600 hover:text-brand-600 transition">Features</a>
                         <a href="#architecture"
                             class="text-sm font-medium text-slate-600 hover:text-brand-600 transition">Architecture</a>
-                        <a href="#docs"
+                        <a href="javascript:void(0)" onclick="showComingSoon()"
                             class="text-sm font-medium text-slate-600 hover:text-brand-600 transition">Documentation</a>
-                        <a href="https://github.com/heyobi/dbcenter"
-                            class="text-slate-400 hover:text-slate-900 transition">
+                        <a href="https://github.com/heyobi" class="text-slate-400 hover:text-slate-900 transition">
                             <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                 <path fill-rule="evenodd"
                                     d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
                                     clip-rule="evenodd"></path>
                             </svg>
                         </a>
-                        <a href="#"
+                        <a href="javascript:void(0)" onclick="showGitHubComingSoon()"
                             class="bg-brand-900 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition shadow-lg shadow-brand-900/20">Get
                             Started</a>
                     </div>
@@ -1080,7 +1166,7 @@
                                 </svg>
                             </button>
                         </div>
-                        <button
+                        <button onclick="showComingSoon()"
                             class="px-6 sm:px-8 py-3 sm:py-4 rounded-lg text-sm sm:text-base font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition">
                             View Documentation
                         </button>
@@ -1490,6 +1576,21 @@ users.insert_one({"name": "Alice", "role": "Engineer"})</code></pre>
                                     similarity</p>
                             </div>
                         </div>
+                        <!-- OS Badges: Windows + Linux -->
+                        <div class="os-badges">
+                            <span class="os-badge os-badge-windows" title="Windows">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801" />
+                                </svg>
+                            </span>
+                            <span class="os-badge os-badge-linux" title="Linux">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.132 1.884 1.071.771-.06 1.592-.536 2.257-1.306.631-.765 1.683-1.084 2.378-1.503.348-.199.629-.469.649-.853.023-.4-.2-.811-.714-1.376v-.097l-.003-.003c-.17-.2-.25-.535-.338-.926-.085-.401-.182-.786-.492-1.046h-.003c-.059-.054-.123-.067-.188-.135a.357.357 0 00-.19-.064c.431-1.278.264-2.55-.173-3.694-.533-1.41-1.465-2.638-2.175-3.483-.796-1.005-1.576-1.957-1.56-3.368.026-2.152.236-6.133-3.544-6.139zm.529 3.405h.013c.213 0 .396.062.584.198.19.135.33.332.438.533.105.259.158.459.166.724 0-.02.006-.04.006-.06v.105a.086.086 0 01-.004-.021l-.004-.024a1.807 1.807 0 01-.15.706.953.953 0 01-.213.335.71.71 0 00-.088-.042c-.104-.045-.198-.064-.284-.133a1.312 1.312 0 00-.22-.066c.05-.06.146-.133.183-.198.053-.128.082-.264.088-.402v-.02a1.21 1.21 0 00-.061-.4c-.045-.134-.101-.2-.183-.333-.084-.066-.167-.132-.267-.132h-.016c-.093 0-.176.03-.262.132a.8.8 0 00-.205.334 1.18 1.18 0 00-.09.4v.019c.002.089.008.179.02.267-.193-.067-.438-.135-.607-.202a1.635 1.635 0 01-.018-.2v-.02a1.772 1.772 0 01.15-.768c.082-.22.232-.406.43-.533a.985.985 0 01.594-.2zm-2.962.059h.036c.142 0 .27.048.399.135.146.129.264.288.344.465.09.199.14.4.153.667l.004.073v.052a1.57 1.57 0 01-.14.647.986.986 0 01-.22.333c-.067-.006-.133-.012-.2-.006-.077.006-.154.003-.231.027-.087.024-.161.064-.24.085-.105-.058-.218-.04-.324-.04-.09 0-.2-.064-.276-.149a1.19 1.19 0 01-.2-.333 1.44 1.44 0 01-.12-.6v-.074a1.56 1.56 0 01.155-.667 1.05 1.05 0 01.347-.467c.134-.09.276-.134.433-.134zm5.48 2.172c.145 0 .282.058.39.172.11.112.165.266.165.442 0 .2-.066.333-.2.467-.133.133-.266.2-.466.2-.133 0-.266-.067-.399-.2a.634.634 0 01-.2-.467c0-.176.055-.33.166-.442.11-.114.247-.172.392-.172h.152zm-5.633.065c.133 0 .266.067.399.2.133.134.2.267.2.467 0 .2-.067.334-.2.467-.133.133-.266.2-.399.2-.2 0-.333-.067-.466-.2-.134-.133-.2-.267-.2-.467 0-.2.066-.333.2-.467.133-.133.265-.2.466-.2zm.066 1.4c.067 0 .133.066.2.066.267.066.4.133.533.133.133 0 .333-.066.533-.133.133-.066.2-.066.333-.066 0 0 .067 0 .067.066.067.134.133.2.2.334s.067.2 0 .333c0 .134-.133.2-.267.267-.133.067-.133.133-.133.2 0 0 0 .067.067.133.067.134.133.2.133.334 0 .133-.067.2-.133.266 0 0-.067 0-.067.067-.133.066-.133.133-.133.2 0 0 0 .066.067.133.067.066.133.133.133.266s-.067.2-.133.267c-.067.067-.2.067-.333.133-.133.067-.2.133-.267.2-.066.067-.133.2-.2.334-.066.133-.133.333-.133.266 0 .067-.067.2-.2.267-.067.067-.2.067-.333.067-.134 0-.2 0-.334-.067-.133-.066-.133-.133-.2-.266-.066-.134-.066-.267-.133-.334-.067-.066-.133-.133-.267-.2-.133-.066-.2-.066-.333-.133-.067-.067-.133-.133-.133-.267 0-.133.067-.2.133-.266.067-.067.067-.133.067-.133 0-.067 0-.134-.133-.2-.067-.067-.067-.067-.067-.067-.067-.066-.133-.133-.133-.266 0-.134.066-.2.133-.334.067-.066.067-.133.067-.133 0-.067 0-.133-.133-.2-.134-.067-.267-.133-.267-.267-.067-.133 0-.2 0-.333.067-.134.133-.2.2-.334 0-.066.067-.066.067-.066z" />
+                                </svg>
+                            </span>
+                        </div>
                         <svg id="chevron-pgvector" class="w-5 h-5 text-slate-400 transition-transform duration-300"
                             fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7">
@@ -1759,6 +1860,15 @@ results &lt;- vector_store_query(vectors,
                                 </p>
                             </div>
                         </div>
+                        <!-- OS Badge: Windows only -->
+                        <div class="os-badges">
+                            <span class="os-badge os-badge-windows" title="Windows">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801" />
+                                </svg>
+                            </span>
+                        </div>
                         <svg id="chevron-fuzzy" class="w-5 h-5 text-slate-400 transition-transform duration-300"
                             fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7">
@@ -1989,6 +2099,21 @@ print(score)  # 0.67</code></pre>
                                 <h3 class="font-semibold text-slate-900">Geospatial Queries (PostGIS)</h3>
                                 <p class="text-sm text-slate-500">Full-featured GIS without external databases</p>
                             </div>
+                        </div>
+                        <!-- OS Badges: Windows + Linux -->
+                        <div class="os-badges">
+                            <span class="os-badge os-badge-windows" title="Windows">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801" />
+                                </svg>
+                            </span>
+                            <span class="os-badge os-badge-linux" title="Linux">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.132 1.884 1.071.771-.06 1.592-.536 2.257-1.306.631-.765 1.683-1.084 2.378-1.503.348-.199.629-.469.649-.853.023-.4-.2-.811-.714-1.376v-.097l-.003-.003c-.17-.2-.25-.535-.338-.926-.085-.401-.182-.786-.492-1.046h-.003c-.059-.054-.123-.067-.188-.135a.357.357 0 00-.19-.064c.431-1.278.264-2.55-.173-3.694-.533-1.41-1.465-2.638-2.175-3.483-.796-1.005-1.576-1.957-1.56-3.368.026-2.152.236-6.133-3.544-6.139zm.529 3.405h.013c.213 0 .396.062.584.198.19.135.33.332.438.533.105.259.158.459.166.724 0-.02.006-.04.006-.06v.105a.086.086 0 01-.004-.021l-.004-.024a1.807 1.807 0 01-.15.706.953.953 0 01-.213.335.71.71 0 00-.088-.042c-.104-.045-.198-.064-.284-.133a1.312 1.312 0 00-.22-.066c.05-.06.146-.133.183-.198.053-.128.082-.264.088-.402v-.02a1.21 1.21 0 00-.061-.4c-.045-.134-.101-.2-.183-.333-.084-.066-.167-.132-.267-.132h-.016c-.093 0-.176.03-.262.132a.8.8 0 00-.205.334 1.18 1.18 0 00-.09.4v.019c.002.089.008.179.02.267-.193-.067-.438-.135-.607-.202a1.635 1.635 0 01-.018-.2v-.02a1.772 1.772 0 01.15-.768c.082-.22.232-.406.43-.533a.985.985 0 01.594-.2zm-2.962.059h.036c.142 0 .27.048.399.135.146.129.264.288.344.465.09.199.14.4.153.667l.004.073v.052a1.57 1.57 0 01-.14.647.986.986 0 01-.22.333c-.067-.006-.133-.012-.2-.006-.077.006-.154.003-.231.027-.087.024-.161.064-.24.085-.105-.058-.218-.04-.324-.04-.09 0-.2-.064-.276-.149a1.19 1.19 0 01-.2-.333 1.44 1.44 0 01-.12-.6v-.074a1.56 1.56 0 01.155-.667 1.05 1.05 0 01.347-.467c.134-.09.276-.134.433-.134zm5.48 2.172c.145 0 .282.058.39.172.11.112.165.266.165.442 0 .2-.066.333-.2.467-.133.133-.266.2-.466.2-.133 0-.266-.067-.399-.2a.634.634 0 01-.2-.467c0-.176.055-.33.166-.442.11-.114.247-.172.392-.172h.152zm-5.633.065c.133 0 .266.067.399.2.133.134.2.267.2.467 0 .2-.067.334-.2.467-.133.133-.266.2-.399.2-.2 0-.333-.067-.466-.2-.134-.133-.2-.267-.2-.467 0-.2.066-.333.2-.467.133-.133.265-.2.466-.2zm.066 1.4c.067 0 .133.066.2.066.267.066.4.133.533.133.133 0 .333-.066.533-.133.133-.066.2-.066.333-.066 0 0 .067 0 .067.066.067.134.133.2.2.334s.067.2 0 .333c0 .134-.133.2-.267.267-.133.067-.133.133-.133.2 0 0 0 .067.067.133.067.134.133.2.133.334 0 .133-.067.2-.133.266 0 0-.067 0-.067.067-.133.066-.133.133-.133.2 0 0 0 .066.067.133.067.066.133.133.133.266s-.067.2-.133.267c-.067.067-.2.067-.333.133-.133.067-.2.133-.267.2-.066.067-.133.2-.2.334-.066.133-.133.333-.133.266 0 .067-.067.2-.2.267-.067.067-.2.067-.333.067-.134 0-.2 0-.334-.067-.133-.066-.133-.133-.2-.266-.066-.134-.066-.267-.133-.334-.067-.066-.133-.133-.267-.2-.133-.066-.2-.066-.333-.133-.067-.067-.133-.133-.133-.267 0-.133.067-.2.133-.266.067-.067.067-.133.067-.133 0-.067 0-.134-.133-.2-.067-.067-.067-.067-.067-.067-.067-.066-.133-.133-.133-.266 0-.134.066-.2.133-.334.067-.066.067-.133.067-.133 0-.067 0-.133-.133-.2-.134-.067-.267-.133-.267-.267-.067-.133 0-.2 0-.333.067-.134.133-.2.2-.334 0-.066.067-.066.067-.066z" />
+                                </svg>
+                            </span>
                         </div>
                         <svg id="chevron-postgis" class="w-5 h-5 text-slate-400 transition-transform duration-300"
                             fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2403,7 +2528,7 @@ is_inside &lt;- geo_collection_contains_point(stores,
                         <h3 class="text-2xl font-bold mb-2">Ready to Experience the Speed?</h3>
                         <p class="text-blue-100">Start building with dbcenter in less than 60 seconds</p>
                     </div>
-                    <button
+                    <button onclick="showGitHubComingSoon()"
                         class="px-8 py-4 bg-white text-brand-600 rounded-lg font-semibold hover:bg-blue-50 transition shadow-xl whitespace-nowrap">
                         Get Started Now
                     </button>
@@ -2469,10 +2594,8 @@ is_inside &lt;- geo_collection_contains_point(stores,
 
                             <path class="arch-link" d="M300 106 C 244 70 184 62 120 70"></path>
                             <path class="arch-link" d="M300 106 C 356 70 416 62 480 70"></path>
-                            <path class="arch-link" d="M374 180 C 430 178 482 178 530 180"></path>
-                            <path class="arch-link arch-link-dashed" d="M300 254 C 362 274 412 284 455 286"></path>
-                            <path class="arch-link arch-link-dashed" d="M300 254 C 238 274 188 284 135 286"></path>
-                            <path class="arch-link" d="M226 180 C 174 178 122 178 90 180"></path>
+                            <path class="arch-link" d="M300 254 C 238 274 188 284 135 286"></path>
+                            <path class="arch-link" d="M300 254 C 362 274 412 284 455 286"></path>
 
                             <rect class="arch-node" x="55" y="44" width="130" height="48" rx="16"></rect>
                             <text class="arch-label" x="120" y="74" text-anchor="middle">Python</text>
@@ -2480,24 +2603,12 @@ is_inside &lt;- geo_collection_contains_point(stores,
                             <rect class="arch-node" x="415" y="44" width="130" height="48" rx="16"></rect>
                             <text class="arch-label" x="480" y="74" text-anchor="middle">Go</text>
 
-                            <!--
-                            <rect class="arch-node" x="470" y="154" width="120" height="48" rx="16"></rect>
-                            <text class="arch-label" x="530" y="184" text-anchor="middle">Node.js</text>
-                            -->
-
-
-                            <!--
-                            <rect class="arch-node" x="385" y="264" width="140" height="48" rx="16"></rect>
-                            <text class="arch-label" x="455" y="294" text-anchor="middle">Java</text>
-                            -->
-
                             <rect class="arch-node" x="75" y="264" width="120" height="48" rx="16"></rect>
                             <text class="arch-label" x="135" y="294" text-anchor="middle">C</text>
 
-                            <!--
-                            <rect class="arch-node" x="35" y="154" width="110" height="48" rx="16"></rect>
-                            <text class="arch-label" x="90" y="184" text-anchor="middle">R</text>
-                            -->
+                            <rect class="arch-node" x="395" y="264" width="130" height="48" rx="16"></rect>
+                            <text class="arch-label" x="460" y="294" text-anchor="middle">Rust</text>
+
 
                             <text class="arch-caption" x="300" y="326" text-anchor="middle">Client SDKs share the same
                                 Rust-powered engine</text>
@@ -2547,6 +2658,61 @@ is_inside &lt;- geo_collection_contains_point(stores,
     </footer>
 
     <script>
+        // Coming Soon Toast functionality
+        let comingSoonToast = null;
+        let comingSoonTimeout = null;
+
+        function showToast(message, iconType) {
+            // Create toast if it doesn't exist
+            if (!comingSoonToast) {
+                comingSoonToast = document.createElement('div');
+                comingSoonToast.className = 'coming-soon-toast';
+                document.body.appendChild(comingSoonToast);
+            }
+
+            // Set icon based on type
+            let iconSvg = '';
+            if (iconType === 'github') {
+                iconSvg = `<svg class="coming-soon-toast-icon" fill="currentColor" viewBox="0 0 24 24">
+                    <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"></path>
+                </svg>`;
+            } else {
+                iconSvg = `<svg class="coming-soon-toast-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>`;
+            }
+
+            comingSoonToast.innerHTML = `
+                <div class="coming-soon-toast-content">
+                    ${iconSvg}
+                    <span>${message}</span>
+                </div>
+            `;
+
+            // Clear any existing timeout
+            if (comingSoonTimeout) {
+                clearTimeout(comingSoonTimeout);
+            }
+
+            // Show toast
+            requestAnimationFrame(() => {
+                comingSoonToast.classList.add('show');
+            });
+
+            // Hide after 2.5 seconds
+            comingSoonTimeout = setTimeout(() => {
+                comingSoonToast.classList.remove('show');
+            }, 2500);
+        }
+
+        function showComingSoon() {
+            showToast('Documentation Coming Soon', 'clock');
+        }
+
+        function showGitHubComingSoon() {
+            showToast('Launching Soon on GitHub', 'github');
+        }
+
         const themeStorageKey = 'dbcenter-theme';
         const sunPath = 'M12 3v2.25m0 13.5V21m8.25-9H21M3 12h2.25m12.364-6.364l-1.591 1.591M6.227 17.773l-1.591 1.591M17.773 17.773l1.591 1.591M6.227 6.227L4.636 4.636M12 7.5a4.5 4.5 0 110 9 4.5 4.5 0 010-9z';
         const moonPath = 'M21 12.79A9 9 0 1111.21 3a7.5 7.5 0 009.79 9.79z';
@@ -2686,7 +2852,7 @@ int main() {
     CCollectionResult coll_result = dbcenter_get_collection(db, "users");
     CCollection* users = (CCollection*)coll_result.ptr;
     
-    dbcenter_collection_insert_one(users, "{\"name\":\"Alice\",\"role\":\"Engineer\"}");
+    dbcenter_collection_insert_one(users, "{\\"name\\":\\"Alice\\",\\"role\\":\\"Engineer\\"}");
 
     // Cleanup
     dbcenter_collection_free(users);

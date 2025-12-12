@@ -18,7 +18,7 @@ if os.path.exists(TEST_DIR):
         pass
 
 print(f"Initializing DBCenter at {TEST_DIR}...")
-db = DBCenter(path=TEST_DIR, persist=True, service=False, postgresql=17)
+db = DBCenter(path=TEST_DIR, persist=False, service=False, postgresql=17)
 
 products = db.collection("products")
 
