@@ -27,6 +27,11 @@ impl<'a> Collection<'a> {
 
     /// Ensure JSONB table exists
     fn ensure_table(&self) -> Result<()> {
+        // Phase 2: Delta Layer
+        if self.db.config().multi_user_sync_mode {
+            return crate::delta_manager::DeltaManager::ensure_delta_tables(self.db, &self.name);
+        }
+
         let sql = format!(
             r#"
             CREATE TABLE IF NOT EXISTS "{}" (

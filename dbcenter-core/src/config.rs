@@ -35,6 +35,9 @@ pub struct DBCenterConfig {
 
     /// Requested PostgreSQL distribution version (Maven artifact version)
     pub postgres_version: String,
+
+    /// Enable Phase 2 Delta Layer (Multi-User Sync on Dumb Storage)
+    pub multi_user_sync_mode: bool,
 }
 
 impl Default for DBCenterConfig {
@@ -51,6 +54,7 @@ impl Default for DBCenterConfig {
             initdb_path: None,
             postgres_path: None,
             postgres_version: DEFAULT_POSTGRES_VERSION.to_string(),
+            multi_user_sync_mode: false,
         }
     }
 }

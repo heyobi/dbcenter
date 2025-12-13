@@ -11,7 +11,10 @@ import sys
 from dbcenter import DBCenter
 
 # Configuration
-TEST_DB_PATH = os.path.abspath("./test_db_final")
+# Configuration
+# Use a unique path to avoid Windows file locking issues from previous aborted runs
+import uuid
+TEST_DB_PATH = os.path.abspath(f"./test_db_{int(time.time())}_{uuid.uuid4().hex[:8]}")
 
 class TestDBCenter(unittest.TestCase):
     @classmethod
@@ -26,15 +29,28 @@ class TestDBCenter(unittest.TestCase):
             print(f"[Setup] Cleaning up existing directory: {TEST_DB_PATH}")
             try:
                 DBCenter.force_shutdown(TEST_DB_PATH)
-                if os.path.exists(TEST_DB_PATH):
-                    shutil.rmtree(TEST_DB_PATH)
+                time.sleep(2) # Give it moments to release locks
+                
+                # Retry loop for deletion
+                for i in range(5):
+                    try:
+                        if os.path.exists(TEST_DB_PATH):
+                            shutil.rmtree(TEST_DB_PATH)
+                        break
+                    except Exception as e:
+                        print(f"Cleanup attempt {i+1} failed: {e}")
+                        time.sleep(1)
             except Exception as e:
                 print(f"[Setup] Warning during cleanup: {e}")
 
         # 2. Initialize DBCenter
         print(f"[Setup] Initializing DBCenter at {TEST_DB_PATH}...")
-        cls.db = DBCenter(path=TEST_DB_PATH, persist=True)
-        print("[Setup] Database initialized successfully.")
+        try:
+            cls.db = DBCenter(path=TEST_DB_PATH, persist=True)
+            print("[Setup] Database initialized successfully.")
+        except Exception as e:
+            print(f"[Setup] FAILED to initialize database: {e}")
+            raise
 
     @classmethod
     def tearDownClass(cls):

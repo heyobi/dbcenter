@@ -2,6 +2,7 @@ pub mod binary;
 pub mod collection;
 pub mod config;
 pub mod error;
+pub mod delta_manager;
 pub mod extensions;
 pub mod geo_collection;
 pub mod vector_store;
@@ -44,15 +45,18 @@ pub struct DBCenter {
 ///     .build()
 ///     .expect("Failed to create database");
 /// ```
+// use crate::query::QueryBuilder;
 #[derive(Default)]
 pub struct DBCenterBuilder {
     path: Option<PathBuf>,
+    // socket_dir: Option<PathBuf>,
     persist: bool,
     daemon_mode: bool,
     host: Option<String>,
     port: Option<u16>,
     password: Option<String>,
     postgres_version: Option<String>,
+    multi_user_sync_mode: bool,
 }
 
 impl DBCenterBuilder {
@@ -66,6 +70,7 @@ impl DBCenterBuilder {
             port: None,
             password: None,
             postgres_version: None,
+            multi_user_sync_mode: false,
         }
     }
 
@@ -111,6 +116,12 @@ impl DBCenterBuilder {
         self
     }
 
+    /// Enable Phase 2 Delta Layer (Multi-User Sync)
+    pub fn multi_user_sync_mode(mut self, enabled: bool) -> Self {
+        self.multi_user_sync_mode = enabled;
+        self
+    }
+
     /// Build the DBCenter instance
     pub fn build(self) -> Result<Arc<DBCenter>> {
         DBCenter::new(
@@ -121,6 +132,7 @@ impl DBCenterBuilder {
             self.port,
             self.password,
             self.postgres_version,
+            self.multi_user_sync_mode,
         )
     }
 }
@@ -150,6 +162,7 @@ impl DBCenter {
         port: Option<u16>,
         password: Option<String>,
         postgres_version: Option<String>,
+        multi_user_sync_mode: bool,
     ) -> Result<Arc<Self>> {
         // Validation: service mode requires persist
         if daemon_mode && !persist {
@@ -188,9 +201,9 @@ impl DBCenter {
                     if let Some(pid_line) = pid_content.lines().next() {
                         if let Ok(pid) = pid_line.trim().parse::<u32>() {
                             // Check if process is actually running
-                            let is_running = process::is_process_running_global(pid);
+                            let _is_running = process::is_process_running_global(pid);
 
-                            if is_running {
+                            if _is_running {
                                 let hint_path = path_hint.as_ref().unwrap_or(&path_buf);
                                 let shutdown_hint = format!(
                                     "DBCenter.force_shutdown(\"{}\")",
@@ -226,7 +239,9 @@ impl DBCenter {
         config.daemon_mode = daemon_mode;
         config.host = host;
         config.port = port;
+        config.port = port;
         config.password = password;
+        config.multi_user_sync_mode = multi_user_sync_mode;
 
         let (resolved_version, warning) =
             binary::resolve_artifact_version(requested_version.as_deref(), existing_major)?;
@@ -252,12 +267,12 @@ impl DBCenter {
 
         // Connect to database
         let conn_str = pg_process.connection_string(&config);
-        let client = Client::connect(&conn_str, NoTls)
+        let _client = Client::connect(&conn_str, NoTls)
             .map_err(|e| DBCenterError::ConnectionError(e.to_string()))?;
 
         let db_center = Arc::new(DBCenter {
             config,
-            client: Mutex::new(client),
+            client: Mutex::new(_client),
             process: Arc::new(Mutex::new(pg_process)),
             path: path_buf.clone(),
             instance_id: instance_id.clone(),
@@ -276,6 +291,11 @@ impl DBCenter {
         &self.path
     }
 
+    /// Get the configuration
+    pub fn config(&self) -> &DBCenterConfig {
+        &self.config
+    }
+
     /// Get the unique instance identifier for this PostgreSQL run
     pub fn instance_id(&self) -> &str {
         &self.instance_id
@@ -292,17 +312,17 @@ impl DBCenter {
     }
 
     /// Get a collection (MongoDB-style)
-    pub fn collection(&self, name: &str) -> collection::Collection {
+    pub fn collection(&self, name: &str) -> collection::Collection<'_> {
         collection::Collection::new(self, name)
     }
 
     /// Get a specific GeoCollection (Geospatial API)
-    pub fn geo_collection(&self, name: &str) -> geo_collection::GeoCollection {
+    pub fn geo_collection(&self, name: &str) -> geo_collection::GeoCollection<'_> {
         geo_collection::GeoCollection::new(self, name)
     }
 
     /// Get a VectorStore (pgvector API)
-    pub fn vector_store(&self, name: &str, dimension: usize) -> Result<vector_store::VectorStore> {
+    pub fn vector_store(&self, name: &str, dimension: usize) -> Result<vector_store::VectorStore<'_>> {
         vector_store::VectorStore::new(self, name, dimension)
     }
 
@@ -601,7 +621,7 @@ impl DBCenter {
     }
 
     /// Get internal client for advanced operations
-    pub(crate) fn get_client(&self) -> std::sync::MutexGuard<Client> {
+    pub(crate) fn get_client(&self) -> std::sync::MutexGuard<'_, Client> {
         self.client.lock().unwrap()
     }
 }

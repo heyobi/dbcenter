@@ -177,7 +177,8 @@ pub extern "C" fn dbcenter_new(
             path_str,
             is_persist,
             is_service, 
-            None, None, None, None // other options
+            None, None, None, None, // other options
+            false // multi_user_sync_mode
         );
 
     match result {

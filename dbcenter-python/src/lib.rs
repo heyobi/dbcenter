@@ -181,6 +181,7 @@ impl DBCenter {
             port,
             password,
             pg_version,
+            false // multi_user_sync_mode for Python default
         )
         .map_err(|e| PyException::new_err(e.to_string()))?;
 

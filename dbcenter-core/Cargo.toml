@@ -34,3 +34,7 @@ crate-type = ["rlib", "staticlib"]
 [[example]]
 name = "test_rust"
 path = "examples/test_rust.rs"
+
+[[example]]
+name = "test_delta"
+path = "examples/test_delta.rs"

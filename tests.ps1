@@ -43,6 +43,19 @@ $PyTestFile = Join-Path $ProjectRoot "python_tests/test_final.py"
 python $PyTestFile
 if ($LASTEXITCODE -ne 0) { throw "Python tests failed on Windows" }
 
+# C. Rust Tests (Local)
+Write-Host "`n[Rust] Running local delta verification..." -ForegroundColor Green
+$CoreDir = Join-Path $ProjectRoot "dbcenter-core"
+Push-Location $CoreDir
+try {
+    cargo run --example test_delta
+    if ($LASTEXITCODE -ne 0) { throw "Rust delta test failed on Windows" }
+}
+finally {
+    Pop-Location
+}
+
+
 # ==========================================
 # 2. LINUX TESTS (Remote)
 # ==========================================
