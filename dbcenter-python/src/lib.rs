@@ -10,6 +10,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, StorageAdapter};
+use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -774,7 +776,7 @@ impl Collection {
     ///
     /// Returns:
     ///     Document ID
-    fn insert_one(&self, document: &Bound<'_, PyDict>) -> PyResult<i32> {
+    fn insert_one(&self, document: &Bound<'_, PyDict>) -> PyResult<String> {
         Python::with_gil(|py| {
             let json_doc = py_to_json(py, document.as_any())?;
 
@@ -785,7 +787,7 @@ impl Collection {
     }
 
     /// Insert many documents
-    fn insert_many(&self, documents: &Bound<'_, PyList>) -> PyResult<Vec<i32>> {
+    fn insert_many(&self, documents: &Bound<'_, PyList>) -> PyResult<Vec<String>> {
         Python::with_gil(|py| {
             let json_docs: Vec<JsonValue> = documents
                 .iter()
@@ -971,7 +973,7 @@ struct GeoCollection {
 #[pymethods]
 impl GeoCollection {
     /// Insert many documents (delegates to standard collection)
-    fn insert_many(&self, documents: &Bound<'_, PyList>) -> PyResult<Vec<i32>> {
+    fn insert_many(&self, documents: &Bound<'_, PyList>) -> PyResult<Vec<String>> {
         Python::with_gil(|py| {
             let json_docs: Vec<JsonValue> = documents
                 .iter()
@@ -1186,5 +1188,66 @@ fn dbcenter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Collection>()?;
     m.add_class::<GeoCollection>()?;
     m.add_class::<VectorStore>()?;
+    m.add_class::<LocalStorageAdapter>()?;
+    m.add_class::<SyncEngine>()?;
     Ok(())
+}
+
+/// Python wrapper for LocalStorageAdapter
+#[pyclass]
+struct LocalStorageAdapter {
+    inner: Arc<Box<dyn StorageAdapter + Send + Sync>>,
+    path: String,
+}
+
+#[pymethods]
+impl LocalStorageAdapter {
+    #[new]
+    fn new(path: String) -> Self {
+        let adapter = CoreLocalStorageAdapter::new(PathBuf::from(&path));
+        LocalStorageAdapter {
+            inner: Arc::new(Box::new(adapter)),
+            path,
+        }
+    }
+
+    fn list(&self, prefix: &str) -> PyResult<Vec<String>> {
+        self.inner
+            .list(prefix)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
+}
+
+/// Python wrapper for SyncEngine
+#[pyclass]
+struct SyncEngine {
+    inner: CoreSyncEngine,
+}
+
+#[pymethods]
+impl SyncEngine {
+    #[new]
+    fn new(db: &DBCenter, storage: &LocalStorageAdapter) -> Self {
+        SyncEngine {
+            inner: CoreSyncEngine::new(db.inner.clone(), storage.inner.clone()),
+        }
+    }
+
+    fn sync_table(&self, table_name: &str, limit: usize) -> PyResult<usize> {
+        self.inner
+            .sync_table(table_name, limit)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
+
+    fn pull_and_apply(&self, table_name: &str) -> PyResult<()> {
+        self.inner
+            .pull_and_apply(table_name)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
+
+    fn vacuum(&self, table_name: &str) -> PyResult<()> {
+        self.inner
+            .vacuum(table_name)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
 }
