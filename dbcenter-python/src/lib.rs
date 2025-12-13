@@ -145,8 +145,9 @@ impl DBCenter {
     ///     port: PostgreSQL port (None = auto-assign)
     ///     password: Password for authentication (None = trust)
     ///     postgresql: PostgreSQL major or artifact version (e.g., 17 or "17.0.0")
+    ///     multi_user_sync: Enable Delta Layer (Multi-User Sync) mode (default: False)
     #[new]
-    #[pyo3(signature = (path=None, persist=true, service=false, host=None, port=None, password=None, postgresql=None))]
+    #[pyo3(signature = (path=None, persist=true, service=false, host=None, port=None, password=None, postgresql=None, multi_user_sync=false))]
     fn new(
         py: Python,
         path: Option<String>,
@@ -156,6 +157,7 @@ impl DBCenter {
         port: Option<u16>,
         password: Option<String>,
         postgresql: Option<&Bound<'_, PyAny>>,
+        multi_user_sync: bool,
     ) -> PyResult<Self> {
         let pg_version = if let Some(value) = postgresql {
             if value.is_none() {
@@ -181,7 +183,7 @@ impl DBCenter {
             port,
             password,
             pg_version,
-            false // multi_user_sync_mode for Python default
+            multi_user_sync,
         )
         .map_err(|e| PyException::new_err(e.to_string()))?;
 

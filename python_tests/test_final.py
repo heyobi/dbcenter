@@ -170,5 +170,125 @@ class TestDBCenter(unittest.TestCase):
         except Exception as e:
             self.fail(f"Failed to install/use extension: {e}")
 
+
+class TestDBCenterDelta(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Initialize a separate DBCenter instance with Delta Layer enabled."""
+        print("\n" + "="*60)
+        print("Starting DBCenter Delta Layer Test Suite")
+        print("="*60)
+        
+        # Use a different path for Delta tests
+        cls.delta_db_path = os.path.abspath(f"./test_db_delta_{int(time.time())}_{uuid.uuid4().hex[:8]}")
+        
+        print(f"[Setup Delta] Initializing with multi_user_sync=True at {cls.delta_db_path}...")
+        try:
+            # Enable multi_user_sync_mode=True
+            cls.db = DBCenter(path=cls.delta_db_path, persist=True, multi_user_sync=True)
+            print("[Setup Delta] Database initialized successfully.")
+        except Exception as e:
+            print(f"[Setup Delta] FAILED to initialize database: {e}")
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        print("\n" + "="*60)
+        print("Teardown DBCenter Delta Test Suite")
+        print("="*60)
+        
+        if hasattr(cls, 'db') and cls.db:
+            print("[Teardown Delta] Shutting down database...")
+            cls.db.shutdown()
+        
+        print(f"[Teardown Delta] Force removing directory: {cls.delta_db_path}")
+        try:
+             DBCenter.force_remove(cls.delta_db_path)
+             if os.path.exists(cls.delta_db_path):
+                 shutil.rmtree(cls.delta_db_path)
+        except Exception as e:
+            print(f"[Teardown Delta] Warning during cleanup: {e}")
+
+    def test_01_delta_architecture(self):
+        """Verify Delta Layer architecture (physical tables + view)."""
+        print("\n--- Delta Test 01: Architecture Verification ---")
+        
+        # 1. Create a collection
+        coll_name = "products"
+        products = self.db.collection(coll_name)
+        
+        # Insert a doc to ensure table creation triggers
+        products.insert_one({"name": "TriggerInit", "price": 0})
+        
+        # 2. Check for physical tables using SQL
+        # We expect 'products_base', 'products_adds', 'products_dels' in pg_tables
+        tables = self.db.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        table_names = [t['tablename'] for t in tables]
+        print(f"Found tables: {table_names}")
+        
+        self.assertIn(f"{coll_name}_base", table_names, "Base table missing")
+        self.assertIn(f"{coll_name}_adds", table_names, "Adds table missing")
+        self.assertIn(f"{coll_name}_dels", table_names, "Dels table missing")
+        
+        # The main name 'products' should NOT be in pg_tables (it's a view), unless pg_tables includes views?
+        # pg_tables does NOT include views. pg_views does.
+        # Let's verify it is a view.
+        views = self.db.query("SELECT viewname FROM pg_views WHERE schemaname = 'public'")
+        view_names = [v['viewname'] for v in views]
+        print(f"Found views: {view_names}")
+        self.assertIn(coll_name, view_names, "Main view missing")
+
+    def test_02_delta_crud_logic(self):
+        """Verify Insert/Update/Delete logic routed to delta tables."""
+        print("\n--- Delta Test 02: CRUD Logic ---")
+        products = self.db.collection("products")
+        
+        # INSERT
+        doc_id = products.insert_one({"name": "Laptop", "price": 1000})
+        print(f"Inserted Laptop with ID: {doc_id}")
+        
+        # Verify it's in _adds
+        adds_content = self.db.query("SELECT * FROM products_adds")
+        self.assertTrue(any(row['data']['name'] == 'Laptop' for row in adds_content if 'data' in row), "Laptop not found in _adds")
+        
+        # UPDATE
+        products.update_one({"_id": doc_id}, {"$set": {"price": 1200}})
+        print("Updated Laptop price.")
+        
+        # Verify View (should see update)
+        doc = products.find_one({"_id": doc_id})
+        self.assertEqual(doc['price'], 1200, "View does not show updated price")
+        
+        # Verify _dels (Optimization check: update trigger likely puts OLD id in _dels to hide old version)
+        # However, since the row was only in _adds, the trigger might just update _adds directly OR 
+        # (based on our impl) it deletes from _adds and re-inserts? 
+        # Implementation Detail: 
+        # IF EXISTS in ADDS -> DELETE from ADDS. 
+        # INSERT into DELS (to hide BASE if exists).
+        # INSERT into ADDS (new version).
+        # So yes, _dels might have an entry, and _adds has the new version.
+        dels_content = self.db.query("SELECT * FROM products_dels")
+        print(f"Dels content: {dels_content}")
+        # Note: Depending on logic, if it wasn't in base, adding to dels is harmless but redundant.
+        
+        # DELETE
+        products.delete_one({"_id": doc_id})
+        print("Deleted Laptop.")
+        
+        # Verify View (should be gone)
+        doc = products.find_one({"_id": doc_id})
+        self.assertIsNone(doc, "Laptop still visible in view after delete")
+        
+        # Verify _dels (should definitely be here)
+        dels_content_final = self.db.query("SELECT * FROM products_dels")
+        # We check if ID is present. Note: query returns JSON.
+        id_found = False
+        for row in dels_content_final:
+             if row.get('id') == doc_id:
+                 id_found = True
+                 break
+        self.assertTrue(id_found, "Deleted ID NOT found in _dels table")
+
+
 if __name__ == '__main__':
     unittest.main()
