@@ -52,9 +52,9 @@ def run_test():
     with DBCenter(path=path_b, multi_user_sync=True) as db:
         col = db.collection("notes")
         # Update
-        col.update_one({"id": id_b}, {"$set": {"title": "User B Local Update"}})
+        col.update_one({"_id": id_b}, {"$set": {"title": "User B Local Update"}})
         
-        d = col.find_one({"id": id_b})
+        d = col.find_one({"_id": id_b})
         print(f"User B Local Title: {d.get('title')}")
 
     time.sleep(1)
@@ -64,7 +64,7 @@ def run_test():
     with DBCenter(path=path_a, multi_user_sync=True) as db:
         col = db.collection("notes")
         # Assuming ID A matches ID B (UUID string)
-        col.update_one({"id": id_b}, {"$set": {"title": "User A Cloud Update"}})
+        col.update_one({"_id": id_b}, {"$set": {"title": "User A Cloud Update"}})
         
         sync = SyncEngine(db, LocalStorageAdapter(storage_path))
         sync.sync_table("notes", 100)
@@ -82,7 +82,7 @@ def run_test():
             exit(1)
             
         col = db.collection("notes")
-        d = col.find_one({"id": id_b})
+        d = col.find_one({"_id": id_b})
         print(f"Final User B Title: {d.get('title')}")
         
     print("\nTest Complete")

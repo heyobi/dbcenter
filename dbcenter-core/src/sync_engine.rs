@@ -215,66 +215,71 @@ impl SyncEngine {
         Ok(())
     }
 
-    /// Task 3.3: Conflict Resolution (Parquet Download)
-    pub fn pull_and_apply(&self, table_name: &str) -> Result<()> {
-        let files = self.storage.list(table_name)?;
-        
-        let mut sorted_files = files.clone();
-        sorted_files.sort(); 
+     /// Task 3.3: Conflict Resolution (Parquet Download)
+     pub fn pull_and_apply(&self, table_name: &str) -> Result<()> {
+         // Ensure table structure exists before trying to insert to _base
+         use crate::delta_manager::DeltaManager;
+         DeltaManager::ensure_delta_tables(&self.db, table_name)
+             .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to ensure tables: {}", e)))?;
 
-        for file in sorted_files {
-             if !file.ends_with(".parquet") { continue; }
-             
-             // Task 3.4 VFS Demonstration
-             let full_data = self.storage.download(&file)?;
-             let file_len = full_data.len() as u64; 
-             
-             let remote_reader = RemoteParquetReader::new(self.storage.clone(), file.clone(), file_len);
-             
-             let builder = ParquetRecordBatchReaderBuilder::try_new(remote_reader)
-                  .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
-             
-             let mut reader = builder.build()
-                  .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+         let files = self.storage.list(table_name)?;
+         
+         let mut sorted_files = files.clone();
+         sorted_files.sort(); 
+ 
+         for file in sorted_files {
+              if !file.ends_with(".parquet") { continue; }
+              
+              // Task 3.4 VFS Demonstration
+              let full_data = self.storage.download(&file)?;
+              let file_len = full_data.len() as u64; 
+              
+              let remote_reader = RemoteParquetReader::new(self.storage.clone(), file.clone(), file_len);
+              
+              let builder = ParquetRecordBatchReaderBuilder::try_new(remote_reader)
+                   .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+              
+              let mut reader = builder.build()
+                   .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+ 
+              let mut client = self.db.get_client();
+              let mut transaction = client.transaction().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+ 
+              while let Some(batch_result) = reader.next() {
+                  let batch = batch_result.map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+                  
+                  let ids = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+                  let datas = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+                  // col 2 is created_at, col 3 is updated_at
+                  let updated_ats = batch.column(3).as_any().downcast_ref::<StringArray>().unwrap();
+                  
+                  for i in 0..batch.num_rows() {
+                      let id_str = ids.value(i);
+                      let data_str = if datas.is_null(i) { "{}" } else { datas.value(i) };
+                      // Parse/Validate format or fallback to now
+                      // We pass as String to avoid rust-postgres trait issues.
+                      // Ensure naive_utc to string is consistent.
+                      let updated_at_str = if updated_ats.is_null(i) {
+                          chrono::Utc::now().naive_utc().to_string()
+                      } else {
+                          updated_ats.value(i).to_string()
+                      };
+                      
+                      // Ensure it is not empty
+                      let updated_at_val = if updated_at_str.trim().is_empty() {
+                          chrono::Utc::now().naive_utc().to_string()
+                      } else {
+                          updated_at_str
+                      };
 
-             let mut client = self.db.get_client();
-             let mut transaction = client.transaction().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
-
-             while let Some(batch_result) = reader.next() {
-                 let batch = batch_result.map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
-                 
-                 let ids = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                 let datas = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
-                 // col 2 is created_at, col 3 is updated_at
-                 let updated_ats = batch.column(3).as_any().downcast_ref::<StringArray>().unwrap();
-                 
-                 for i in 0..batch.num_rows() {
-                     let id_str = ids.value(i);
-                     let data_str = if datas.is_null(i) { "{}" } else { datas.value(i) };
-                     // Parse/Validate format or fallback to now
-                     // We pass as String to avoid rust-postgres trait issues.
-                     // Ensure naive_utc to string is consistent.
-                     let updated_at_str = if updated_ats.is_null(i) {
-                         chrono::Utc::now().naive_utc().to_string()
-                     } else {
-                         updated_ats.value(i).to_string()
-                     };
-                     
-                     // Ensure it is not empty
-                     let updated_at_val = if updated_at_str.trim().is_empty() {
-                         chrono::Utc::now().naive_utc().to_string()
-                     } else {
-                         updated_at_str
-                     };
-
-                     let data_json: serde_json::Value = serde_json::from_str(data_str).unwrap_or(serde_json::Value::Null);
-
-                     // LWW: Update only if incoming (EXCLUDED) is newer than existing
-                     // We cast $3 to timestamp explicitly.
+                      let data_json: serde_json::Value = serde_json::from_str(data_str).unwrap_or(serde_json::Value::Null);
+ 
+                      // LWW: Update only if incoming (EXCLUDED) is newer than existing
+                     // We cast $3 to text first, then timestamptz, to accept String input from Rust.
                      let upsert_base = format!(
                         r#"
                         INSERT INTO "{}_base" (id, data, updated_at)
-                        VALUES ($1::uuid, $2, $3::timestamp)
+                        VALUES ($1::uuid, $2, $3::text::timestamptz)
                         ON CONFLICT (id) DO UPDATE SET 
                             data = EXCLUDED.data, 
                             updated_at = EXCLUDED.updated_at
@@ -285,13 +290,13 @@ impl SyncEngine {
                     
                     let id_uuid = uuid::Uuid::parse_str(id_str).unwrap();
                     transaction.execute(&upsert_base, &[&id_uuid, &data_json, &updated_at_val])
-                        .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to apply parquet row to base: {}", e)))?;
-                 }
-             }
-
-             transaction.commit().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
-        }
-        
-        Ok(())
-    }
+                        .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to apply parquet row to base: {:?}", e)))?;
+                  }
+              }
+ 
+              transaction.commit().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+         }
+         
+         Ok(())
+     }
 }
