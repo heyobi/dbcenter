@@ -11,7 +11,10 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
+use serde::ser::Error;
 
 pub struct SyncEngine {
     db: Arc<DBCenter>,
@@ -154,65 +157,127 @@ impl SyncEngine {
         Ok(rows.len())
     }
 
-    /// Task 3.5: Compaction / Vacuum
+    /// Task 3.5: Compaction / Vacuum with Heartbeat Lease (Phase 4)
     /// "Merge x_base + x_adds into a new x_base_v2. Upload x_base_v2. Delete old deltas."
+    /// Uses lock.json for concurrency control.
     pub fn vacuum(&self, table_name: &str) -> Result<()> {
         tracing::info!("Starting Vacuum for table: {}", table_name);
 
-        // 1. Ensure consistency: Pull all pending changes from cloud to local _base
-        self.pull_and_apply(table_name)?;
+        let worker_id = uuid::Uuid::new_v4().to_string();
+        let lock_key = format!("{}_vacuum.lock", table_name);
+        let ttl_ms = 30_000; // 30 seconds
 
-        // 2. Identify files to delete (All current files, including old BASE and DELTAs)
-        // We do this AFTER pull, so we know we processed them.
-        let files_to_delete = self.storage.list(table_name)?;
-
-        // 3. Export _base (Postgres) to a new BASE Parquet file
-        // We select everything from _base. Cast to text for consistency.
-        let sql_base = format!(
-            "SELECT id::text, data::text, created_at::text, updated_at::text FROM \"{}_base\" ORDER BY created_at ASC", 
-            table_name
-        );
-        let rows = {
-            let mut client = self.db.get_client();
-            client.query(&sql_base, &[])
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?
-        };
-        
-        if rows.is_empty() {
-             tracing::info!("Vacuum: Base is empty, nothing to export.");
-             // If local base is empty, we still proceed to delete remote files if authority.
-             // But let's export empty parquet to be safe and reset state cleanly.
-        }
-
-        let batch = self.rows_to_record_batch(rows.clone())?; // Clone or pass ownership? helper usage allows ownership transfer but earlier implementation took ref? 
-        // My helper signature `rows: Vec<Row>` takes ownership. So `rows.clone()`? `rows` is used for logging `len` later.
-        // Actually logging uses `rows.len()`. I can log first.
-
-        let mut buffer = Vec::new();
-        let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
-             .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
-        
-        writer.write(&batch).map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
-        writer.close().map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
-
-        // 4. Upload New Base
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let base_filename = format!("{}_BASE_{}_{}.parquet", table_name, timestamp, uuid::Uuid::new_v4());
-        
-        self.storage.upload(&base_filename, &buffer)?;
-        tracing::info!("Uploaded New Base {} with {} items", base_filename, rows.len());
-
-        // 5. Delete Old Files
-        for file in &files_to_delete {
-            if file.ends_with(".parquet") {
-                self.storage.delete(&file)?;
+        // 1. Acquire Lock (Spin Wait)
+        let mut acquired = false;
+        for _ in 0..20 { // Try for 10 seconds (20 * 500ms)
+            match self.storage.lock(&lock_key, ttl_ms, &worker_id) {
+                Ok(true) => {
+                    acquired = true;
+                    break;
+                }
+                Ok(false) => {
+                    tracing::info!("Vacuum lock held by another worker. Retrying...");
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Err(e) => return Err(e),
             }
         }
-        
-        tracing::info!("Vacuum Complete. {} old files deleted.", files_to_delete.len());
 
-        Ok(())
+        if !acquired {
+             tracing::error!("Could not acquire vacuum lock for {}", table_name);
+             return Err(crate::error::DBCenterError::LockError);
+        }
+
+        tracing::info!("Acquired vacuum lock: {}", worker_id);
+
+        // 2. Start Heartbeat Thread
+        // We use an AtomicBool to signal the thread to stop.
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let running_clone = running.clone();
+        let storage_clone = self.storage.clone();
+        let lock_key_clone = lock_key.clone();
+        let worker_id_clone = worker_id.clone();
+
+        std::thread::spawn(move || {
+            while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_secs(10)); // Refresh every 10s (TTL/3)
+                if !running_clone.load(std::sync::atomic::Ordering::SeqCst) { break; }
+                
+                match storage_clone.refresh_lock(&lock_key_clone, ttl_ms, &worker_id_clone) {
+                    Ok(true) => tracing::debug!("Refreshed vacuum lock"),
+                    Ok(false) => tracing::warn!("Failed to refresh lock (lost ownership?)"),
+                    Err(e) => tracing::error!("Error refreshing lock: {}", e),
+                }
+            }
+        });
+
+        // Ensure lock is released even if panic happens (Best effort with Drop guard would be better, but try-finally block here)
+        let result = (|| -> Result<()> {
+            // 3. Ensure consistency: Pull all pending changes
+            self.pull_and_apply(table_name)?;
+
+            // 4. Identify files to delete
+            let files_to_delete = self.storage.list(table_name)?;
+            
+            // Filter out the lock file itself if it appears in list (unlikely if filtered by extension, but list returns strings)
+            // Our list implementation checks for "starts_with prefix" logic. 
+            // If prefix is table_name, it might return table_name_vacuum.lock.
+            // We only delete .parquet files below, so it's safe.
+
+            // 5. Export _base (Postgres) to a new BASE Parquet file
+            let sql_base = format!(
+                "SELECT id::text, data::text, created_at::text, updated_at::text FROM \"{}_base\" ORDER BY created_at ASC", 
+                table_name
+            );
+            let rows = {
+                let mut client = self.db.get_client();
+                client.query(&sql_base, &[])
+                    .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?
+            };
+            
+            if rows.is_empty() {
+                 tracing::info!("Vacuum: Base is empty, nothing to export.");
+            }
+
+            let batch = self.rows_to_record_batch(rows.clone())?;
+
+            let mut buffer = Vec::new();
+            let props = WriterProperties::builder().build();
+            let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
+                 .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+            
+            writer.write(&batch).map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+            writer.close().map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+
+            // 6. Upload New Base (Atomic Swap)
+            let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let base_filename_final = format!("{}_BASE_{}_{}.parquet", table_name, timestamp, uuid::Uuid::new_v4());
+            let base_filename_tmp = format!("{}.tmp", base_filename_final);
+            
+            self.storage.upload(&base_filename_tmp, &buffer)?;
+            tracing::info!("Uploaded temp base: {}", base_filename_tmp);
+            
+            self.storage.rename(&base_filename_tmp, &base_filename_final)?;
+             tracing::info!("Atomic swap complete: {}", base_filename_final);
+
+            // 7. Delete Old Files
+            for file in &files_to_delete {
+                if file.ends_with(".parquet") {
+                    // Don't delete the file we just created! (Though files_to_delete list is from BEFORE creation)
+                    // So we are safe.
+                    self.storage.delete(&file)?;
+                }
+            }
+            
+            tracing::info!("Vacuum Complete. {} old files deleted.", files_to_delete.len());
+            Ok(())
+        })();
+
+        // Cleanup
+        running.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.storage.unlock(&lock_key, &worker_id); // Ignore error on unlock
+        
+        result
     }
 
      /// Task 3.3: Conflict Resolution (Parquet Download)

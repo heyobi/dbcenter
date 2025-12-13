@@ -41,4 +41,7 @@ path = "examples/test_rust.rs"
 
 [[example]]
 name = "test_delta"
-path = "examples/test_delta.rs"
+
+[dev-dependencies]
+uuid.workspace = true
+serde_json.workspace = true

@@ -1216,6 +1216,24 @@ impl LocalStorageAdapter {
             .list(prefix)
             .map_err(|e| PyException::new_err(e.to_string()))
     }
+
+    fn lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> PyResult<bool> {
+        self.inner
+            .lock(key, ttl_ms, worker_id)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
+
+    fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> PyResult<bool> {
+        self.inner
+            .refresh_lock(key, ttl_ms, worker_id)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
+
+    fn unlock(&self, key: &str, worker_id: &str) -> PyResult<()> {
+        self.inner
+            .unlock(key, worker_id)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
 }
 
 /// Python wrapper for SyncEngine
