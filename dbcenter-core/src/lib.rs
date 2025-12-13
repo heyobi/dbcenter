@@ -622,6 +622,11 @@ impl DBCenter {
         Ok(())
     }
 
+    /// Get the port the database is listening on
+    pub fn get_port(&self) -> u16 {
+        self.process.lock().unwrap().get_port()
+    }
+
     /// Get internal client for advanced operations
     pub(crate) fn get_client(&self) -> std::sync::MutexGuard<'_, Client> {
         self.client.lock().unwrap()

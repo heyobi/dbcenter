@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let db1 = DBCenter::builder()
             .path(db1_path)
             .persist(true)
-            .daemon_mode(false) // Embedded behavior
+            .daemon_mode(true) // Embedded behavior
             .multi_user_sync_mode(true)
             .build()?;
 
@@ -103,8 +103,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("User B fetched sample: {:?}", sample);
         assert_eq!(sample["author"], "User A");
 
-        println!("User B shutting down...");
-        db2.shutdown()?;
+        println!("DB2 (User B) is running on port: {}", db2.get_port());
+        println!("Connection String: host=127.0.0.1 port={} user=postgres dbname=postgres", db2.get_port());
+        println!("Note: Since we use daemon_mode=true, DB2 will continue running after this test exits.");
+
+        // println!("User B shutting down...");
+        // db2.shutdown()?;
+        println!("Test Ending - DB2 Left Running.");
     }
 
     println!("\nSUCCESS: Multi-User Sync Verified!");

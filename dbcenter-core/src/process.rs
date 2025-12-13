@@ -102,6 +102,10 @@ impl PostgresProcess {
         self.child.as_ref().map(|child| child.id())
     }
 
+    pub fn get_port(&self) -> u16 {
+        self.port
+    }
+
     pub fn connection_string(&self, config: &DBCenterConfig) -> String {
         let user = &config.user;
         let dbname = &config.dbname;
