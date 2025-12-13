@@ -80,6 +80,10 @@ pub fn row_value_to_json(row: &Row, idx: usize) -> JsonValue {
             .try_get::<_, String>(idx)
             .map(JsonValue::String)
             .unwrap_or(JsonValue::Null),
+        Type::UUID => row
+            .try_get::<_, uuid::Uuid>(idx)
+            .map(|id| JsonValue::String(id.to_string()))
+            .unwrap_or(JsonValue::Null),
         Type::JSON | Type::JSONB => row.try_get::<_, JsonValue>(idx).unwrap_or(JsonValue::Null),
         _ => {
             // For other types, try to get as string

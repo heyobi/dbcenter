@@ -54,14 +54,15 @@ impl<'a> Collection<'a> {
     }
 
     /// Insert a single document
-    pub fn insert_one(&self, document: &JsonValue) -> Result<i32> {
+    /// Returns the ID as a string (UUID or Integer depending on config)
+    pub fn insert_one(&self, document: &JsonValue) -> Result<String> {
         let json_str = serde_json::to_string(document)
             .map_err(crate::error::DBCenterError::SerializationError)?;
 
         // Use direct SQL embedding (escape single quotes for safety)
         let escaped_json = json_str.replace("'", "''");
         let sql = format!(
-            r#"INSERT INTO "{}" (data) VALUES ('{}'::jsonb) RETURNING id"#,
+            r#"INSERT INTO "{}" (data) VALUES ('{}'::jsonb) RETURNING id::text"#,
             self.name, escaped_json
         );
 
@@ -77,7 +78,7 @@ impl<'a> Collection<'a> {
     }
 
     /// Insert multiple documents
-    pub fn insert_many(&self, documents: &[JsonValue]) -> Result<Vec<i32>> {
+    pub fn insert_many(&self, documents: &[JsonValue]) -> Result<Vec<String>> {
         let mut ids = Vec::new();
         for doc in documents {
             ids.push(self.insert_one(doc)?);
@@ -95,12 +96,12 @@ impl<'a> Collection<'a> {
 
         let sql = if where_clause.is_empty() {
             format!(
-                r#"SELECT id, data, created_at, updated_at FROM "{}""#,
+                r#"SELECT id::text, data, created_at, updated_at FROM "{}""#,
                 self.name
             )
         } else {
             format!(
-                r#"SELECT id, data, created_at, updated_at FROM "{}" WHERE {}"#,
+                r#"SELECT id::text, data, created_at, updated_at FROM "{}" WHERE {}"#,
                 self.name, where_clause
             )
         };
@@ -112,12 +113,21 @@ impl<'a> Collection<'a> {
 
         let mut results = Vec::new();
         for row in rows {
-            let id: i32 = row.get(0);
+            // ID can be i32 (old tables) or UUID (new delta tables).
+            // We use simple check or just try parse.
+            // But 'row.get(0)' requires knowing the type.
+            // Safest: get as String (TEXT) if we cast it in query, BUT we didn't cast it in find query.
+            // We must cast ID to TEXT in the SQL query to be generic. 
+            // OR use 'try_get' with different types.
+            // Let's UPDATE the SQL to return id::text.
+            // Line 98 and 103.
+            
+            let id_val: String = row.get(0);
             let mut data: JsonValue = row.get(1);
 
-            // Add _id field
+            // Add _id field (as string)
             if let JsonValue::Object(ref mut map) = data {
-                map.insert("_id".to_string(), JsonValue::Number(id.into()));
+                map.insert("_id".to_string(), JsonValue::String(id_val));
             }
 
             results.push(data);

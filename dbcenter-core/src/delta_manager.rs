@@ -14,50 +14,50 @@ impl DeltaManager {
 
         // 1. Create Physical Tables
         
-        // x_base: The read-only heavy data table
-        // We use the standard schema
-        let sql_base = format!(
-            r#"
-            CREATE TABLE IF NOT EXISTS "{}" (
-                id INTEGER PRIMARY KEY, -- Not SERIAL to avoid conflict, managed externally or via adds logic? actually let's keep it INTEGER for base
+        // 1. Create Base Table
+        let create_base_sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{}_base" (
+                id UUID PRIMARY KEY,
                 data JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_{}_data ON "{}" USING GIN (data);
-            "#, 
-            base, base, base
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );"#,
+            table_name
         );
+        client.batch_execute(&create_base_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create base table: {}", e)))?;
 
-        // x_adds: The new inserts/updates
-        // Use SERIAL here to generate new IDs for inserts
-        let sql_adds = format!(
-            r#"
-            CREATE TABLE IF NOT EXISTS "{}" (
-                id SERIAL PRIMARY KEY,
+        // 2. Create Adds Table
+        let create_adds_sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{}_adds" (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 data JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_{}_data ON "{}" USING GIN (data);
-            "#, 
-            adds, adds, adds
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );"#,
+            table_name
         );
+        client.batch_execute(&create_adds_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create adds table: {}", e)))?;
 
-        // x_dels: Tombstones
-        let sql_dels = format!(
+        // 3. Create Dels Table
+        let create_dels_sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{}_dels" (
+                id UUID PRIMARY KEY,
+                deleted_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );"#,
+            table_name
+        );
+        client.batch_execute(&create_dels_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create dels table: {}", e)))?;
+
+        // Create indexes
+        let create_indexes_sql = format!(
             r#"
-            CREATE TABLE IF NOT EXISTS "{}" (
-                id INTEGER PRIMARY KEY,
-                deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            "#, 
-            dels
+            CREATE INDEX IF NOT EXISTS idx_{}_base_data ON "{}_base" USING GIN (data);
+            CREATE INDEX IF NOT EXISTS idx_{}_adds_data ON "{}_adds" USING GIN (data);
+            "#,
+            table_name, table_name,
+            table_name, table_name
         );
-
-        client.batch_execute(&format!("{}{}{}", sql_base, sql_adds, sql_dels)).map_err(|e| {
-             DBCenterError::QueryError(format!("Failed to create delta physical tables: {}", e))
-        })?;
+        client.batch_execute(&create_indexes_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create indexes: {}", e)))?;
 
         // 2. Create Create "Transparent View"
         // Union of base and adds, filtering out dels

@@ -52,6 +52,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 4. Insert Data (User A)
     println!("Inserting data into View 'products'...");
     let id1 = collection.insert_one(&json!({"name": "Laptop", "price": 1000}))?;
+    // Note: With UUIDs, return type of insert_one might change or need handling.
+    // Currently Collection::insert_one returns Result<i32>. We need to update that too if we want UUIDs returned.
+    // For now, let's assume insert_one still returns i32 (which is wrong for UUIDs) or we updated it.
+    // Actually, we haven't updated Collection::insert_one return type yet.
+    // However, the TRIGGER returns the ID.
+    // Let's modify collection.rs to return String (or Value) for ID.
+    // But first, let's adjust this test assuming insert_one returns something we can print.
     let id2 = collection.insert_one(&json!({"name": "Mouse", "price": 50}))?;
     println!("Inserted IDs: {}, {}", id1, id2);
 
@@ -102,7 +109,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dels_res = db.query("SELECT id FROM products_dels", &[])?;
     println!("Content of x_dels: {:?}", dels_res);
     // id1 should be in dels (because update trigger adds it there)
-    assert!(dels_res.iter().any(|r| r["id"].as_i64().unwrap() == id1 as i64));
+    // id1 should be in dels. id1 is now string/UUID.
+    assert!(dels_res.iter().any(|r| r["id"].as_str().unwrap() == id1));
 
     // 6. Delete Data
     println!("Deleting Mouse...");
@@ -118,7 +126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dels_res_2 = db.query("SELECT id FROM products_dels", &[])?;
     println!("Content of x_dels after delete: {:?}", dels_res_2);
     // id2 should be in dels
-    assert!(dels_res_2.iter().any(|r| r["id"].as_i64().unwrap() == id2 as i64));
+    // id2 should be in dels
+    assert!(dels_res_2.iter().any(|r| r["id"].as_str().unwrap() == id2));
 
     println!("SUCCESS: Phase 2 Delta Layer logic verified!");
 

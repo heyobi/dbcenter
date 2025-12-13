@@ -9,6 +9,8 @@ pub mod vector_store;
 pub mod process;
 pub mod query;
 pub mod utils;
+pub mod storage;
+pub mod sync_engine;
 
 pub use config::DBCenterConfig;
 pub use error::{DBCenterError, Result};

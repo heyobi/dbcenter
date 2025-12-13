@@ -70,7 +70,7 @@ impl<'a> GeoCollection<'a> {
     }
 
     /// Insert documents (delegates to standard collection)
-    pub fn insert_many(&self, documents: &[JsonValue]) -> Result<Vec<i32>> {
+    pub fn insert_many(&self, documents: &[JsonValue]) -> Result<Vec<String>> {
         self.db.collection(&self.name).insert_many(documents)
     }
 
