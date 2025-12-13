@@ -29,6 +29,7 @@ indicatif.workspace = true
 parquet.workspace = true
 arrow.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 
 [lib]
 name = "dbcenter_core"

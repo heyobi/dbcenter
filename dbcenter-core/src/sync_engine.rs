@@ -245,25 +245,46 @@ impl SyncEngine {
                  
                  let ids = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
                  let datas = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+                 // col 2 is created_at, col 3 is updated_at
+                 let updated_ats = batch.column(3).as_any().downcast_ref::<StringArray>().unwrap();
                  
                  for i in 0..batch.num_rows() {
                      let id_str = ids.value(i);
                      let data_str = if datas.is_null(i) { "{}" } else { datas.value(i) };
+                     // Parse/Validate format or fallback to now
+                     // We pass as String to avoid rust-postgres trait issues.
+                     // Ensure naive_utc to string is consistent.
+                     let updated_at_str = if updated_ats.is_null(i) {
+                         chrono::Utc::now().naive_utc().to_string()
+                     } else {
+                         updated_ats.value(i).to_string()
+                     };
+                     
+                     // Ensure it is not empty
+                     let updated_at_val = if updated_at_str.trim().is_empty() {
+                         chrono::Utc::now().naive_utc().to_string()
+                     } else {
+                         updated_at_str
+                     };
+
                      let data_json: serde_json::Value = serde_json::from_str(data_str).unwrap_or(serde_json::Value::Null);
 
+                     // LWW: Update only if incoming (EXCLUDED) is newer than existing
+                     // We cast $3 to timestamp explicitly.
                      let upsert_base = format!(
                         r#"
                         INSERT INTO "{}_base" (id, data, updated_at)
-                        VALUES ($1::uuid, $2, CURRENT_TIMESTAMP)
+                        VALUES ($1::uuid, $2, $3::timestamp)
                         ON CONFLICT (id) DO UPDATE SET 
                             data = EXCLUDED.data, 
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = EXCLUDED.updated_at
+                        WHERE EXCLUDED.updated_at > "{}_base".updated_at
                         "#, 
-                        table_name
+                        table_name, table_name
                     );
                     
                     let id_uuid = uuid::Uuid::parse_str(id_str).unwrap();
-                    transaction.execute(&upsert_base, &[&id_uuid, &data_json])
+                    transaction.execute(&upsert_base, &[&id_uuid, &data_json, &updated_at_val])
                         .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to apply parquet row to base: {}", e)))?;
                  }
              }

@@ -45,7 +45,7 @@ class TestMultiUserSync(unittest.TestCase):
         # --- User A (Offline) ---
         print("\n[User A] Initializing Offline DB...")
         # Use context manager for auto-shutdown
-        with DBCenter(path=self.path_a, persist=True, service=False, multi_user_sync=True) as db_a:
+        with DBCenter(path=self.path_a, persist=False, service=False, multi_user_sync=True) as db_a:
             col_a = db_a.collection("notes")
             
             print("[User A] Inserting 10 records...")
@@ -69,7 +69,7 @@ class TestMultiUserSync(unittest.TestCase):
 
         # --- User B (Online) ---
         print("\n[User B] Initializing Online DB...")
-        with DBCenter(path=self.path_b, persist=True, service=False, multi_user_sync=True) as db_b:
+        with DBCenter(path=self.path_b, persist=False, service=False, multi_user_sync=True) as db_b:
             col_b = db_b.collection("notes")
             storage_b = LocalStorageAdapter(self.storage_path)
             sync_b = SyncEngine(db_b, storage_b)
