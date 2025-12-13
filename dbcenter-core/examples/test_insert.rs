@@ -7,7 +7,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     println!("Creating DBCenter...");
-    let db = DBCenter::new(Some("./rust_test_db"), false, false, None, None, None, None)?;
+    let db = DBCenter::builder()
+        .path("./rust_test_db")
+        .persist(false)
+        .build()?;
 
     println!("Getting collection...");
     let users = db.collection("test_users");

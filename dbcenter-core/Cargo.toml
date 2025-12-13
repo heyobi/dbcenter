@@ -26,6 +26,9 @@ once_cell.workspace = true
 walkdir = "2.5"
 uuid.workspace = true
 indicatif.workspace = true
+parquet.workspace = true
+arrow.workspace = true
+bytes.workspace = true
 
 [lib]
 name = "dbcenter_core"

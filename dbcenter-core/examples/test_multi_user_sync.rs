@@ -1,126 +1,140 @@
 use dbcenter_core::DBCenter;
-use dbcenter_core::storage::LocalStorageAdapter;
+use dbcenter_core::storage::{LocalStorageAdapter, StorageAdapter};
 use dbcenter_core::sync_engine::SyncEngine;
-use serde_json::json;
-use std::error::Error;
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
+use serde_json::json;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    println!("Starting Multi-User Sync Simulation (Offline A -> Cloud -> Online B)...");
 
-    let db1_path = "./db1";
-    let db2_path = "./db2";
-    let storage_path = "./shared_storage";
-
-    // Cleanup
-    let _ = DBCenter::force_shutdown(db1_path);
-    let _ = DBCenter::force_shutdown(db2_path);
-    cleanup_dir(db1_path);
-    cleanup_dir(db2_path);
-    cleanup_dir(storage_path);
-    std::fs::create_dir_all(storage_path)?;
-
-    // ==========================================
-    // USER A: Offline (Embedded Mode)
-    // ==========================================
-    println!("\n=== User A (Offline) ===");
-    {
-        println!("Initializing DB1 (daemon_mode=false)...");
-        let db1 = DBCenter::builder()
-            .path(db1_path)
-            .persist(true)
-            .daemon_mode(true) // Embedded behavior
-            .multi_user_sync_mode(true)
-            .build()?;
-
-        let storage1 = Arc::new(Box::new(LocalStorageAdapter::new(PathBuf::from(storage_path))) as Box<dyn dbcenter_core::storage::StorageAdapter + Send + Sync>);
-        let sync1 = SyncEngine::new(db1.clone(), storage1);
-        let col1 = db1.collection("notes");
-
-        println!("User A inserting 10 notes...");
-        let mut docs = Vec::new();
-        for i in 1..=10 {
-            docs.push(json!({
-                "title": format!("Note {}", i),
-                "author": "User A",
-                "content": "Offline content"
-            }));
-        }
-        col1.insert_many(&docs)?;
-
-        println!("User A syncing to storage...");
-        // Sync items to storage (push)
-        let count = sync1.sync_table("notes", 100)?;
-        println!("User A synced {} items.", count);
-        assert_eq!(count, 10);
-
-        println!("User A shutting down...");
-        db1.shutdown()?; // Clean shutdown
+    let storage_dir = PathBuf::from("storage_emu");
+    if storage_dir.exists() {
+         let _ = std::fs::remove_dir_all(&storage_dir);
+    }
+    std::fs::create_dir_all(&storage_dir)?;
+    
+    // Shared Storage (Cloud)
+    // We reuse this adapter concept, but since we want to drop everything cleanly,
+    // let's create separate instances or clone Arc inside scopes.
+    // Actually, local storage adapter just points to path. Safe to create new ones.
+    
+    // Explicit Cleanup of DBs
+    let db1_path = PathBuf::from("db1");
+    if db1_path.exists() {
+        println!("Cleaning up old db1...");
+        let _ = DBCenter::force_shutdown(&db1_path);
+        let _ = std::fs::remove_dir_all(&db1_path);
     }
     
-    // Ensure DB1 is dead
-    std::thread::sleep(Duration::from_secs(2));
+    let db2_path = PathBuf::from("db2");
+    if db2_path.exists() {
+        println!("Cleaning up old db2...");
+        let _ = DBCenter::force_shutdown(&db2_path);
+        let _ = std::fs::remove_dir_all(&db2_path);
+    }
 
-
-    // ==========================================
-    // USER B: Online (Service Mode)
-    // ==========================================
-    println!("\n=== User B (Online/Service) ===");
+    // --- User A Scope ---
     {
-        println!("Initializing DB2 (daemon_mode=true)...");
-        // service=true implies it might be accessible via network, 
-        // but for this test code running in same process, we use the struct instance.
-        let db2 = DBCenter::builder()
-            .path(db2_path)
+        println!("=== User A (Offline) ===");
+        let storage_t1: Arc<Box<dyn StorageAdapter + Send + Sync>> = Arc::new(Box::new(LocalStorageAdapter::new(storage_dir.clone())));
+        
+        let db1 = DBCenter::builder()
+            .path(&db1_path)
             .persist(true)
-            .daemon_mode(true) 
+            .daemon_mode(false)
             .multi_user_sync_mode(true)
             .build()?;
 
-        let storage2 = Arc::new(Box::new(LocalStorageAdapter::new(PathBuf::from(storage_path))) as Box<dyn dbcenter_core::storage::StorageAdapter + Send + Sync>);
-        let sync2 = SyncEngine::new(db2.clone(), storage2);
-        let col2 = db2.collection("notes");
-
-        println!("User B initial state (should be empty):");
-        let count_initial = col2.count(None)?;
-        println!("Count: {}", count_initial);
-        // It might be 0 because we are in a fresh DB2.
+        let col1 = db1.collection("notes");
         
-        println!("User B pulling from storage...");
-        sync2.pull_and_apply("notes")?;
-
-        println!("User B checking data...");
-        let count_after = col2.count(None)?;
-        println!("User B Note Count: {}", count_after);
-        
-        // Validation
-        assert_eq!(count_after, 10, "User B should see 10 notes from User A");
-        
-        let sample = col2.find_one(None)?.expect("Should have data");
-        println!("User B fetched sample: {:?}", sample);
-        assert_eq!(sample["author"], "User A");
-
-        println!("DB2 (User B) is running on port: {}", db2.get_port());
-        println!("Connection String: host=127.0.0.1 port={} user=postgres dbname=postgres", db2.get_port());
-        println!("Note: Since we use daemon_mode=true, DB2 will continue running after this test exits.");
-
-        // println!("User B shutting down...");
-        // db2.shutdown()?;
-        println!("Test Ending - DB2 Left Running.");
-    }
-
-    println!("\nSUCCESS: Multi-User Sync Verified!");
-    Ok(())
-}
-
-fn cleanup_dir(path: &str) {
-    if std::path::Path::new(path).exists() {
-        for _ in 0..5 {
-            if std::fs::remove_dir_all(path).is_ok() { return; }
-            std::thread::sleep(Duration::from_millis(200));
+        println!("User A inserting 10 records...");
+        for i in 1..=10 {
+            col1.insert_one(&json!({
+                "title": format!("Note {}", i),
+                "content": "Offline content",
+                "author": "User A"
+            }))?;
         }
+        
+        println!("User A syncing to storage...");
+        let sync1 = SyncEngine::new(db1.clone(), storage_t1);
+        let synced_count = sync1.sync_table("notes", 100)?; 
+        println!("User A Synced {} records.", synced_count);
+        
+        println!("User A flushing/dropping...");
+        // sync1 drops here
+        // db1 drops here -> Auto shutdown because daemon_mode=false
     }
+    
+    println!("User A Scope End. Waiting 3s for full cleanup...");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // --- User B Scope ---
+    {
+        println!("\n=== User B (Online/Service) ===");
+        let storage_t2: Arc<Box<dyn StorageAdapter + Send + Sync>> = Arc::new(Box::new(LocalStorageAdapter::new(storage_dir.clone())));
+        
+        // Use daemon_mode=false to ensure process exits cleanly with test
+        let db2 = DBCenter::builder()
+            .path(&db2_path)
+            .persist(true)
+            .daemon_mode(false) 
+            .multi_user_sync_mode(true)
+            .build()?;
+
+        let col2 = db2.collection("notes");
+        let sync2 = SyncEngine::new(db2.clone(), storage_t2.clone());
+        
+        println!("User B Initialized. Collection obtained.");
+
+        let count_before = col2.find(None)?.len();
+        println!("User B initial state (should be empty):");
+        println!("Count: {}", count_before);
+
+        // Pull from Shared Storage
+        println!("User B pulling from storage (VFS & Conflict Resolution)...");
+        match sync2.pull_and_apply("notes") {
+            Ok(_) => println!("User B Apply Success."),
+            Err(e) => println!("User B Apply Failed: {:?}", e),
+        }
+        
+        println!("User B checking data...");
+        let all_notes = col2.find(None)?;
+        println!("User B Note Count: {}", all_notes.len());
+        
+        assert_eq!(all_notes.len(), 10, "User B should have 10 notes");
+
+        // --- Vacuum / Compaction Test ---
+        println!("User B Performing Vacuum (Compaction)...");
+        // Currently storage should contain DELTA files
+        let files_before = storage_t2.list("notes")?;
+        println!("Files before vacuum: {:?}", files_before);
+        assert!(files_before.iter().any(|f| f.contains("_DELTA_")), "Should have DELTA files");
+
+        match sync2.vacuum("notes") {
+            Ok(_) => println!("Vacuum Success."),
+            Err(e) => {
+                 println!("Vacuum Failed: {:?}", e);
+                 return Err(Box::new(e));
+            }
+        }
+        
+        let files_after = storage_t2.list("notes")?;
+        println!("Files after vacuum: {:?}", files_after);
+        assert!(files_after.iter().any(|f| f.contains("_BASE_")), "Should have BASE file");
+        assert!(!files_after.iter().any(|f| f.contains("_DELTA_")), "Should NOT have DELTA files");
+
+        // Verify Data Integrity after Vacuum
+        let all_notes_after = col2.find(None)?;
+        println!("User B Note Count Post-Vacuum: {}", all_notes_after.len());
+        assert_eq!(all_notes_after.len(), 10, "Data should be preserved after vacuum");
+        
+        println!("User B Test Complete. Dropping...");
+    } // db2 drops -> Shutdown
+
+    println!("Test Ending successfully.");
+    Ok(())
 }

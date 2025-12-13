@@ -11,6 +11,7 @@ pub mod query;
 pub mod utils;
 pub mod storage;
 pub mod sync_engine;
+pub mod vfs;
 
 pub use config::DBCenterConfig;
 pub use error::{DBCenterError, Result};

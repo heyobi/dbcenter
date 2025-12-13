@@ -1,17 +1,17 @@
 use crate::DBCenter;
 use crate::error::Result;
 use crate::storage::StorageAdapter;
-use serde::{Deserialize, Serialize};
-// use std::sync::{Arc, Mutex};
+use crate::vfs::RemoteParquetReader;
+use arrow::array::{StringArray, Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use bytes::Bytes;
+use postgres::Row;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_writer::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SyncBatch {
-    pub table_name: String,
-    pub timestamp: u64,
-    pub operations: Vec<serde_json::Value>, // Rows from _adds
-}
 
 pub struct SyncEngine {
     db: Arc<DBCenter>,
@@ -23,77 +23,112 @@ impl SyncEngine {
         Self { db, storage }
     }
 
-    /// Run the sync process for a specific table
-    /// 1. Check if we have pending changes in _adds (Task 3.2: Smart Batching logic can be here or caller)
-    /// 2. Extract data from _adds
-    /// 3. Zip/Serialize
-    /// 4. Upload to Storage
-    /// 5. Compact/Cleanup _adds
+    /// Helper to convert Postgres rows to Arrow RecordBatch
+    /// Assumes all columns are cast to TEXT in the query.
+    fn rows_to_record_batch(&self, rows: Vec<Row>) -> Result<RecordBatch> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, true),
+            Field::new("created_at", DataType::Utf8, true), 
+            Field::new("updated_at", DataType::Utf8, true),
+        ]));
+
+        let mut ids = Vec::new();
+        let mut datas = Vec::new();
+        let mut created_ats = Vec::new();
+        let mut updated_ats = Vec::new();
+
+        for row in rows {
+            // Since we cast to ::text in SQL, get("...") returns Option<String> or String
+            let id: String = row.get("id"); 
+            let data: Option<String> = row.get("data");
+            let created_at: Option<String> = row.get("created_at"); 
+            let updated_at: Option<String> = row.get("updated_at");
+
+            ids.push(id);
+            datas.push(data);
+            created_ats.push(created_at);
+            updated_ats.push(updated_at);
+        }
+
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(ids)),
+                Arc::new(StringArray::from(datas)),
+                Arc::new(StringArray::from(created_ats)),
+                Arc::new(StringArray::from(updated_ats)),
+            ],
+        ).map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))
+    }
+
+    /// Task 3.2: Smart Batching (Parquet)
     pub fn sync_table(&self, table_name: &str, limit: usize) -> Result<usize> {
         let adds_table = format!("{}_adds", table_name);
         
         // 1. Check pending changes
-        // "Wait for 50 operations". We use limit here.
-        let sql_check = format!("SELECT COUNT(*) FROM \"{}\"", adds_table);
-        let count_res = self.db.query(&sql_check, &[])?;
-        let count: i64 = count_res[0].get("count").and_then(|v| v.as_i64()).unwrap_or(0);
+        // Use block to drop client lock quickly
+        let count: i64 = {
+            let mut client = self.db.get_client();
+            let sql_check = format!("SELECT COUNT(*) FROM \"{}\"", adds_table);
+            let rows = client.query(&sql_check, &[])
+                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            rows[0].get("count")
+        };
 
         if count == 0 {
              return Ok(0);
         }
 
-        // 2. Extract data (Task 3.2: "Wait for 50 operations")
-        // We take up to `limit` rows.
-        // We need all columns.
-        let sql_fetch = format!("SELECT * FROM \"{}\" ORDER BY created_at ASC LIMIT {}", adds_table, limit);
-        let rows = self.db.query(&sql_fetch, &[])?;
+        // 2. Fetch rows
+        // We cast EVERYTHING to text to simplify Arrow generic handling and strictly control format
+        let sql_fetch = format!(
+            "SELECT id::text, data::text, created_at::text, updated_at::text FROM \"{}\" ORDER BY created_at ASC LIMIT {}", 
+            adds_table, limit
+        );
+        let rows = {
+            let mut client = self.db.get_client();
+            client.query(&sql_fetch, &[])
+                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?
+        };
         
         if rows.is_empty() {
             return Ok(0);
         }
 
-        // 3. Serialize (Zip simulation -> simply JSON dump for now)
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let batch_filename = format!("{}_{}_{}.json", table_name, timestamp, uuid::Uuid::new_v4());
-        
-        let batch = SyncBatch {
-            table_name: table_name.to_string(),
-            timestamp,
-            operations: rows.clone(),
-        };
-        
-        let data = serde_json::to_vec(&batch).map_err(|e| crate::error::DBCenterError::SerializationError(e))?;
-        
-        // 4. Upload
-        // Task 3.1: Upload using adapter
-        self.storage.upload(&batch_filename, &data)?;
-        tracing::info!("Uploaded batch {} with {} items", batch_filename, rows.len());
+        // 3. Convert to Arrow
+        let batch = self.rows_to_record_batch(rows.clone())?; // Clone needed because we iterate rows later
 
-        // 5. Compact / Cleanup
-        // "Compact _adds to _base to keep _adds small"
-        // Move these specific rows to _base and remove from _adds.
-        // Or simply delete from _adds if we assume _base is constructed from synced files?
-        // Wait, the requirement says "Sync the Delta Tables to cloud".
-        // And "Compact _adds to _base".
-        // Locally, we move successfully synced items to _base?
-        // Yes, typically:
-        //  - Read from Adds
-        //  - Write to Storage (Cloud Source of Truth)
-        //  - Move from Adds to Base (Local Read Cache of History)
-        //  - Delete from Adds
+        // 4. Write to Parquet (In-Memory)
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
+             .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
         
+        writer.write(&batch).map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+        writer.close().map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+
+        // 5. Upload
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let batch_filename = format!("{}_DELTA_{}_{}.parquet", table_name, timestamp, uuid::Uuid::new_v4());
+        
+        self.storage.upload(&batch_filename, &buffer)?;
+        tracing::info!("Uploaded Parquet batch {} with {} items", batch_filename, rows.len());
+
+        // 6. Compact / Cleanup (Move to Base)
         let mut client = self.db.get_client();
         let mut transaction = client.transaction().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
 
         for row in &rows {
-            // Unpack row
-            let id = row.get("id").and_then(|v| v.as_str()).ok_or(crate::error::DBCenterError::QueryError("Missing ID".into()))?;
-            let data = row.get("data"); 
-            // created_at, updated_at ...
+            let id: String = row.get("id");
+            // data string is JSON string. We need JSONB value for query param? 
+            // Or we can cast $2::jsonb in SQL.
+            let data_str: Option<String> = row.get("data"); 
+            let data_val = match data_str {
+                Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+                None => serde_json::Value::Null
+            };
             
-            // Insert into Base
-            // Conflict? If ID exists in base, update it.
-            // On conflict update.
             let upsert_base = format!(
                 r#"
                 INSERT INTO "{}_base" (id, data, created_at, updated_at)
@@ -105,11 +140,10 @@ impl SyncEngine {
                 table_name
             );
             
-            let id_uuid = uuid::Uuid::parse_str(id).unwrap();
-            transaction.execute(&upsert_base, &[&id_uuid, &data])
+            let id_uuid = uuid::Uuid::parse_str(&id).unwrap();
+            transaction.execute(&upsert_base, &[&id_uuid, &data_val])
                 .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to move to base: {}", e)))?;
 
-            // Delete from Adds (reuse id_uuid)
             let delete_adds = format!("DELETE FROM \"{}_adds\" WHERE id = $1::uuid", table_name);
             transaction.execute(&delete_adds, &[&id_uuid])
                 .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to delete from adds: {}", e)))?;
@@ -118,64 +152,125 @@ impl SyncEngine {
         transaction.commit().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
         
         Ok(rows.len())
-
     }
 
-    /// Task 3.3: Conflict Resolution
-    /// "Download remote deltas -> Sort by time -> Replay locally"
-    pub fn pull_and_apply(&self, table_name: &str) -> Result<()> {
-        // List remote files
-        let files = self.storage.list(table_name)?;
+    /// Task 3.5: Compaction / Vacuum
+    /// "Merge x_base + x_adds into a new x_base_v2. Upload x_base_v2. Delete old deltas."
+    pub fn vacuum(&self, table_name: &str) -> Result<()> {
+        tracing::info!("Starting Vacuum for table: {}", table_name);
+
+        // 1. Ensure consistency: Pull all pending changes from cloud to local _base
+        self.pull_and_apply(table_name)?;
+
+        // 2. Identify files to delete (All current files, including old BASE and DELTAs)
+        // We do this AFTER pull, so we know we processed them.
+        let files_to_delete = self.storage.list(table_name)?;
+
+        // 3. Export _base (Postgres) to a new BASE Parquet file
+        // We select everything from _base. Cast to text for consistency.
+        let sql_base = format!(
+            "SELECT id::text, data::text, created_at::text, updated_at::text FROM \"{}_base\" ORDER BY created_at ASC", 
+            table_name
+        );
+        let rows = {
+            let mut client = self.db.get_client();
+            client.query(&sql_base, &[])
+                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?
+        };
         
-        // Sort by timestamp (in filename)
-        // filename format: name_timestamp_uuid.json
-        // We need to parse/sort.
-        // Simplified: just iterate for now or string sort if format allows (timestamp is high digits... ok if fixed width, but it's not padding... wait, list might return random order).
-        // Let's rely on simple string sort for this prototype if timestamp is monotonic enough or parse properly.
-        // Assuming string sort works roughly if major digits align.
+        if rows.is_empty() {
+             tracing::info!("Vacuum: Base is empty, nothing to export.");
+             // If local base is empty, we still proceed to delete remote files if authority.
+             // But let's export empty parquet to be safe and reset state cleanly.
+        }
+
+        let batch = self.rows_to_record_batch(rows.clone())?; // Clone or pass ownership? helper usage allows ownership transfer but earlier implementation took ref? 
+        // My helper signature `rows: Vec<Row>` takes ownership. So `rows.clone()`? `rows` is used for logging `len` later.
+        // Actually logging uses `rows.len()`. I can log first.
+
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
+             .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
         
-        for file in files {
-             let data = self.storage.download(&file)?;
-             let batch: SyncBatch = serde_json::from_slice(&data).map_err(|e| crate::error::DBCenterError::SerializationError(e))?;
-             
-             // Replay locally
-             // "Last Write Wins based on timestamps"
-             // Check local timestamp vs remote timestamp?
-             // Or blindly apply if it's new?
-             // Since we are applying to _base (Source of Truth reflection), we just apply.
-             // If local has newer _adds, they will overlay _base in the view.
-             // So applying to _base is safe.
-             
-             self.apply_batch_to_base(&batch)?;
+        writer.write(&batch).map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+        writer.close().map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+
+        // 4. Upload New Base
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let base_filename = format!("{}_BASE_{}_{}.parquet", table_name, timestamp, uuid::Uuid::new_v4());
+        
+        self.storage.upload(&base_filename, &buffer)?;
+        tracing::info!("Uploaded New Base {} with {} items", base_filename, rows.len());
+
+        // 5. Delete Old Files
+        for file in &files_to_delete {
+            if file.ends_with(".parquet") {
+                self.storage.delete(&file)?;
+            }
         }
         
+        tracing::info!("Vacuum Complete. {} old files deleted.", files_to_delete.len());
+
         Ok(())
     }
 
-    fn apply_batch_to_base(&self, batch: &SyncBatch) -> Result<()> {
-        let mut client = self.db.get_client();
-        let mut transaction = client.transaction().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+    /// Task 3.3: Conflict Resolution (Parquet Download)
+    pub fn pull_and_apply(&self, table_name: &str) -> Result<()> {
+        let files = self.storage.list(table_name)?;
+        
+        let mut sorted_files = files.clone();
+        sorted_files.sort(); 
 
-        for row in &batch.operations {
-              let id = row.get("id").and_then(|v| v.as_str()).unwrap();
-              let data = row.get("data");
-              
-              let upsert_base = format!(
-                r#"
-                INSERT INTO "{}_base" (id, data)
-                VALUES ($1::uuid, $2)
-                ON CONFLICT (id) DO UPDATE SET 
-                    data = EXCLUDED.data, 
-                    updated_at = CURRENT_TIMESTAMP
-                "#, 
-                batch.table_name
-            );
-             let id_uuid = uuid::Uuid::parse_str(id).unwrap();
-             transaction.execute(&upsert_base, &[&id_uuid, &data])
-                .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to apply remote to base: {}", e)))?;
+        for file in sorted_files {
+             if !file.ends_with(".parquet") { continue; }
+             
+             // Task 3.4 VFS Demonstration
+             let full_data = self.storage.download(&file)?;
+             let file_len = full_data.len() as u64; 
+             
+             let remote_reader = RemoteParquetReader::new(self.storage.clone(), file.clone(), file_len);
+             
+             let builder = ParquetRecordBatchReaderBuilder::try_new(remote_reader)
+                  .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+             
+             let mut reader = builder.build()
+                  .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+
+             let mut client = self.db.get_client();
+             let mut transaction = client.transaction().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+
+             while let Some(batch_result) = reader.next() {
+                 let batch = batch_result.map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
+                 
+                 let ids = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+                 let datas = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+                 
+                 for i in 0..batch.num_rows() {
+                     let id_str = ids.value(i);
+                     let data_str = if datas.is_null(i) { "{}" } else { datas.value(i) };
+                     let data_json: serde_json::Value = serde_json::from_str(data_str).unwrap_or(serde_json::Value::Null);
+
+                     let upsert_base = format!(
+                        r#"
+                        INSERT INTO "{}_base" (id, data, updated_at)
+                        VALUES ($1::uuid, $2, CURRENT_TIMESTAMP)
+                        ON CONFLICT (id) DO UPDATE SET 
+                            data = EXCLUDED.data, 
+                            updated_at = CURRENT_TIMESTAMP
+                        "#, 
+                        table_name
+                    );
+                    
+                    let id_uuid = uuid::Uuid::parse_str(id_str).unwrap();
+                    transaction.execute(&upsert_base, &[&id_uuid, &data_json])
+                        .map_err(|e| crate::error::DBCenterError::QueryError(format!("Failed to apply parquet row to base: {}", e)))?;
+                 }
+             }
+
+             transaction.commit().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
         }
-
-        transaction.commit().map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        
         Ok(())
     }
 }

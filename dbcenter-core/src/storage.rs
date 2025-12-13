@@ -8,6 +8,8 @@ pub trait StorageAdapter {
     fn upload(&self, key: &str, data: &[u8]) -> Result<()>;
     fn download(&self, key: &str) -> Result<Vec<u8>>;
     fn list(&self, prefix: &str) -> Result<Vec<String>>;
+    fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>>;
+    fn delete(&self, key: &str) -> Result<()>;
 }
 
 /// Local Filesystem Implementation of StorageAdapter
@@ -40,9 +42,6 @@ impl StorageAdapter for LocalStorageAdapter {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        // Simple recursive list or just flat list if simple. 
-        // For this task, we assume keys are flat filenames or simple paths.
-        // We walk dir.
         let mut results = Vec::new();
         if self.root_path.exists() {
             for entry in walkdir::WalkDir::new(&self.root_path) {
@@ -58,5 +57,23 @@ impl StorageAdapter for LocalStorageAdapter {
             }
         }
         Ok(results)
+    }
+
+    fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>> {
+        use std::io::{Read, Seek};
+        let path = self.root_path.join(key);
+        let mut file = fs::File::open(&path).map_err(crate::error::DBCenterError::IoError)?;
+        file.seek(std::io::SeekFrom::Start(start)).map_err(crate::error::DBCenterError::IoError)?;
+        let mut buffer = vec![0u8; length as usize];
+        file.read_exact(&mut buffer).map_err(crate::error::DBCenterError::IoError)?;
+        Ok(buffer)
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        let path = self.root_path.join(key);
+        if path.exists() {
+            fs::remove_file(path).map_err(crate::error::DBCenterError::IoError)?;
+        }
+        Ok(())
     }
 }
