@@ -336,7 +336,15 @@ impl SyncEngine {
             Ok(())
         })();
         
-        // ...
+        // Signal heartbeat to stop
+        running.store(false, std::sync::atomic::Ordering::SeqCst);
+        
+        // Release Lock
+        if let Err(e) = self.storage.unlock(&lock_key, &worker_id) {
+             tracing::warn!("Failed to release vacuum lock: {}", e);
+        } else {
+             tracing::info!("Released vacuum lock");
+        }
         
         result
     }

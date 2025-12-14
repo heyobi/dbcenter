@@ -488,6 +488,98 @@ impl DBCenter {
         }
         Ok(())
     }
+    /// Create a builder for configuring DBCenter
+    #[staticmethod]
+    fn builder() -> DBCenterBuilder {
+        DBCenterBuilder::default()
+    }
+}
+
+/// Python Builder for DBCenter
+#[pyclass]
+#[derive(Default)]
+struct DBCenterBuilder {
+    path: Option<String>,
+    persist: bool,
+    service: bool,
+    host: Option<String>,
+    port: Option<u16>,
+    password: Option<String>,
+    postgres_version: Option<String>,
+    multi_user_sync_mode: bool,
+}
+
+#[pymethods]
+impl DBCenterBuilder {
+    #[new]
+    fn new() -> Self {
+        Self {
+            persist: true, // Default true
+            ..Default::default()
+        }
+    }
+
+    fn path(mut self_: PyRefMut<Self>, path: String) -> PyRefMut<Self> {
+        self_.path = Some(path);
+        self_
+    }
+
+    fn persist(mut self_: PyRefMut<Self>, persist: bool) -> PyRefMut<Self> {
+        self_.persist = persist;
+        self_
+    }
+
+    fn service(mut self_: PyRefMut<Self>, service: bool) -> PyRefMut<Self> {
+        self_.service = service;
+        self_
+    }
+
+    fn host(mut self_: PyRefMut<Self>, host: String) -> PyRefMut<Self> {
+        self_.host = Some(host);
+        self_
+    }
+
+    fn port(mut self_: PyRefMut<Self>, port: u16) -> PyRefMut<Self> {
+        self_.port = Some(port);
+        self_
+    }
+
+    fn password(mut self_: PyRefMut<Self>, password: String) -> PyRefMut<Self> {
+        self_.password = Some(password);
+        self_
+    }
+
+    fn postgres_version(mut self_: PyRefMut<Self>, version: String) -> PyRefMut<Self> {
+        self_.postgres_version = Some(version);
+        self_
+    }
+
+    fn multi_user_sync_mode(mut self_: PyRefMut<Self>, enabled: bool) -> PyRefMut<Self> {
+        self_.multi_user_sync_mode = enabled;
+        self_
+    }
+
+    fn build(self_: PyRef<Self>, py: Python<'_>) -> PyResult<DBCenter> {
+        let pg_ver_bound = if let Some(ver) = &self_.postgres_version {
+             Some(ver.clone().into_py(py).bind(py).clone())
+        } else {
+             None
+        };
+        
+        let pg_ver_ref = pg_ver_bound.as_ref();
+
+        DBCenter::new(
+            py,
+            self_.path.clone(),
+            self_.persist,
+            self_.service,
+            self_.host.clone(),
+            self_.port,
+            self_.password.clone(),
+            pg_ver_ref,
+            self_.multi_user_sync_mode,
+        )
+    }
 }
 
 // ============================================================================
