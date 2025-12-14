@@ -100,59 +100,77 @@ impl StorageAdapter for LocalStorageAdapter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-    
-        // Check if lock exists and is valid
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(lock) = serde_json::from_str::<LockFile>(&content) {
-                    if lock.expires_at > now {
-                        // Locked by someone else (or us from before)
-                         return Ok(false);
-                    }
-                    // Else: Expired. We can recover it (overwrite).
-                    tracing::warn!("Recovering stale lock: {}", key);
-                }
-            }
-        }
 
-        // Write new lock (Create or Overwrite if expired)
-        let lock = LockFile {
+        // 1. Prepare new lock content
+        let new_lock = LockFile {
             expires_at: now + ttl_ms,
             worker_id: worker_id.to_string(),
         };
-        let json = serde_json::to_string(&lock).map_err(crate::error::DBCenterError::SerializationError)?;
-        
-        // Ensure parent dir
+        let json_content = serde_json::to_string(&new_lock).map_err(crate::error::DBCenterError::SerializationError)?;
+
+        // 2. Ensure parent structure
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(crate::error::DBCenterError::IoError)?;
         }
-        
-        // Write atomic-ish (for local fs, direct write is fine for now, real systems use Exclusive Create)
-        // Ideally: open with create_new=true. If fails, read check expiry.
-        // Simplified for this task: Check above handles "Stale Lock Recovery".
-        // A race condition exists here between "Check" and "Write" but for local test it's acceptable.
-        // For distinct correctness:
-        // 1. Try CreateNew. If success -> OK.
-        // 2. If fail -> Read. If expired -> Overwrite. Else -> Fail.
-        
-        // Better implementation:
-        let file_res = fs::OpenOptions::new().write(true).create_new(true).open(&path);
-        if let Ok(_) = file_res {
-            // Created successfully
-             fs::write(&path, json).map_err(crate::error::DBCenterError::IoError)?;
-             return Ok(true);
-        } else {
-            // Exists. Check expiry.
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(existing) = serde_json::from_str::<LockFile>(&content) {
-                    if existing.expires_at > now {
-                        return Ok(false); // Valid lock held
+
+        // 3. Try to create atomically (Atomic Create)
+        let open_result = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // Crucial: fails if exists
+            .open(&path);
+
+        match open_result {
+            Ok(_) => {
+                // created successfully, now write content
+                // Note: file is open, but create_new doesn't write content. 
+                // We should technically use the file handle, but fs::write is easier and robust enough here since we own it.
+                // Or better: write to the handle.
+                fs::write(&path, json_content).map_err(crate::error::DBCenterError::IoError)?;
+                tracing::debug!("Lock acquired (created new): {}", key);
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // File exists. Check validity/expiry.
+                match fs::read_to_string(&path) {
+                    Ok(content) => {
+                         match serde_json::from_str::<LockFile>(&content) {
+                            Ok(existing_lock) => {
+                                if existing_lock.expires_at > now {
+                                    // Valid lock exists.
+                                    // logging::debug!("Lock collision: {} held by {} until {}", key, existing_lock.worker_id, existing_lock.expires_at);
+                                    return Ok(false);
+                                } else {
+                                    // Expired. Recover.
+                                    tracing::warn!("Recovering stale lock: {} (expired at {})", key, existing_lock.expires_at);
+                                    // Overwrite
+                                    fs::write(&path, json_content).map_err(crate::error::DBCenterError::IoError)?;
+                                    return Ok(true);
+                                }
+                            },
+                            Err(e) => {
+                                // Corrupt JSON. Recover/Overwrite.
+                                tracing::error!("Lock file {} corrupted (json error: {}). Overwriting.", key, e);
+                                fs::write(&path, json_content).map_err(crate::error::DBCenterError::IoError)?;
+                                return Ok(true);
+                            }
+                         }
+                    },
+                    Err(read_err) => {
+                        // Could not read (maybe partial write or permission?). 
+                        // If we can't read it to verify, we assume it's valid to be safe? 
+                        // Or we assume it's broken? 
+                        // "Dumb Storage" philosophy: If we can't verify it, we back off? 
+                        // But if it's a transient IO error, backing off is good.
+                        tracing::error!("Failed to read existing lock file {}: {}", key, read_err);
+                        return Ok(false); 
                     }
                 }
+            },
+            Err(e) => {
+                 // Other IO error
+                 tracing::error!("IO Error trying to create lock {}: {}", key, e);
+                 Err(crate::error::DBCenterError::IoError(e))
             }
-            // Expired or corrupt -> Overwrite
-            fs::write(&path, json).map_err(crate::error::DBCenterError::IoError)?;
-            return Ok(true);
         }
     }
 

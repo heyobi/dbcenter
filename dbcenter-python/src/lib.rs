@@ -1,6 +1,7 @@
 use dbcenter_core::DBCenter as CoreDBCenter;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PyModule};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -1190,6 +1191,17 @@ fn dbcenter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VectorStore>()?;
     m.add_class::<LocalStorageAdapter>()?;
     m.add_class::<SyncEngine>()?;
+    
+    #[pyfunction]
+    fn init_logging() -> PyResult<()> {
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+        Ok(())
+    }
+    m.add_function(wrap_pyfunction!(init_logging, m)?)?;
+    
     Ok(())
 }
 
