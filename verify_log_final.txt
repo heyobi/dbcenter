@@ -1,0 +1,13 @@
+
+--- Test 1: Lock Contention ---
+User A acquiring lock manually (8381cf85-f470-409f-bc9f-507abe7416ae)...
+User A holds the lock.
+User B starting vacuum... (should block/spin)
+User B vacuum COMPLETED in 0.02s
+User A holding lock for 2s...
+User A releasing lock...
+Test 1 Finished.
+
+--- Test 2: Stale Lock Recovery ---
+
+CRITICAL ERROR in Test Suite: [WinError 32] Dosya baþka bir iþlem tarafýndan kullanýldýðýndan bu iþlem dosyaya eriþemiyor: 'C:\\Users\\Dell\\Downloads\\dbcenter\\db_concurrency\\base\\5\\16412'

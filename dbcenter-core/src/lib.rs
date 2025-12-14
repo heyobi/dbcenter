@@ -524,10 +524,13 @@ impl DBCenter {
             .unwrap_or_else(|_| raw_path.to_path_buf());
 
         // Remove from registry first if exists
-        {
+        // CRITICAL: We must drop the instance OUTSIDE the lock to avoid deadlock
+        // (since drop() also tries to acquire the lock)
+        let _removed_instance = {
             let mut instances = INSTANCES.lock().map_err(|_| DBCenterError::LockError)?;
-            instances.remove(&path_buf);
-        }
+            instances.remove(&path_buf)
+        };
+        // _removed_instance drops here, referencing INSTANCES is safe now
 
         // Always use pg_ctl stop -w for reliable shutdown (blocks until complete)
         let postmaster_pid = path_buf.join("postmaster.pid");
@@ -551,6 +554,8 @@ impl DBCenter {
                 .arg("-m")
                 .arg("immediate") // immediate mode for force shutdown
                 .arg("-w") // wait for shutdown to complete
+                .arg("-t")
+                .arg("10") // Timeout after 10 seconds
                 .output();
 
             match output {

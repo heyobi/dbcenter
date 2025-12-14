@@ -315,17 +315,25 @@ class TestMultiUserSync(unittest.TestCase):
     def tearDownClass(cls):
         print("\n[Teardown Sync] Cleaning up...")
         for path in [cls.path_a, cls.path_b]:
+             print(f"[Teardown Sync] Removing {path}...")
              try:
+                 print(f"[Teardown Sync] Calling DBCenter.force_remove({path})...")
                  DBCenter.force_remove(path)
-                 if os.path.exists(path): shutil.rmtree(path)
+                 print(f"[Teardown Sync] force_remove returned for {path}.")
+                 if os.path.exists(path): 
+                     print(f"[Teardown Sync] shutil.rmtree({path})...")
+                     shutil.rmtree(path)
+                     print(f"[Teardown Sync] shutil.rmtree finished for {path}.")
              except Exception as e:
-                 print(f"Cleanup warning for {path}: {e}")
+                 print(f"[Teardown Sync] Cleanup warning for {path}: {e}")
         
         if os.path.exists(cls.storage_path):
             try:
+                print(f"[Teardown Sync] Removing storage {cls.storage_path}...")
                 shutil.rmtree(cls.storage_path)
+                print("[Teardown Sync] Storage removed.")
             except Exception as e:
-                print(f"Storage cleanup warning: {e}")
+                print(f"[Teardown Sync] Storage cleanup warning: {e}")
 
     def test_sync_flow(self):
         """Verify Offline Sync -> Cloud -> Online Sync -> Vacuum flow."""
@@ -399,6 +407,12 @@ class TestMultiUserSync(unittest.TestCase):
             self.assertEqual(count_final, 10, "Data loss detected after vacuum!")
 
         print("\n[Sync Test] Complete Success.")
+        
+        # Explicit cleanup to allow background threads to exit
+        if 'sync_b' in locals(): del sync_b
+        if 'sync_a' in locals(): del sync_a
+        print("[Sync Test] Waiting 2s for background threads to exit...")
+        time.sleep(2)
 
 
 if __name__ == '__main__':

@@ -200,7 +200,12 @@ impl SyncEngine {
 
         std::thread::spawn(move || {
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_secs(10)); // Refresh every 10s (TTL/3)
+                 // Sleep for 10s (TTL/3) but check for cancellation every 500ms
+                for _ in 0..20 {
+                    if !running_clone.load(std::sync::atomic::Ordering::SeqCst) { return; }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                
                 if !running_clone.load(std::sync::atomic::Ordering::SeqCst) { break; }
                 
                 match storage_clone.refresh_lock(&lock_key_clone, ttl_ms, &worker_id_clone) {

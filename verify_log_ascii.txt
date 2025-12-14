@@ -1,0 +1,15 @@
+
+--- Test 1: Lock Contention ---
+User A acquiring lock manually (4ab5d3a0-31aa-4492-86b9-31f487a05e51)...
+User A holds the lock.
+User B starting vacuum... (should block/spin)
+User B vacuum FAILED: Query execution error: Failed to ensure tables: Query execution error: Failed to create delta view: db error
+User A holding lock for 2s...
+User A releasing lock...
+Test 1 Finished.
+
+--- Test 2: Stale Lock Recovery ---
+Created stale lock (dead_worker).
+User B starting vacuum (should recover/overwrite lock immediately)...
+
+CRITICAL ERROR in Test Suite: Query execution error: Failed to ensure tables: Query execution error: Failed to create delta view: db error

@@ -45,7 +45,7 @@ def test_lock_contention():
         print("User B starting vacuum... (should block/spin)")
         # Create separate db/storage instances for thread safety emulation
         _storage = LocalStorageAdapter(storage_path)
-        with DBCenter(path=db_path) as _db:
+        with DBCenter(path=db_path, multi_user_sync=True) as _db:
              # Insert data to ensure vacuum works
             _db.collection("test_table").insert_one({"data": "foo"})
             _sync = SyncEngine(_db, _storage)
@@ -90,7 +90,7 @@ def test_stale_lock_recovery():
         
     print("Created stale lock (dead_worker).")
     
-    with DBCenter(path=db_path) as db:
+    with DBCenter(path=db_path, multi_user_sync=True) as db:
         db.collection("test_table").insert_one({"data": "bar"})
         sync = SyncEngine(db, storage)
         
@@ -115,7 +115,7 @@ def test_atomic_swap():
     db_path, storage_path = setup()
     
     # We want to check that after vacuum, we have a BASE file and NO .tmp files
-    with DBCenter(path=db_path) as db:
+    with DBCenter(path=db_path, multi_user_sync=True) as db:
         coll = db.collection("test_table")
         for i in range(10):
             coll.insert_one({"i": i})
