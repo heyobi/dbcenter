@@ -1,6 +1,6 @@
 use dbcenter_core::DBCenter;
 use dbcenter_core::storage::{LocalStorageAdapter, StorageAdapter};
-use dbcenter_core::sync_engine::SyncEngine;
+use dbcenter_core::sync_engine::{SyncEngine, SyncMode};
 use std::sync::Arc;
 use std::path::PathBuf;
 use std::thread;
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Pull from Shared Storage
         println!("User B pulling from storage (VFS & Conflict Resolution)...");
-        match sync2.pull_and_apply("notes") {
+        match sync2.pull_and_apply("notes", SyncMode::Full) {
             Ok(_) => println!("User B Apply Success."),
             Err(e) => println!("User B Apply Failed: {:?}", e),
         }

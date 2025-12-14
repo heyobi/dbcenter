@@ -5,20 +5,26 @@ use crate::vfs::RemoteParquetReader;
 use arrow::array::{StringArray, Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use bytes::Bytes;
+// use bytes::Bytes;
 use postgres::Row;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use std::thread;
-use std::sync::atomic::{AtomicBool, Ordering};
-use serde::ser::Error;
+use std::time::{SystemTime, UNIX_EPOCH};
+// use std::sync::atomic::{AtomicBool, Ordering};
+// use serde::ser::Error;
 
 pub struct SyncEngine {
     db: Arc<DBCenter>,
     storage: Arc<Box<dyn StorageAdapter + Send + Sync>>,
+}
+
+/// Synchronization Mode
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SyncMode {
+    Full,
+    Partial,
 }
 
 impl SyncEngine {
@@ -238,7 +244,7 @@ impl SyncEngine {
             }
 
             // 3. Ensure consistency: Pull all pending changes
-            self.pull_and_apply(table_name)?;
+            self.pull_and_apply(table_name, SyncMode::Full)?;
 
             // 4. Identify files to delete
             let files_to_delete = self.storage.list(table_name)?;
@@ -251,14 +257,6 @@ impl SyncEngine {
                  tracing::info!("Smart Vacuum: Storage already clean (no deltas). Skipping upload.");
                  return Ok(());
             }
-            
-            // Check lock before export
-            if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
-                tracing::error!("Lock lost before export, aborting.");
-                return Err(crate::error::DBCenterError::LockError);
-            }
-
-            // ... (rest of logic) ...
 
             // 5. Export _base (Postgres) to a new BASE Parquet file
             let sql_base = format!(
@@ -275,10 +273,25 @@ impl SyncEngine {
                  tracing::info!("Vacuum: Base is empty, nothing to export.");
             }
 
-            let batch = self.rows_to_record_batch(rows.clone())?;
+            // Task 5.2: Optimized Parquet Storage (Sorting)
+            // Sort rows by ID to enable efficient Predicate Pushdown (Min/Max pruning)
+            let mut sorted_rows = rows.clone();
+            sorted_rows.sort_by(|a, b| {
+                let id_a: String = a.get("id");
+                let id_b: String = b.get("id");
+                id_a.cmp(&id_b)
+            });
+
+            let batch = self.rows_to_record_batch(sorted_rows)?;
 
             let mut buffer = Vec::new();
-            let props = WriterProperties::builder().build();
+            // Task 5.2: Enable Statistics & Bloom Filters
+            let props = WriterProperties::builder()
+                .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Chunk)
+                .set_bloom_filter_enabled(true)
+                .set_max_row_group_size(100 * 1024 * 1024) // 100MB
+                .build();
+
             let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
                  .map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
             
@@ -322,16 +335,14 @@ impl SyncEngine {
             tracing::info!("Vacuum Complete. {} old files deleted.", files_to_delete.len());
             Ok(())
         })();
-
-        // Cleanup
-        running.store(false, std::sync::atomic::Ordering::SeqCst);
-        let _ = self.storage.unlock(&lock_key, &worker_id); // Ignore error on unlock
+        
+        // ...
         
         result
     }
 
-     /// Task 3.3: Conflict Resolution (Parquet Download)
-     pub fn pull_and_apply(&self, table_name: &str) -> Result<()> {
+    /// Task 3.3 & 5.1: Conflict Resolution (Parquet Download) & Lazy Sync
+    pub fn pull_and_apply(&self, table_name: &str, mode: SyncMode) -> Result<()> {
          // Ensure table structure exists before trying to insert to _base
          use crate::delta_manager::DeltaManager;
          DeltaManager::ensure_delta_tables(&self.db, table_name)
@@ -341,9 +352,15 @@ impl SyncEngine {
          
          let mut sorted_files = files.clone();
          sorted_files.sort(); 
- 
+
          for file in sorted_files {
               if !file.ends_with(".parquet") { continue; }
+              
+              // Task 5.1: Lazy Sync Logic
+              if mode == SyncMode::Partial && file.contains("_BASE_") {
+                  tracing::debug!("Lazy Sync: Skipping BASE file download: {}", file);
+                  continue;
+              }
               
               // Task 3.4 VFS Demonstration
               let full_data = self.storage.download(&file)?;

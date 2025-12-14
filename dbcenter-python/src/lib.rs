@@ -1273,11 +1273,18 @@ impl SyncEngine {
         })
     }
 
-    fn pull_and_apply(&self, table_name: &str) -> PyResult<()> {
+    #[pyo3(signature = (table_name, partial=false))]
+    fn pull_and_apply(&self, table_name: &str, partial: bool) -> PyResult<()> {
+        let mode = if partial {
+            dbcenter_core::sync_engine::SyncMode::Partial
+        } else {
+            dbcenter_core::sync_engine::SyncMode::Full
+        };
+
         Python::with_gil(|py| {
             py.allow_threads(|| {
                 self.inner
-                    .pull_and_apply(table_name)
+                    .pull_and_apply(table_name, mode)
                     .map_err(|e| PyException::new_err(e.to_string()))
             })
         })

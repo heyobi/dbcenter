@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::DBCenter;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use crate::query::QueryBuilder;
+// use crate::query::QueryBuilder;
 
 /// VectorStore - ChromaDB-style API for PostgreSQL (pgvector)
 pub struct VectorStore<'a> {

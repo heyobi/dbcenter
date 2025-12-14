@@ -1,4 +1,4 @@
-use crate::error::{DBCenterError, Result};
+// use crate::error::Result;
 use crate::storage::StorageAdapter;
 use bytes::Bytes;
 use parquet::file::reader::{ChunkReader, Length};
@@ -58,3 +58,5 @@ impl ChunkReader for RemoteParquetReader {
         Ok(Bytes::from(data))
     }
 }
+
+pub mod smart_reader;
