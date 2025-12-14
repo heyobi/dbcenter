@@ -243,6 +243,15 @@ impl SyncEngine {
             // 4. Identify files to delete
             let files_to_delete = self.storage.list(table_name)?;
             
+            // Smart Vacuum: optimization
+            // If there are no delta files, it means we only have base files (likely just one).
+            // In this case, we don't need to re-upload/compact.
+            let has_deltas = files_to_delete.iter().any(|f| f.contains("_DELTA_"));
+            if !has_deltas {
+                 tracing::info!("Smart Vacuum: Storage already clean (no deltas). Skipping upload.");
+                 return Ok(());
+            }
+            
             // Check lock before export
             if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
                 tracing::error!("Lock lost before export, aborting.");

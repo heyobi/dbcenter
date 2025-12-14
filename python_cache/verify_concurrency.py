@@ -41,7 +41,7 @@ def test_lock_contention():
             print("User B initializing DB... (May take seconds)")
             _storage = LocalStorageAdapter(storage_path)
             try:
-                with DBCenter(path=db_path, multi_user_sync=True) as _db:
+                with DBCenter(path=db_path, multi_user_sync=True,service=True) as _db:
                     _db.collection("test_table").insert_one({"data": "foo"})
                     _sync = SyncEngine(_db, _storage)
                     
