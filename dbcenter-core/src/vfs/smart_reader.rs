@@ -36,17 +36,28 @@ impl SmartParquetReader {
                                 let min = s.min_opt().map(|b| std::str::from_utf8(b.data()).unwrap_or("")).unwrap_or("");
                                 let max = s.max_opt().map(|b| std::str::from_utf8(b.data()).unwrap_or("")).unwrap_or("");
                                 
+                                println!("DEBUG: RG {} Column {} Stats: min='{}', max='{}', target='{}'", i, col.column_path().string(), min, max, target_id);
+
                                 if target_id >= min && target_id <= max {
+                                    println!("DEBUG: MATCH! RG {} contains target.", i);
                                     matching.push(i);
+                                } else {
+                                     println!("DEBUG: SKIP RG {}", i);
                                 }
                             }
-                            _ => { matching.push(i); }
+                            _ => { 
+                                println!("DEBUG: Non-ByteArray Stats for col {}, keeping RG {}", col.column_path().string(), i);
+                                matching.push(i); 
+                            }
                         }
+                    } else {
+                        println!("DEBUG: No stats for col {}, keeping RG {}", col.column_path().string(), i);
                     }
                 }
             }
 
             if !found_stat {
+                println!("DEBUG: ID column NOT FOUND in RG {}, keeping it.", i);
                 matching.push(i);
             }
         }
@@ -59,7 +70,7 @@ impl SmartParquetReader {
         let matching_groups = self.filter_row_groups_by_id(target_id);
         let mut results = Vec::new();
         
-        tracing::debug!("SmartScan: Matched {}/{} row groups for id={}", 
+        println!("DEBUG: SmartScan: Matched {}/{} row groups for id={}", 
             matching_groups.len(), self.reader.metadata().num_row_groups(), target_id);
 
         for rg_idx in matching_groups {
@@ -73,12 +84,19 @@ impl SmartParquetReader {
                  for record in iter {
                      let row = record.map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
                      // Double check predicate (since stats are just min/max)
-                     // Assuming col 0 is id
-                     // Complex row handling is tricky here without Arrow, relying on parquet::record::Row
-                     let id_val = row.get_column_iter().next().unwrap().1.to_string(); // Simplified
+                     // Find 'id' column explicitly
+                     let mut id_val = String::new();
+                     for (col_name, field) in row.get_column_iter() {
+                         if col_name == "id" {
+                             id_val = field.to_string();
+                             break;
+                         }
+                     }
+                     
                      // Removes quotes if string
                      let id_clean = id_val.trim_matches('"');
-                     
+                     println!("DEBUG: Row ID raw='{}', clean='{}', target='{}'", id_val, id_clean, target_id);
+
                      if id_clean == target_id {
                          results.push(row);
                      }
