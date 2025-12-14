@@ -48,6 +48,8 @@ Write-Host "`n[Rust] Running local delta verification..." -ForegroundColor Green
 $CoreDir = Join-Path $ProjectRoot "dbcenter-core"
 Push-Location $CoreDir
 try {
+    # Ensure previous test process is dead to release file locks
+    taskkill /F /IM test_delta.exe 2>$null
     cargo run --example test_delta
     if ($LASTEXITCODE -ne 0) { throw "Rust delta test failed on Windows" }
 }

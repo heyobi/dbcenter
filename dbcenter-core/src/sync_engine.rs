@@ -193,7 +193,12 @@ impl SyncEngine {
         // 2. Start Heartbeat Thread
         // We use an AtomicBool to signal the thread to stop.
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        
+        // Safety: If heartbeat fails, we MUST stop the main thread from modifying storage
+        let lock_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        
         let running_clone = running.clone();
+        let lock_lost_clone = lock_lost.clone();
         let storage_clone = self.storage.clone();
         let lock_key_clone = lock_key.clone();
         let worker_id_clone = worker_id.clone();
@@ -210,24 +215,41 @@ impl SyncEngine {
                 
                 match storage_clone.refresh_lock(&lock_key_clone, ttl_ms, &worker_id_clone) {
                     Ok(true) => tracing::debug!("Refreshed vacuum lock"),
-                    Ok(false) => tracing::warn!("Failed to refresh lock (lost ownership?)"),
-                    Err(e) => tracing::error!("Error refreshing lock: {}", e),
+                    Ok(false) => {
+                        tracing::warn!("Failed to refresh lock (lost ownership?) - Signaling Abort");
+                        lock_lost_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                        break; 
+                    }
+                    Err(e) => {
+                        tracing::error!("Error refreshing lock: {} - Signaling Abort", e);
+                        lock_lost_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
                 }
             }
         });
 
         // Ensure lock is released even if panic happens (Best effort with Drop guard would be better, but try-finally block here)
         let result = (|| -> Result<()> {
+            // Check lock before heavy lifting
+            if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::error!("Lock lost before vacuum start, aborting.");
+                return Err(crate::error::DBCenterError::LockError);
+            }
+
             // 3. Ensure consistency: Pull all pending changes
             self.pull_and_apply(table_name)?;
 
             // 4. Identify files to delete
             let files_to_delete = self.storage.list(table_name)?;
             
-            // Filter out the lock file itself if it appears in list (unlikely if filtered by extension, but list returns strings)
-            // Our list implementation checks for "starts_with prefix" logic. 
-            // If prefix is table_name, it might return table_name_vacuum.lock.
-            // We only delete .parquet files below, so it's safe.
+            // Check lock before export
+            if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::error!("Lock lost before export, aborting.");
+                return Err(crate::error::DBCenterError::LockError);
+            }
+
+            // ... (rest of logic) ...
 
             // 5. Export _base (Postgres) to a new BASE Parquet file
             let sql_base = format!(
@@ -254,6 +276,12 @@ impl SyncEngine {
             writer.write(&batch).map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
             writer.close().map_err(|e| crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(e.to_string())))?;
 
+            // CRITICAL CHECK: Before uploading/swapping, verify lock one last time
+            if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::error!("Lock lost before upload, aborting vacuum.");
+                return Err(crate::error::DBCenterError::LockError);
+            }
+
             // 6. Upload New Base (Atomic Swap)
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             let base_filename_final = format!("{}_BASE_{}_{}.parquet", table_name, timestamp, uuid::Uuid::new_v4());
@@ -262,6 +290,14 @@ impl SyncEngine {
             self.storage.upload(&base_filename_tmp, &buffer)?;
             tracing::info!("Uploaded temp base: {}", base_filename_tmp);
             
+            // Check again just before rename (the point of no return)
+            if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::error!("Lock lost before rename, aborting.");
+                // Try to clean up temp file?
+                let _ = self.storage.delete(&base_filename_tmp);
+                return Err(crate::error::DBCenterError::LockError);
+            }
+
             self.storage.rename(&base_filename_tmp, &base_filename_final)?;
              tracing::info!("Atomic swap complete: {}", base_filename_final);
 

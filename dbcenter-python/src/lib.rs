@@ -1252,20 +1252,32 @@ impl SyncEngine {
     }
 
     fn sync_table(&self, table_name: &str, limit: usize) -> PyResult<usize> {
-        self.inner
-            .sync_table(table_name, limit)
-            .map_err(|e| PyException::new_err(e.to_string()))
+        Python::with_gil(|py| {
+            py.allow_threads(|| {
+                self.inner
+                    .sync_table(table_name, limit)
+                    .map_err(|e| PyException::new_err(e.to_string()))
+            })
+        })
     }
 
     fn pull_and_apply(&self, table_name: &str) -> PyResult<()> {
-        self.inner
-            .pull_and_apply(table_name)
-            .map_err(|e| PyException::new_err(e.to_string()))
+        Python::with_gil(|py| {
+            py.allow_threads(|| {
+                self.inner
+                    .pull_and_apply(table_name)
+                    .map_err(|e| PyException::new_err(e.to_string()))
+            })
+        })
     }
 
     fn vacuum(&self, table_name: &str) -> PyResult<()> {
-        self.inner
-            .vacuum(table_name)
-            .map_err(|e| PyException::new_err(e.to_string()))
+        Python::with_gil(|py| {
+            py.allow_threads(|| {
+                self.inner
+                    .vacuum(table_name)
+                    .map_err(|e| PyException::new_err(e.to_string()))
+            })
+        })
     }
 }
