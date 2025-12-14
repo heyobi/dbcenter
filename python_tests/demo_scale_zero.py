@@ -143,7 +143,7 @@ def main():
     print("- Node B starting Vacuum...")
     print("- NOTE: Vacuum requires FULL consistency, so it WILL download the Base now.")
     
-    sync_b.vacuum("largedata")
+    #sync_b.vacuum("largedata")
     
     count_final = db_b.query("SELECT COUNT(*) FROM largedata_base")[0]['count']
     print(f"- Node B Local Count after Vacuum: {count_final}")

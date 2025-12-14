@@ -60,3 +60,4 @@ impl ChunkReader for RemoteParquetReader {
 }
 
 pub mod smart_reader;
+pub mod remote_file;

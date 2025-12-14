@@ -1391,4 +1391,15 @@ impl SyncEngine {
             })
         })
     }
+
+    fn smart_query(&self, table_name: &str, id: &str) -> PyResult<Vec<String>> {
+        Python::with_gil(|py| {
+            py.allow_threads(|| {
+                self.inner
+                    .scan_smart(table_name, id)
+                    .map(|rows| rows.into_iter().map(|v| v.to_string()).collect())
+                    .map_err(|e| PyException::new_err(e.to_string()))
+            })
+        })
+    }
 }

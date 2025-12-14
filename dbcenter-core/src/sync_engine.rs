@@ -244,6 +244,11 @@ impl SyncEngine {
             }
 
             // 3. Ensure consistency: Pull all pending changes
+            // TASK 5.4: VACUUM SAFETY GUARD
+            // We force SyncMode::Full. This guarantees that if we are in "Lazy Mode" (Partial),
+            // the _BASE_ file will be downloaded and applied to the local Postgres _base table
+            // BEFORE we attempt to merge. This prevents data loss (erasing history).
+            tracing::info!("Vacuum Safety: Enforcing SyncMode::Full to download Base file if missing...");
             self.pull_and_apply(table_name, SyncMode::Full)?;
 
             // 4. Identify files to delete
@@ -438,5 +443,70 @@ impl SyncEngine {
          }
          
          Ok(())
-     }
+    }
+
+    /// Task 5.3: Smart Scan (Predicate Pushdown)
+    /// Finds the latest BASE file and executes a smart scan on it using RemoteFile.
+    pub fn scan_smart(&self, table_name: &str, target_id: &str) -> crate::error::Result<Vec<serde_json::Value>> {
+        use crate::vfs::remote_file::RemoteFile;
+        use crate::vfs::smart_reader::SmartParquetReader;
+        
+        // 1. Find Base File
+        let files = self.storage.list(table_name)?;
+        let base_file = files.iter()
+            .filter(|f| f.contains("_BASE_") && f.ends_with(".parquet"))
+            .max(); // Lexicographical sort usually gives latest timestamp if named correctly
+            
+        let file_key = match base_file {
+            Some(f) => f,
+            None => return Ok(vec![]), // No base file, return empty
+        };
+        
+        let size = self.storage.size(file_key).unwrap_or(0); 
+        if size == 0 { return Ok(vec![]); }
+
+        // 2. Init Smart Reader
+        // Cache path: db_path/.meta/
+        let meta_dir = self.db.get_path().join(".meta");
+        std::fs::create_dir_all(&meta_dir).ok();
+        let meta_path = meta_dir.join(format!("{}.meta", file_key));
+
+        let remote_file = RemoteFile::new(
+            self.storage.clone(),
+            file_key.clone(),
+            size,
+            5 * 1024 * 1024, // 5MB Cache
+            Some(meta_path)
+        );
+        
+        let reader = SmartParquetReader::new(remote_file)?;
+        
+        // 3. Scan
+        let rows = reader.scan_for_id(target_id)?;
+        
+        // 4. Convert to JSON
+        let mut json_results = Vec::new();
+        for row in rows {
+            // Simplified conversion:
+            // We assume column 1 is "data" (JSON string) as per schema.
+            // Row -> (id, data, created, updated)
+            let mut row_json = serde_json::Map::new();
+            for (i, (_name, val)) in row.get_column_iter().enumerate() {
+                 let val_str = val.to_string();
+                 if i == 1 {
+                     let clean_str = val_str.trim_matches('"').replace("\\\"", "\"");
+                     if let Ok(v) = serde_json::from_str(&clean_str) {
+                         row_json.insert("data".to_string(), v);
+                     } else {
+                         row_json.insert("data_raw".to_string(), serde_json::Value::String(val_str));
+                     }
+                 } else {
+                     row_json.insert(format!("col_{}", i), serde_json::Value::String(val_str));
+                 }
+            }
+            json_results.push(serde_json::Value::Object(row_json));
+        }
+        
+        Ok(json_results)
+    }
 }

@@ -17,6 +17,7 @@ pub trait StorageAdapter {
     fn upload(&self, key: &str, data: &[u8]) -> Result<()>;
     fn download(&self, key: &str) -> Result<Vec<u8>>;
     fn list(&self, prefix: &str) -> Result<Vec<String>>;
+    fn size(&self, key: &str) -> Result<u64>;
     fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>>;
     fn delete(&self, key: &str) -> Result<()>;
     
@@ -72,6 +73,12 @@ impl StorageAdapter for LocalStorageAdapter {
             }
         }
         Ok(results)
+    }
+
+    fn size(&self, key: &str) -> Result<u64> {
+        let path = self.root_path.join(key);
+        let metadata = std::fs::metadata(path).map_err(|e| crate::error::DBCenterError::StorageError(e.to_string()))?;
+        Ok(metadata.len())
     }
 
     fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>> {

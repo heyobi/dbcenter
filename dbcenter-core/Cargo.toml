@@ -30,6 +30,7 @@ parquet.workspace = true
 arrow.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+lru = "0.12"
 
 [lib]
 name = "dbcenter_core"
