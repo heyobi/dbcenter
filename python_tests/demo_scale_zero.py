@@ -80,9 +80,16 @@ def main():
     # ---------------------------------------------------------
     print_header("2. NODE A: Lazy Insert (Scale-to-Zero)")
     
+    print("local adapter")
     stor_a = dbcenter.LocalStorageAdapter(STORAGE_DIR)
+
+    print("db_a")
     db_a = dbcenter.DBCenter(path=DB_A_PATH, multi_user_sync=True)
+
+    print("sync_a")
     sync_a = dbcenter.SyncEngine(db_a, stor_a)
+
+    print("col_a")
     col_a = db_a.collection("largedata")
 
     print("- Node A performing PARTIAL SYNC (partial=True)...")
@@ -143,7 +150,7 @@ def main():
     print("- Node B starting Vacuum...")
     print("- NOTE: Vacuum requires FULL consistency, so it WILL download the Base now.")
     
-    #sync_b.vacuum("largedata")
+    sync_b.vacuum("largedata")
     
     count_final = db_b.query("SELECT COUNT(*) FROM largedata_base")[0]['count']
     print(f"- Node B Local Count after Vacuum: {count_final}")

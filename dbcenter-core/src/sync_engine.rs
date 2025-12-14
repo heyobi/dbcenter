@@ -175,22 +175,23 @@ impl SyncEngine {
 
         // 1. Acquire Lock (Spin Wait)
         let mut acquired = false;
-        for _ in 0..20 { // Try for 10 seconds (20 * 500ms)
-            match self.storage.lock(&lock_key, ttl_ms, &worker_id) {
-                Ok(true) => {
-                    acquired = true;
-                    break;
-                }
-                Ok(false) => {
-                    tracing::info!("Vacuum lock held by another worker. Retrying...");
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                }
-                Err(e) => return Err(e),
-            }
+        let mut retries = 0;
+        let max_retries = 5;
+        
+        while retries < max_retries {
+             // Try to lock with a short TTL (e.g. 30s)
+             if self.storage.lock(&lock_key, 30_000, &worker_id)? {
+                 acquired = true;
+                 break;
+             }
+             
+             // Check if existing lock is stale (optional optimization: storage.lock handles expiry check)
+             tracing::warn!("Vacuum lock held by another process. Retrying in 1s... ({}/{})", retries + 1, max_retries);
+             std::thread::sleep(std::time::Duration::from_millis(1000));
+             retries += 1;
         }
 
         if !acquired {
-             tracing::error!("Could not acquire vacuum lock for {}", table_name);
              return Err(crate::error::DBCenterError::LockError);
         }
 
@@ -245,10 +246,40 @@ impl SyncEngine {
 
             // 3. Ensure consistency: Pull all pending changes
             // TASK 5.4: VACUUM SAFETY GUARD
-            // We force SyncMode::Full. This guarantees that if we are in "Lazy Mode" (Partial),
-            // the _BASE_ file will be downloaded and applied to the local Postgres _base table
-            // BEFORE we attempt to merge. This prevents data loss (erasing history).
-            tracing::info!("Vacuum Safety: Enforcing SyncMode::Full to download Base file if missing...");
+            // We force SyncMode::Full to prevent data loss.
+            tracing::info!("Vacuum Safety: Enforcing SyncMode::Full...");
+            
+            // 3.0 SAFETY CHECK: Disk Space
+            // Calculate required space for Base files
+            let remote_files = self.storage.list(table_name)?;
+            let mut required_bytes: u64 = 0;
+            for file in &remote_files {
+                if file.contains("_BASE_") {
+                    if let Ok(size) = self.storage.size(file) {
+                        required_bytes += size;
+                    }
+                }
+            }
+            
+            // Allow 2x overhead for merge process
+            let needed_space = required_bytes * 2;
+            
+            if needed_space > 0 {
+                if let Ok(mem_info) = sys_info::disk_info() {
+                     // Check free bytes (converting KB to Bytes if needed, crate dependent)
+                     // sys_info::disk_info returns DiskInfo { total: u64, free: u64 } in KB
+                     let free_bytes = mem_info.free * 1024;
+                     if free_bytes < needed_space {
+                         tracing::error!("Vacuum Aborted: Not enough disk space. Needed: {} B, Free: {} B", needed_space, free_bytes);
+                         return Err(crate::error::DBCenterError::StorageError("Not enough disk space for safe vacuum".to_string()));
+                     }
+                     tracing::info!("Disk Space Verified for Safety: {} MB available.", free_bytes / 1024 / 1024);
+                } else {
+                     tracing::warn!("Could not verify disk space: sys_info failed. Proceeding with caution.");
+                }
+            }
+
+            // 3.1 Execute Force Pull
             self.pull_and_apply(table_name, SyncMode::Full)?;
 
             // 4. Identify files to delete
