@@ -48,10 +48,10 @@ $RemoteHost = "maltepe"
 $RemoteBuildDir = "/tmp/dbcenter_build"
 
 # Create Dist Directory
-if (Test-Path $DistDir) { Remove-Item -Path $DistDir -Recurse -Force }
-New-Item -ItemType Directory -Path $DistDir | Out-Null
-New-Item -ItemType Directory -Path "$DistDir/windows" | Out-Null
-New-Item -ItemType Directory -Path "$DistDir/linux" | Out-Null
+if (Test-Path $DistDir) { Remove-Item -Path $DistDir -Recurse -Force -ErrorAction SilentlyContinue }
+New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
+New-Item -ItemType Directory -Path "$DistDir/windows" -Force | Out-Null
+New-Item -ItemType Directory -Path "$DistDir/linux" -Force | Out-Null
 
 Write-Host "Build started..." -ForegroundColor Green
 

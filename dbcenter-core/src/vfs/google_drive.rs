@@ -182,9 +182,9 @@ impl GoogleDriveAdapter {
     }
     
     fn ensure_folder(&self, parent_id: &str, name: &str) -> Result<String> {
+        println!("DEBUG: ensure_folder name='{}' parent='{}'", name, parent_id);
         let token = self.token.lock().unwrap();
         // Check if exists
-        // Query: name = 'name' and 'parent_id' in parents and trashed = false
         let query = format!("name = '{}' and '{}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false", name, parent_id);
         let url = format!("https://www.googleapis.com/drive/v3/files?q={}", urlencoding::encode(&query));
         
@@ -201,6 +201,7 @@ impl GoogleDriveAdapter {
         let list: FileList = resp.json().map_err(|e| DBCenterError::StorageError(e.to_string()))?;
         
         if let Some(f) = list.files.first() {
+            // println!("DEBUG: Found existing folder '{}': {}", name, f.id.as_ref().unwrap());
             return Ok(f.id.clone().unwrap());
         }
         
@@ -219,10 +220,12 @@ impl GoogleDriveAdapter {
             .map_err(|e| DBCenterError::StorageError(e.to_string()))?;
             
         let created: DriveFile = create_resp.json().map_err(|e| DBCenterError::StorageError(format!("Create folder error: {}", e)))?;
+        // println!("DEBUG: Created folder '{}': {}", name, created.id.as_ref().unwrap());
         Ok(created.id.unwrap())
     }
 
     fn resolve_path(&self, key: &str, create_parents: bool) -> Result<(String, Option<String>)> {
+        println!("DEBUG: resolve_path key='{}' create_parents={}", key, create_parents);
         let parts: Vec<&str> = key.split('/').filter(|s| !s.is_empty()).collect();
         if parts.is_empty() { return Ok((self.root_folder_id.clone(), None)); }
         
@@ -244,6 +247,7 @@ impl GoogleDriveAdapter {
                     if let Some(f) = files.first() {
                         current_parent = f["id"].as_str().unwrap().to_string();
                     } else {
+                        // println!("DEBUG: resolve_path folder not found '{}'", folder_name);
                         return Err(DBCenterError::StorageError(format!("Folder not found: {}", folder_name)));
                     }
                 }
@@ -258,6 +262,7 @@ impl GoogleDriveAdapter {
         let json: serde_json::Value = resp.json().map_err(|e| DBCenterError::StorageError(e.to_string()))?;
         let file_id = json["files"].as_array().and_then(|arr| arr.first()).and_then(|f| f["id"].as_str()).map(|s| s.to_string());
         
+        // println!("DEBUG: resolve_path result parent='{}' file='{:?}'", current_parent, file_id);
         Ok((current_parent, file_id))
     }
 }
@@ -329,20 +334,53 @@ impl StorageAdapter for GoogleDriveAdapter {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-         let clean_prefix = prefix.trim_end_matches('/');
-         let (_, folder_id_opt) = self.resolve_path(clean_prefix, false).ok().unwrap_or((String::new(), None));
+         println!("DEBUG: list prefix='{}'", prefix);
+         let prefix = prefix.trim_start_matches('/'); 
+         
+         let (parent_path, name_prefix) = if let Some(idx) = prefix.rfind('/') {
+             (&prefix[..idx], &prefix[idx+1..])
+         } else {
+             ("", prefix)
+         };
+         
+         let (parent_id, _) = self.resolve_path(parent_path, false)?;
+         // Note: resolve_path returns (last_parent_id, file_id). We care about parent_id.
+         // Wait, resolve_path returns (parent_of_target, target_id).
+         // If target is a folder, is it returned as target_id?
+         // resolve_path logic:
+         // Iterate folders. current_parent updates.
+         // Finally checks for file in current_parent.
+         // If we want the ID of a FOLDER 'foo', resolve_path('foo') returns (root, id_of_foo).
+         // So if parent_path is "subfolder", we want ID of "subfolder".
+         // resolve_path("subfolder") -> (root, id_of_subfolder).
+         
+         // If parent_path is empty, we want root_folder_id.
+         let search_folder_id = if parent_path.is_empty() {
+             self.root_folder_id.clone()
+         } else {
+             let (_, id_opt) = self.resolve_path(parent_path, false)?;
+             id_opt.ok_or_else(|| DBCenterError::StorageError(format!("Parent folder not found: {}", parent_path)))?
+         };
+
+         let token = self.token.lock().unwrap();
+         let query = format!("'{}' in parents and trashed = false", search_folder_id);
+         let url = format!("https://www.googleapis.com/drive/v3/files?q={}", urlencoding::encode(&query));
+         let resp = self.client.get(&url).header("Authorization", format!("Bearer {}", token)).send().map_err(|e| DBCenterError::StorageError(e.to_string()))?;
+         let json: serde_json::Value = resp.json().map_err(|e| DBCenterError::StorageError(e.to_string()))?;
+         
+         println!("DEBUG: list json='{:?}'", json);
          
          let mut results = Vec::new();
-         if let Some(folder_id) = folder_id_opt {
-             let token = self.token.lock().unwrap();
-             let query = format!("'{}' in parents and trashed = false", folder_id);
-             let url = format!("https://www.googleapis.com/drive/v3/files?q={}", urlencoding::encode(&query));
-             let resp = self.client.get(&url).header("Authorization", format!("Bearer {}", token)).send().map_err(|e| DBCenterError::StorageError(e.to_string()))?;
-             let json: serde_json::Value = resp.json().map_err(|e| DBCenterError::StorageError(e.to_string()))?;
-             if let Some(files) = json["files"].as_array() {
-                 for f in files {
-                     if let Some(name) = f["name"].as_str() {
-                         results.push(format!("{}/{}", clean_prefix, name));
+         if let Some(files) = json["files"].as_array() {
+             for f in files {
+                 if let Some(name) = f["name"].as_str() {
+                     if name.starts_with(name_prefix) {
+                         let key = if parent_path.is_empty() {
+                             name.to_string()
+                         } else {
+                             format!("{}/{}", parent_path, name)
+                         };
+                         results.push(key);
                      }
                  }
              }

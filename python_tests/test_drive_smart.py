@@ -6,6 +6,7 @@ import uuid
 from dbcenter import DBCenter, GoogleDriveAdapter, SyncEngine, init_logging
 
 # Enable logging
+os.environ["RUST_LOG"] = "debug"
 init_logging()
 
 CLIENT_SECRET_FILE = "client_secret.json"
@@ -82,6 +83,13 @@ def main():
     # Run Vacuum to create a OPTIMIZED Base File with statistics
     print("Running Vacuum to create optimized Base file on Drive...")
     sync.vacuum(collection_name)
+    
+    # Verify files on Drive
+    print("Verifying files on Google Drive...")
+    files = storage.list(collection_name)
+    print(f"Files in '{collection_name}': {files}")
+    if not any(f.endswith(".parquet") for f in files):
+        print("WARNING: No parquet files found in Drive!")
     
     # 4. Scale Zero: Reset Local State (Simulate Edge Node B / Cold Start)
     print("\n--- Phase 2: Cold Start (Edge Node B) ---")
