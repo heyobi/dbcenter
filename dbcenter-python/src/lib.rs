@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, StorageAdapter};
+use dbcenter_core::vfs::google_drive::GoogleDriveAdapter as CoreGoogleDriveAdapter;
 use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
 
 #[cfg(unix)]
@@ -1282,6 +1283,7 @@ fn dbcenter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GeoCollection>()?;
     m.add_class::<VectorStore>()?;
     m.add_class::<LocalStorageAdapter>()?;
+    m.add_class::<GoogleDriveAdapter>()?;
     m.add_class::<SyncEngine>()?;
     
     #[pyfunction]
@@ -1340,6 +1342,30 @@ impl LocalStorageAdapter {
     }
 }
 
+/// Python wrapper for GoogleDriveAdapter
+#[pyclass]
+struct GoogleDriveAdapter {
+    inner: Arc<Box<dyn StorageAdapter + Send + Sync>>,
+    root_folder_name: String,
+}
+
+#[pymethods]
+impl GoogleDriveAdapter {
+    #[new]
+    fn new(credential_path: String, root_folder_name: String) -> PyResult<Self> {
+        let adapter = CoreGoogleDriveAdapter::new(&credential_path, &root_folder_name)
+             .map_err(|e| PyException::new_err(e.to_string()))?;
+        Ok(GoogleDriveAdapter {
+            inner: Arc::new(Box::new(adapter)),
+            root_folder_name,
+        })
+    }
+    
+    fn list(&self, prefix: &str) -> PyResult<Vec<String>> {
+        self.inner.list(prefix).map_err(|e| PyException::new_err(e.to_string()))
+    }
+}
+
 /// Python wrapper for SyncEngine
 #[pyclass]
 struct SyncEngine {
@@ -1349,10 +1375,18 @@ struct SyncEngine {
 #[pymethods]
 impl SyncEngine {
     #[new]
-    fn new(db: &DBCenter, storage: &LocalStorageAdapter) -> Self {
-        SyncEngine {
-            inner: CoreSyncEngine::new(db.inner.clone(), storage.inner.clone()),
-        }
+    fn new(db: &DBCenter, storage: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let adapter: Arc<Box<dyn StorageAdapter + Send + Sync>> = if let Ok(local) = storage.extract::<PyRef<LocalStorageAdapter>>() {
+            local.inner.clone()
+        } else if let Ok(drive) = storage.extract::<PyRef<GoogleDriveAdapter>>() {
+             drive.inner.clone()
+        } else {
+            return Err(PyValueError::new_err("storage must be LocalStorageAdapter or GoogleDriveAdapter"));
+        };
+
+        Ok(SyncEngine {
+            inner: CoreSyncEngine::new(db.inner.clone(), adapter),
+        })
     }
 
     fn sync_table(&self, table_name: &str, limit: usize) -> PyResult<usize> {
