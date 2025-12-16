@@ -595,6 +595,13 @@ impl DBCenter {
                             .output();
                     }
 
+                    // Wait for process to actually terminate
+                    if process::wait_for_pid(pid, 10) {
+                         tracing::info!("Process {} terminated confirmed.", pid);
+                    } else {
+                         tracing::warn!("Process {} still running after force kill attempt.", pid);
+                    }
+
                     // Clean up postmaster.pid
                     let _ = std::fs::remove_file(&postmaster_pid);
                 }

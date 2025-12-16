@@ -145,10 +145,12 @@ fn main() {
 
     log!(log_file, "Python durumu: {}", python_status);
 
-    // FORCE_REMOVE means Python handles cleanup
-    if python_status.eq_ignore_ascii_case("FORCE_REMOVE") {
-        log!(log_file, "FORCE_REMOVE - watcher cikiyor");
-        return;
+    // FORCE_REMOVE means we should kill process and ensure it's dead
+    // Previously we returned here, letting Python handle it, but Python didn't wait for shared memory release.
+    // Now we stay and use our robust wait logic.
+    let is_force_remove = python_status.eq_ignore_ascii_case("FORCE_REMOVE");
+    if is_force_remove {
+        log!(log_file, "FORCE_REMOVE - temizlik icin devam ediliyor...");
     }
 
     // Clean path
@@ -217,8 +219,11 @@ fn main() {
     }
 
     // Handle persist flag
-    if !config.persist {
-        log!(log_file, "persist=false - dosyalar siliniyor");
+    // Override: If FORCE_REMOVE, we always delete (unless service mode? No, force remove is explicit)
+    let should_delete = !config.persist || is_force_remove;
+    
+    if should_delete {
+        log!(log_file, "persist=false veya FORCE_REMOVE - dosyalar siliniyor");
         if data_dir.exists() {
             match std::fs::remove_dir_all(&data_dir) {
                 Ok(_) => log!(log_file, "Dosyalar silindi"),
@@ -230,4 +235,9 @@ fn main() {
     }
 
     log!(log_file, "=== Temizlik tamamlandi ===");
+    
+    // Handshake signal for Python
+    if is_force_remove {
+        println!("CLEANUP_DONE");
+    }
 }

@@ -6,7 +6,7 @@ import uuid
 from dbcenter import DBCenter, GoogleDriveAdapter, SyncEngine, init_logging
 
 # Enable logging
-os.environ["RUST_LOG"] = "debug"
+#os.environ["RUST_LOG"] = "debug"
 init_logging()
 
 CLIENT_SECRET_FILE = "client_secret.json"

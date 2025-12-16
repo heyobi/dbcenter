@@ -374,6 +374,24 @@ impl DBCenter {
     /// Force remove a database directory after shutdown
     #[staticmethod]
     fn force_remove(path: &str) -> PyResult<()> {
+        let path_obj = Path::new(path);
+        
+        // 1. Kill potential Watcher process first!
+        // This prevents the "Old Watcher executes delayed cleanup on New DB" race condition.
+        let watcher_pid_file = path_obj.join("watcher.pid");
+        if watcher_pid_file.exists() {
+            if let Ok(content) = fs::read_to_string(&watcher_pid_file) {
+                 if let Ok(pid) = content.trim().parse::<u32>() {
+                     tracing::info!("Found old watcher.pid: {}. Killing it...", pid);
+                     #[cfg(windows)]
+                     let _ = Command::new("taskkill").args(&["/F", "/PID", &pid.to_string()]).output();
+                     #[cfg(unix)]
+                     let _ = Command::new("kill").args(&["-9", &pid.to_string()]).output();
+                 }
+            }
+            let _ = fs::remove_file(watcher_pid_file);
+        }
+
         let path_key = normalize_path_for_registry(path);
         for handle in take_all_watchers_for_path(&path_key) {
             if let Err(err) = notify_watcher(&handle, "FORCE_REMOVE") {
@@ -680,6 +698,13 @@ fn start_watcher_process(
             child.id()
         );
     }
+
+    // Write watcher.pid
+    let watcher_pid_path = Path::new(data_dir).join("watcher.pid");
+    if let Err(e) = std::fs::write(&watcher_pid_path, child.id().to_string()) {
+        tracing::warn!("Failed to write watcher.pid: {}", e);
+    }
+
     Ok(WatcherProcess {
         child,
         stdin: Some(stdin_handle),

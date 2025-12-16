@@ -632,3 +632,17 @@ pub fn is_process_running_global(pid: u32) -> bool {
             .unwrap_or(false)
     }
 }
+
+/// Wait for a process to terminate
+pub fn wait_for_pid(pid: u32, timeout_secs: u64) -> bool {
+    let start = Instant::now();
+    let timeout = Duration::from_secs(timeout_secs);
+    
+    while start.elapsed() < timeout {
+        if !is_process_running_global(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
