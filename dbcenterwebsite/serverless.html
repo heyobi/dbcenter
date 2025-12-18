@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB.Center Architecture Visual</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
+        body {
+            background-color: #0d1117; /* GitHub Dark BG */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .card {
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            border: 1px solid #30363d;
+            border-radius: 24px;
+            padding: 40px;
+            width: 800px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Başlık Alanı */
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .logo {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: -1px;
+            margin-bottom: 10px;
+        }
+
+        .logo span { color: #58a6ff; } /* Mavi vurgu */
+
+        .tagline {
+            color: #8b949e;
+            font-size: 1.1rem;
+            font-weight: 400;
+        }
+
+        /* Mimari Alanı */
+        .architecture {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+            z-index: 2;
+        }
+
+        /* Kutular */
+        .box {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 25px;
+            width: 280px;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .box:hover {
+            transform: translateY(-5px);
+            border-color: #58a6ff;
+            box-shadow: 0 10px 30px rgba(88, 166, 255, 0.1);
+        }
+
+        .box-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        .box-title {
+            color: #fff;
+            font-weight: 600;
+            font-size: 1.2rem;
+            margin-bottom: 8px;
+        }
+
+        .box-desc {
+            color: #8b949e;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+
+        /* Sol Taraf (Edge) */
+        .local .box-icon { color: #2ea043; } /* Yeşil */
+        .local .highlight { color: #2ea043; font-weight: bold; }
+
+        /* Sağ Taraf (Cloud) */
+        .cloud .box-icon { color: #58a6ff; } /* Mavi */
+        .cloud .highlight { color: #58a6ff; font-weight: bold; }
+
+        /* Bağlantı Oku (Sync) */
+        .connector {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #8b949e;
+            font-size: 0.8rem;
+            position: relative;
+        }
+
+        .line {
+            height: 2px;
+            width: 100%;
+            background: linear-gradient(90deg, #2ea043, #58a6ff);
+            margin: 10px 0;
+            position: relative;
+        }
+
+        .line::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            background: #fff;
+            border-radius: 50%;
+            animation: sync 2s infinite ease-in-out;
+        }
+
+        @keyframes sync {
+            0% { left: 0%; opacity: 0; }
+            50% { opacity: 1; }
+            100% { left: 100%; opacity: 0; }
+        }
+
+        .sync-text {
+            background: #0d1117;
+            padding: 5px 10px;
+            border-radius: 20px;
+            border: 1px solid #30363d;
+            font-weight: 600;
+            color: #c9d1d9;
+            z-index: 1;
+        }
+
+        /* Alt Bilgi */
+        .footer {
+            margin-top: 40px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .badge {
+            background: rgba(56, 139, 253, 0.15);
+            color: #58a6ff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .badge.rust { color: #ff7b72; background: rgba(255, 123, 114, 0.15); }
+        .badge.py { color: #e3b341; background: rgba(227, 179, 65, 0.15); }
+
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <div class="header">
+            <div class="logo">db<span>.center</span></div>
+            <div class="tagline">PostgreSQL Power. SQLite Simplicity. Serverless Scale.</div>
+        </div>
+
+        <div class="architecture">
+            <!-- Sol Taraf -->
+            <div class="box local">
+                <div class="box-icon"><i class="fa-solid fa-microchip"></i></div>
+                <div class="box-title">Edge Device</div>
+                <div class="box-desc">
+                    Embedded PostgreSQL Engine<br>
+                    <span class="highlight">0.1ms Latency</span> (In-Memory)<br>
+                    Python / Go / Rust App
+                </div>
+            </div>
+
+            <!-- Bağlantı -->
+            <div class="connector">
+                <div class="sync-text">Lazy Sync & Delta Layer</div>
+                <div class="line"></div>
+                <div>Parquet Format</div>
+            </div>
+
+            <!-- Sağ Taraf -->
+            <div class="box cloud">
+                <div class="box-icon"><i class="fa-solid fa-cloud"></i></div>
+                <div class="box-title">Object Storage</div>
+                <div class="box-desc">
+                    Google Drive / S3<br>
+                    <span class="highlight">Scale-to-Zero</span> Cost<br>
+                    Infinite Storage History
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <span class="badge rust">Rust Core</span>
+            <span class="badge py">Python Bindings</span>
+            <span class="badge">PostGIS</span>
+            <span class="badge">pgvector</span>
+        </div>
+    </div>
+
+</body>
+</html>

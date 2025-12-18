@@ -1,0 +1,1675 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB.Center - Investor & Technical Deck</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;500;800&family=JetBrains+Mono:wght@400;700&display=swap');
+
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: rgba(22, 27, 34, 0.95);
+            --accent-blue: #58a6ff;
+            --accent-green: #2ea043;
+            --accent-red: #ff7b72;
+            --accent-purple: #bc8cff;
+            --text-main: #c9d1d9;
+            --text-muted: #8b949e;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            /* Taşmaları gizle */
+            height: 100vh;
+            width: 100vw;
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(88, 166, 255, 0.05) 0%, transparent 20%),
+                radial-gradient(circle at 90% 80%, rgba(46, 160, 67, 0.05) 0%, transparent 20%);
+        }
+
+        /* --- SLIDER ENGINE (DÜZELTİLDİ) --- */
+        .slider-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .slide {
+            position: absolute;
+            /* Slaytları üst üste bindir */
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 40px;
+
+            /* Varsayılan olarak gizli */
+            opacity: 0;
+            visibility: hidden;
+            z-index: 1;
+
+            transition: opacity 0.6s ease-in-out, visibility 0.6s;
+            background-color: var(--bg-color);
+            /* Arka plan çakışmasını önle */
+            background-image: inherit;
+            /* Body pattern'ini koru */
+        }
+
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+            z-index: 10;
+            /* En öne getir */
+        }
+
+        /* --- NAVIGATION --- */
+        .nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: #fff;
+            padding: 15px;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 100;
+            transition: all 0.3s;
+            font-size: 1.2rem;
+        }
+
+        .nav-btn:hover {
+            background: var(--accent-blue);
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .prev-btn {
+            left: 20px;
+        }
+
+        .next-btn {
+            right: 20px;
+        }
+
+        .progress-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 6px;
+            background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+            transition: width 0.3s ease-out;
+            z-index: 100;
+            box-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
+        }
+
+        /* --- TYPOGRAPHY & COMPONENTS --- */
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 20px;
+            letter-spacing: -1px;
+            text-align: center;
+            text-shadow: 0 0 30px rgba(88, 166, 255, 0.2);
+        }
+
+        h2 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 30px;
+            color: #fff;
+            text-align: center;
+        }
+
+        .highlight {
+            color: var(--accent-blue);
+            background: linear-gradient(120deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            max-width: 700px;
+            text-align: center;
+            line-height: 1.6;
+            margin-bottom: 40px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            width: 80%;
+            max-width: 1200px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 30px;
+            width: 90%;
+            max-width: 1400px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid #30363d;
+            border-radius: 16px;
+            padding: 30px;
+            /* backdrop-filter performansı artırmak için kaldırıldı veya basitleştirildi */
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s, border-color 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent-blue);
+        }
+
+        /* --- ANIMATIONS --- */
+        @keyframes float {
+            0% {
+                transform: translateY(0px);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+
+            100% {
+                transform: translateY(0px);
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(30px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .anim-float {
+            animation: float 4s ease-in-out infinite;
+        }
+
+        /* Slide aktif olduğunda animasyonlar çalışsın */
+        .slide.active .anim-slide-up {
+            animation: slideIn 0.8s ease-out forwards;
+        }
+
+        /* Başlangıçta gizle ki animasyonla gelsin */
+        .anim-slide-up {
+            opacity: 0;
+        }
+
+        /* --- SLIDE 1: INTRO --- */
+        .hero-logo {
+            font-size: 6rem;
+            font-weight: 900;
+            margin-bottom: 10px;
+        }
+
+        .hero-logo span {
+            color: var(--accent-blue);
+        }
+
+        .code-pill {
+            background: #1f2428;
+            border: 1px solid #30363d;
+            padding: 10px 25px;
+            border-radius: 50px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            color: var(--accent-green);
+            margin-top: 30px;
+            display: inline-block;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        /* --- SLIDE 2: PROBLEM VS SOLUTION --- */
+        .vs-container {
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+            gap: 40px;
+            width: 90%;
+            max-width: 1200px;
+        }
+
+        .vs-box {
+            text-align: left;
+            padding: 40px;
+            border-radius: 20px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .vs-old {
+            background: rgba(255, 123, 114, 0.08);
+            border: 1px solid var(--accent-red);
+        }
+
+        .vs-new {
+            background: rgba(46, 160, 67, 0.08);
+            border: 1px solid var(--accent-green);
+            box-shadow: 0 0 30px rgba(46, 160, 67, 0.1);
+        }
+
+        .vs-icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+        }
+
+        .vs-box ul li {
+            margin-bottom: 12px;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* --- SLIDE 3: ARCHITECTURE --- */
+        .arch-diagram {
+            position: relative;
+            width: 80%;
+            height: 350px;
+            background: #161b22;
+            border-radius: 20px;
+            border: 1px solid #30363d;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            margin-bottom: 30px;
+            box-shadow: inset 0 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        .arch-node {
+            width: 200px;
+            padding: 25px;
+            background: #0d1117;
+            border: 2px solid #30363d;
+            border-radius: 16px;
+            text-align: center;
+            z-index: 2;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .connection-line {
+            position: absolute;
+            height: 6px;
+            background: linear-gradient(90deg, #333, #333);
+            width: 40%;
+            top: 50%;
+            left: 30%;
+            z-index: 1;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .data-packet {
+            position: absolute;
+            width: 40%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, var(--accent-blue), transparent);
+            animation: moveData 2s linear infinite;
+        }
+
+        @keyframes moveData {
+            0% {
+                left: -40%;
+            }
+
+            100% {
+                left: 100%;
+            }
+        }
+
+        /* --- SLIDE 4: BENCHMARK --- */
+        .chart-container {
+            width: 80%;
+            max-width: 900px;
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+
+        .bar-group {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .bar-label {
+            width: 180px;
+            text-align: right;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .bar-bg {
+            flex: 1;
+            background: #21262d;
+            height: 50px;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        .bar-fill {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 15px;
+            font-weight: bold;
+            color: #0d1117;
+            font-size: 1rem;
+            width: 0;
+            transition: width 1.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .fill-red {
+            background: var(--accent-red);
+            opacity: 0.8;
+        }
+
+        .fill-green {
+            background: linear-gradient(90deg, var(--accent-green), #42e663);
+            box-shadow: 0 0 20px rgba(66, 230, 99, 0.4);
+        }
+
+        /* --- SLIDE 6: ROADMAP --- */
+        .timeline {
+            display: flex;
+            justify-content: space-between;
+            width: 90%;
+            max-width: 1000px;
+            position: relative;
+            margin-top: 40px;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            top: 25px;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: #30363d;
+            z-index: 0;
+            border-radius: 2px;
+        }
+
+        .milestone {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            flex: 1;
+            padding: 0 10px;
+        }
+
+        .dot {
+            width: 54px;
+            height: 54px;
+            background: #0d1117;
+            border: 4px solid var(--accent-blue);
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1.2rem;
+            color: var(--accent-blue);
+            transition: all 0.3s;
+            box-shadow: 0 0 0 5px var(--bg-color);
+        }
+
+        .milestone:hover .dot {
+            background: var(--accent-blue);
+            color: #fff;
+            box-shadow: 0 0 25px rgba(88, 166, 255, 0.6);
+            transform: scale(1.1);
+        }
+
+        .milestone h4 {
+            margin-bottom: 10px;
+            color: #fff;
+        }
+
+        /* --- RESPONSIVE FIX --- */
+
+        /* Tablet (1000px ve altı) */
+        @media (max-width: 1000px) {
+            h1 {
+                font-size: 2.5rem;
+            }
+
+            h2 {
+                font-size: 2rem;
+            }
+
+            .grid-3 {
+                grid-template-columns: 1fr;
+            }
+
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+
+            .vs-container {
+                flex-direction: column;
+            }
+
+            .arch-diagram {
+                flex-direction: column;
+                height: auto;
+                padding: 40px 0;
+            }
+
+            .connection-line {
+                width: 6px;
+                height: 50px;
+                position: relative;
+                margin: 20px auto;
+                overflow: hidden;
+                top: auto;
+                left: auto;
+            }
+
+            .data-packet {
+                position: absolute;
+                width: 100%;
+                height: 40%;
+                left: 0;
+                background: linear-gradient(180deg, transparent, var(--accent-blue), transparent);
+                animation: moveDataVert 2s linear infinite;
+            }
+
+            @keyframes moveDataVert {
+                0% {
+                    top: -40%;
+                }
+
+                100% {
+                    top: 100%;
+                }
+            }
+
+            .timeline {
+                flex-direction: column;
+                gap: 30px;
+            }
+
+            .timeline::before {
+                width: 4px;
+                height: 100%;
+                top: 0;
+                left: 27px;
+                right: auto;
+            }
+
+            .milestone {
+                text-align: left;
+                padding-left: 80px;
+            }
+
+            .dot {
+                position: absolute;
+                left: 0;
+            }
+        }
+
+        /* Mobil (768px ve altı) */
+        @media (max-width: 768px) {
+            body {
+                overflow: hidden;
+            }
+
+            .slide {
+                padding: 15px;
+                height: 100vh;
+                overflow: hidden;
+            }
+
+            h1 {
+                font-size: 1.6rem;
+                line-height: 1.2;
+                margin-bottom: 10px;
+            }
+
+            h2 {
+                font-size: 1.3rem;
+                margin-bottom: 10px;
+            }
+
+            .hero-logo {
+                font-size: 2.8rem;
+                margin-bottom: 5px;
+            }
+
+            p.subtitle {
+                font-size: 0.9rem;
+                margin-bottom: 15px;
+                padding: 0 10px;
+                line-height: 1.4;
+            }
+
+            .code-pill {
+                font-size: 0.8rem;
+                padding: 8px 16px;
+                margin-top: 15px;
+            }
+
+            /* Navigation Buttons */
+            .nav-btn {
+                padding: 10px;
+                font-size: 0.9rem;
+            }
+
+            .prev-btn {
+                left: 5px;
+            }
+
+            .next-btn {
+                right: 5px;
+            }
+
+            /* Cards */
+            .card {
+                padding: 12px;
+            }
+
+            .grid-3,
+            .grid-2 {
+                width: 95%;
+                gap: 10px;
+            }
+
+            /* VS Container */
+            .vs-container {
+                width: 95%;
+                gap: 10px;
+            }
+
+            .vs-container>div[style*="font-size: 3rem"] {
+                font-size: 1.5rem !important;
+            }
+
+            .vs-box {
+                padding: 15px 12px;
+            }
+
+            .vs-icon {
+                font-size: 1.8rem;
+                margin-bottom: 10px;
+            }
+
+            .vs-box h3 {
+                font-size: 0.9rem;
+                margin-bottom: 8px;
+            }
+
+            .vs-box ul {
+                margin-top: 10px !important;
+            }
+
+            .vs-box ul li {
+                font-size: 0.75rem !important;
+                margin-bottom: 5px !important;
+            }
+
+            /* Architecture */
+            .arch-diagram {
+                width: 95%;
+                padding: 20px 15px;
+                height: auto;
+                margin-bottom: 15px;
+            }
+
+            .arch-node {
+                width: 130px;
+                padding: 15px 10px;
+            }
+
+            .arch-node i {
+                font-size: 1.8rem !important;
+            }
+
+            .arch-node>div {
+                font-size: 0.75rem !important;
+            }
+
+            /* Grid-3 */
+            .grid-3 .card {
+                padding: 10px 8px;
+            }
+
+            .grid-3 .card h4,
+            .grid-3 .card h3 {
+                font-size: 0.8rem !important;
+                margin-bottom: 5px !important;
+            }
+
+            .grid-3 .card p {
+                font-size: 0.7rem !important;
+                line-height: 1.3 !important;
+            }
+
+            /* Chart Container */
+            .chart-container {
+                width: 95%;
+                gap: 15px;
+                margin-bottom: 15px;
+            }
+
+            .bar-label {
+                width: 90px;
+                font-size: 0.75rem;
+            }
+
+            .bar-bg {
+                height: 35px;
+            }
+
+            .bar-fill {
+                font-size: 0.7rem;
+                padding-right: 8px;
+            }
+
+            /* Business Model Cards */
+            .grid-3 .card:nth-child(2) {
+                transform: scale(1) !important;
+                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3) !important;
+            }
+
+            .grid-3 .card>div[style*="font-size: 3rem"],
+            .grid-3 .card>div[style*="font-size: 2rem"] {
+                font-size: 1.3rem !important;
+                margin: 8px 0 !important;
+            }
+
+            .grid-3 .card ul {
+                font-size: 0.7rem !important;
+                padding-left: 15px !important;
+            }
+
+            /* Timeline */
+            .timeline {
+                width: 95%;
+                margin-top: 20px;
+            }
+
+            .dot {
+                width: 45px;
+                height: 45px;
+                font-size: 0.9rem;
+            }
+
+            .milestone h4 {
+                font-size: 0.85rem;
+            }
+
+            .milestone p {
+                font-size: 0.7rem !important;
+            }
+
+            .milestone>div:last-child {
+                font-size: 0.7rem !important;
+            }
+
+            /* End Slide */
+            .slide:last-child>div:last-child {
+                gap: 15px;
+            }
+
+            .slide:last-child .card {
+                padding: 10px 15px;
+            }
+        }
+
+        /* Portrait (Dikey Ekran) */
+        @media (max-width: 768px) and (orientation: portrait) {
+
+            /* VS Container - dikey */
+            .vs-container {
+                flex-direction: column;
+                gap: 5px;
+            }
+
+            .vs-container>div[style*="font-size: 3rem"] {
+                font-size: 1.2rem !important;
+                padding: 0;
+                margin: 0;
+            }
+
+            .vs-box {
+                padding: 10px 12px;
+            }
+
+            .vs-box ul li {
+                font-size: 0.65rem !important;
+                margin-bottom: 2px !important;
+            }
+
+            .vs-icon {
+                font-size: 1.3rem;
+                margin-bottom: 5px;
+            }
+
+            .vs-box h3 {
+                font-size: 0.8rem;
+                margin-bottom: 5px;
+            }
+
+            /* Architecture - dikey */
+            .arch-diagram {
+                flex-direction: column;
+                padding: 12px 8px;
+                gap: 0;
+                margin-bottom: 8px;
+            }
+
+            .arch-node {
+                width: 65%;
+                max-width: 180px;
+                padding: 8px 6px;
+            }
+
+            .arch-node i {
+                font-size: 1.3rem !important;
+                margin-bottom: 3px !important;
+            }
+
+            .arch-node>div {
+                font-size: 0.6rem !important;
+            }
+
+            .connection-line {
+                width: 5px !important;
+                height: 25px !important;
+                position: relative !important;
+                margin: 0 auto !important;
+                overflow: hidden !important;
+                top: auto !important;
+                left: auto !important;
+            }
+
+            .data-packet {
+                position: absolute !important;
+                width: 100% !important;
+                height: 50% !important;
+                left: 0 !important;
+                background: linear-gradient(180deg, transparent, var(--accent-blue), transparent) !important;
+                animation: moveDataVert 2s linear infinite !important;
+            }
+
+            @keyframes moveDataVert {
+                0% {
+                    top: -50%;
+                }
+
+                100% {
+                    top: 100%;
+                }
+            }
+
+            /* Grid-3 - dikey ve kompakt */
+            .grid-3 {
+                grid-template-columns: 1fr !important;
+                gap: 5px !important;
+            }
+
+            .grid-3 .card {
+                padding: 8px 10px;
+            }
+
+            .grid-3 .card h3,
+            .grid-3 .card h4 {
+                font-size: 0.7rem !important;
+                margin-bottom: 3px !important;
+            }
+
+            .grid-3 .card p {
+                font-size: 0.55rem !important;
+                line-height: 1.2 !important;
+                margin-bottom: 5px !important;
+            }
+
+            .grid-3 .card>div[style*="font-size: 3rem"],
+            .grid-3 .card>div[style*="font-size: 2rem"] {
+                font-size: 1rem !important;
+                margin: 3px 0 !important;
+            }
+
+            .grid-3 .card hr {
+                margin-bottom: 4px !important;
+            }
+
+            .grid-3 .card ul {
+                font-size: 0.55rem !important;
+                padding-left: 10px !important;
+                line-height: 1.3 !important;
+            }
+
+            .grid-3 .card ul li {
+                margin-bottom: 1px;
+            }
+
+            /* Timeline - dikey ve kompakt */
+            .timeline {
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 10px;
+            }
+
+            .timeline::before {
+                width: 3px;
+                height: calc(100% - 40px);
+                top: 20px;
+                left: 18px;
+                right: auto;
+            }
+
+            .milestone {
+                text-align: left;
+                padding-left: 50px;
+                position: relative;
+            }
+
+            .dot {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 36px;
+                height: 36px;
+                font-size: 0.7rem;
+            }
+
+            .milestone h4 {
+                font-size: 0.7rem;
+            }
+
+            .milestone p {
+                font-size: 0.55rem !important;
+                margin-bottom: 2px;
+                line-height: 1.2;
+            }
+
+            .milestone>div:last-child {
+                font-size: 0.55rem !important;
+                margin-top: 2px !important;
+            }
+
+            /* End Slide - dikey */
+            .slide:last-child>div:last-child {
+                flex-direction: column;
+            }
+        }
+
+        /* Çok küçük portrait ekranlar (375x667 gibi) */
+        @media (max-width: 400px) and (orientation: portrait) {
+            h2 {
+                font-size: 1.1rem;
+                margin-bottom: 8px;
+            }
+
+            p.subtitle {
+                font-size: 0.75rem;
+                margin-bottom: 10px;
+                display: none;
+            }
+
+            /* Architecture için subtitle göster ama küçük */
+            .slide:nth-child(3) p.subtitle {
+                display: block;
+                font-size: 0.7rem;
+            }
+
+            .vs-box {
+                padding: 8px 10px;
+            }
+
+            .vs-box ul li {
+                font-size: 0.6rem !important;
+            }
+
+            .vs-icon {
+                font-size: 1.1rem;
+                margin-bottom: 4px;
+            }
+
+            .vs-box h3 {
+                font-size: 0.75rem;
+            }
+
+            /* Architecture daha kompakt */
+            .arch-diagram {
+                padding: 8px 5px;
+                margin-bottom: 5px;
+            }
+
+            .arch-node {
+                width: 60%;
+                max-width: 150px;
+                padding: 6px 5px;
+            }
+
+            .arch-node i {
+                font-size: 1.1rem !important;
+            }
+
+            .arch-node>div {
+                font-size: 0.55rem !important;
+            }
+
+            .connection-line {
+                height: 18px !important;
+            }
+
+            /* Grid kartları çok kompakt */
+            .grid-3 .card {
+                padding: 6px 8px;
+            }
+
+            .grid-3 .card h3 {
+                font-size: 0.65rem !important;
+            }
+
+            .grid-3 .card>div[style*="font-size: 3rem"],
+            .grid-3 .card>div[style*="font-size: 2rem"] {
+                font-size: 0.9rem !important;
+                margin: 2px 0 !important;
+            }
+
+            .grid-3 .card p {
+                display: none;
+            }
+
+            .grid-3 .card hr {
+                margin-bottom: 3px !important;
+            }
+
+            .grid-3 .card ul {
+                font-size: 0.5rem !important;
+                padding-left: 8px !important;
+            }
+
+            /* Timeline daha kompakt */
+            .timeline {
+                gap: 8px;
+                margin-top: 8px;
+            }
+
+            .dot {
+                width: 30px;
+                height: 30px;
+                font-size: 0.6rem;
+            }
+
+            .milestone {
+                padding-left: 42px;
+            }
+
+            .milestone h4 {
+                font-size: 0.65rem;
+            }
+
+            .milestone p {
+                font-size: 0.5rem !important;
+            }
+
+            .milestone>div:last-child {
+                font-size: 0.5rem !important;
+            }
+
+            .timeline::before {
+                left: 15px;
+            }
+        }
+
+        /* Landscape (Yatay Ekran) */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .slide {
+                padding: 10px 15px;
+            }
+
+            h2 {
+                font-size: 1.2rem;
+                margin-bottom: 8px;
+            }
+
+            p.subtitle {
+                font-size: 0.8rem;
+                margin-bottom: 10px;
+            }
+
+            /* VS Container - yatay */
+            .vs-container {
+                flex-direction: row;
+            }
+
+            .vs-box {
+                padding: 10px 8px;
+            }
+
+            .vs-box ul li {
+                font-size: 0.65rem !important;
+            }
+
+            /* Architecture - yatay */
+            .arch-diagram {
+                flex-direction: row;
+                padding: 15px;
+            }
+
+            .arch-node {
+                width: 120px;
+                padding: 10px;
+            }
+
+            .connection-line {
+                width: 40px !important;
+                height: 4px !important;
+                position: relative !important;
+                margin: 0 10px !important;
+                overflow: hidden !important;
+                top: auto !important;
+                left: auto !important;
+            }
+
+            /* Grid-3 - yatay */
+            .grid-3 {
+                grid-template-columns: repeat(3, 1fr) !important;
+                gap: 8px;
+            }
+
+            .grid-3 .card {
+                padding: 8px 6px;
+            }
+
+            /* Timeline - yatay */
+            .timeline {
+                flex-direction: row;
+                margin-top: 10px;
+            }
+
+            .timeline::before {
+                height: 4px;
+                width: auto;
+                top: 22px;
+                left: 10%;
+                right: 10%;
+            }
+
+            .milestone {
+                text-align: center;
+                padding-left: 0;
+            }
+
+            .dot {
+                position: relative;
+                left: auto;
+                width: 44px;
+                height: 44px;
+            }
+
+            /* End Slide - yatay */
+            .slide:last-child>div:last-child {
+                flex-direction: row;
+            }
+        }
+
+        /* Küçük Mobil (480px ve altı) */
+        @media (max-width: 480px) {
+            .slide {
+                padding: 15px 10px;
+            }
+
+            h1 {
+                font-size: 1.6rem;
+            }
+
+            h2 {
+                font-size: 1.3rem;
+            }
+
+            .hero-logo {
+                font-size: 2.5rem;
+            }
+
+            p.subtitle {
+                font-size: 0.9rem;
+            }
+
+            .code-pill {
+                font-size: 0.75rem;
+                padding: 6px 14px;
+            }
+
+            .nav-btn {
+                padding: 10px;
+                font-size: 0.9rem;
+            }
+
+            .prev-btn {
+                left: 5px;
+            }
+
+            .next-btn {
+                right: 5px;
+            }
+
+            .card {
+                padding: 15px;
+                border-radius: 12px;
+            }
+
+            .vs-box {
+                padding: 20px 15px;
+                border-radius: 15px;
+            }
+
+            .vs-icon {
+                font-size: 1.8rem;
+                margin-bottom: 15px;
+            }
+
+            .vs-box h3 {
+                font-size: 1rem;
+            }
+
+            .vs-box ul li {
+                font-size: 0.85rem;
+                margin-bottom: 8px;
+            }
+
+            .arch-node {
+                width: 140px;
+                padding: 15px 10px;
+            }
+
+            .arch-node i {
+                font-size: 1.8rem !important;
+                margin-bottom: 10px !important;
+            }
+
+            .arch-node>div:first-of-type {
+                font-size: 1rem !important;
+            }
+
+            .arch-node>div:nth-of-type(2),
+            .arch-node>div:nth-of-type(3) {
+                font-size: 0.8rem !important;
+            }
+
+            .bar-label {
+                width: 80px;
+                font-size: 0.75rem;
+                text-align: left;
+            }
+
+            .bar-bg {
+                height: 35px;
+            }
+
+            .bar-fill {
+                font-size: 0.7rem;
+                padding-right: 8px;
+            }
+
+            .bar-group {
+                gap: 10px;
+            }
+
+            /* Business Model */
+            .grid-3 .card h3 {
+                font-size: 1rem;
+            }
+
+            .grid-3 .card>div:nth-of-type(1) {
+                font-size: 2rem !important;
+            }
+
+            .grid-3 .card ul {
+                font-size: 0.8rem !important;
+                padding-left: 15px !important;
+            }
+
+            /* Timeline */
+            .dot {
+                width: 44px;
+                height: 44px;
+                font-size: 1rem;
+            }
+
+            .milestone {
+                padding-left: 65px;
+            }
+
+            .milestone h4 {
+                font-size: 0.95rem;
+            }
+
+            .milestone p {
+                font-size: 0.8rem !important;
+            }
+        }
+
+        /* Çok Küçük Mobil (360px ve altı) */
+        @media (max-width: 360px) {
+            h1 {
+                font-size: 1.4rem;
+            }
+
+            h2 {
+                font-size: 1.15rem;
+            }
+
+            .hero-logo {
+                font-size: 2rem;
+            }
+
+            p.subtitle {
+                font-size: 0.85rem;
+            }
+
+            .nav-btn {
+                padding: 8px;
+                font-size: 0.8rem;
+            }
+
+            .arch-node {
+                width: 120px;
+                padding: 12px 8px;
+            }
+
+            .bar-label {
+                width: 70px;
+                font-size: 0.7rem;
+            }
+
+            .vs-box ul li {
+                font-size: 0.8rem;
+                gap: 6px;
+            }
+
+            .vs-box ul li i {
+                font-size: 0.9rem;
+            }
+        }
+
+        /* Touch cihazlar için hover efektlerini kaldır */
+        @media (hover: none) {
+            .card:hover {
+                transform: none;
+            }
+
+            .milestone:hover .dot {
+                background: inherit;
+                transform: none;
+                box-shadow: 0 0 0 5px var(--bg-color);
+            }
+
+            .nav-btn:hover {
+                transform: translateY(-50%);
+            }
+        }
+
+        /* Landscape mobil için özel ayar */
+        @media (max-height: 500px) and (orientation: landscape) {
+            .slide {
+                padding: 15px;
+                min-height: auto;
+            }
+
+            h1 {
+                font-size: 1.5rem;
+                margin-bottom: 10px;
+            }
+
+            h2 {
+                font-size: 1.3rem;
+                margin-bottom: 15px;
+            }
+
+            .hero-logo {
+                font-size: 2.5rem;
+                margin-bottom: 5px;
+            }
+
+            p.subtitle {
+                margin-bottom: 15px;
+            }
+
+            .grid-3 {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 10px;
+            }
+
+            .vs-container {
+                flex-direction: row;
+                gap: 15px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="progress-bar" id="progressBar"></div>
+    <button class="nav-btn prev-btn" onclick="moveSlide(-1)"><i class="fas fa-chevron-left"></i></button>
+    <button class="nav-btn next-btn" onclick="moveSlide(1)"><i class="fas fa-chevron-right"></i></button>
+
+    <div class="slider-container" id="slider">
+
+        <!-- SLIDE 1: INTRO -->
+        <div class="slide active">
+            <div class="hero-logo anim-float">db<span>.center</span></div>
+            <h1>The <span class="highlight">Unbundled</span> Data Stack</h1>
+            <p class="subtitle">PostgreSQL Gücü. SQLite Sadeliği. Serverless Ölçeklenebilirliği.<br>Edge ve AI
+                uygulamaları için geliştirilmiş yeni nesil veri motoru.</p>
+            <div class="code-pill">pip install dbcenter</div>
+        </div>
+
+        <!-- SLIDE 2: THE PROBLEM -->
+        <div class="slide">
+            <h2>Sorun: Modern Veri Yığını Çok Karmaşık</h2>
+            <div class="vs-container anim-slide-up">
+                <div class="vs-box vs-old">
+                    <div class="vs-icon"><i class="fas fa-server"></i></div>
+                    <h3>Geleneksel (RDS/Supabase)</h3>
+                    <ul style="list-style: none; margin-top: 20px; color: #ff7b72;">
+                        <li><i class="fas fa-times-circle"></i> 7/24 Sunucu Maliyeti (Idle Cost)</li>
+                        <li><i class="fas fa-times-circle"></i> Ağ Gecikmesi (Latency)</li>
+                        <li><i class="fas fa-times-circle"></i> Karmaşık DevOps & Kurulum</li>
+                        <li><i class="fas fa-times-circle"></i> Vektör için ayrı DB gerekir</li>
+                    </ul>
+                </div>
+                <div
+                    style="font-size: 3rem; color: #8b949e; display: flex; align-items: center; justify-content: center; font-weight: 800;">
+                    VS
+                </div>
+                <div class="vs-box vs-new">
+                    <div class="vs-icon"><i class="fas fa-bolt"></i></div>
+                    <h3>db.center Çözümü</h3>
+                    <ul style="list-style: none; margin-top: 20px; color: #2ea043;">
+                        <li><i class="fas fa-check-circle"></i> Scale-to-Zero (Kullanmadığında $0)</li>
+                        <li><i class="fas fa-check-circle"></i> 0.1ms Yerel Okuma Hızı</li>
+                        <li><i class="fas fa-check-circle"></i> Kurulumsuz (Just Code)</li>
+                        <li><i class="fas fa-check-circle"></i> Native Vector & GIS Gömülü</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 3: ARCHITECTURE (Visual) -->
+        <div class="slide">
+            <h2>Delta Layer Architecture</h2>
+            <p class="subtitle">Lokal hız ile Bulut kapasitesini birleştiren hibrit motor.</p>
+
+            <div class="arch-diagram anim-slide-up">
+                <div class="arch-node" style="border-color: var(--accent-green);">
+                    <i class="fas fa-laptop-code"
+                        style="font-size: 3rem; color: var(--accent-green); margin-bottom: 15px;"></i>
+                    <div style="font-weight: bold; font-size: 1.2rem;">Edge Device</div>
+                    <div style="font-size: 0.9rem; color: #8b949e; margin-top: 5px;">Python/Rust App</div>
+                    <div style="font-size: 0.9rem; color: var(--accent-green); font-weight: bold;">In-Memory Engine
+                    </div>
+                </div>
+
+                <div class="connection-line">
+                    <div class="data-packet"></div>
+                </div>
+
+                <div class="arch-node" style="border-color: var(--accent-blue);">
+                    <i class="fas fa-cloud"
+                        style="font-size: 3rem; color: var(--accent-blue); margin-bottom: 15px;"></i>
+                    <div style="font-weight: bold; font-size: 1.2rem;">Dumb Storage</div>
+                    <div style="font-size: 0.9rem; color: #8b949e; margin-top: 5px;">S3 / Google Drive</div>
+                    <div style="font-size: 0.9rem; color: var(--accent-blue); font-weight: bold;">Parquet Deltas</div>
+                </div>
+            </div>
+
+            <div class="grid-3 anim-slide-up" style="margin-top: 30px; text-align: center; animation-delay: 0.2s;">
+                <div class="card">
+                    <h4 style="margin-bottom: 10px; color: #fff;"><i class="fas fa-file-zipper"
+                            style="color: var(--accent-purple);"></i> Parquet</h4>
+                    <p style="font-size: 0.9rem; color: #8b949e;">Veriler sıkıştırılmış, Columnar formatta tutulur.
+                        JSON'dan 50x hızlıdır.</p>
+                </div>
+                <div class="card">
+                    <h4 style="margin-bottom: 10px; color: #fff;"><i class="fas fa-sync"
+                            style="color: var(--accent-blue);"></i> Lazy Sync</h4>
+                    <p style="font-size: 0.9rem; color: #8b949e;">300 GB veriyi indirmeden akıllı sorgulama (Smart
+                        Reader) yapabilir.</p>
+                </div>
+                <div class="card">
+                    <h4 style="margin-bottom: 10px; color: #fff;"><i class="fas fa-lock"
+                            style="color: var(--accent-green);"></i> Locking</h4>
+                    <p style="font-size: 0.9rem; color: #8b949e;">Heartbeat mekanizması ile dosya çakışmalarını %100
+                        önler.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 4: PERFORMANCE -->
+        <div class="slide">
+            <h2>Performans: Rust Core Gücü</h2>
+            <p class="subtitle">Python string operasyonlarına göre native hız.</p>
+
+            <div class="chart-container anim-slide-up">
+                <div class="bar-group">
+                    <div class="bar-label">FuzzyWuzzy (Py)</div>
+                    <div class="bar-bg">
+                        <div class="bar-fill fill-red" style="width: 5%;">1x</div>
+                    </div>
+                </div>
+                <div class="bar-group">
+                    <div class="bar-label">db.center (Rust)</div>
+                    <div class="bar-bg">
+                        <div class="bar-fill fill-green" data-width="95%">93x Hız 🚀</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-container anim-slide-up" style="animation-delay: 0.2s;">
+                <div class="bar-group">
+                    <div class="bar-label">ChromaDB</div>
+                    <div class="bar-bg">
+                        <div class="bar-fill fill-red" style="width: 35%;">1x (Vector)</div>
+                    </div>
+                </div>
+                <div class="bar-group">
+                    <div class="bar-label">db.center</div>
+                    <div class="bar-bg">
+                        <div class="bar-fill fill-green" data-width="85%">2.5x Hız ⚡</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 5: BUSINESS MODEL -->
+        <div class="slide">
+            <h2>Gelir Modeli: Open Core</h2>
+            <div class="grid-3 anim-slide-up">
+                <div class="card" style="border-top: 4px solid var(--accent-green);">
+                    <h3 style="color: var(--accent-green);">Open Source</h3>
+                    <div style="font-size: 3rem; font-weight: 800; margin: 15px 0;">$0</div>
+                    <p style="font-size: 0.9rem; color: #8b949e; margin-bottom: 20px;">Bireysel geliştiriciler ve yerel
+                        kullanım.</p>
+                    <hr style="border: 0; border-top: 1px solid #30363d; margin-bottom: 15px;">
+                    <ul
+                        style="text-align: left; font-size: 0.9rem; padding-left: 20px; color: var(--text-main); line-height: 1.8;">
+                        <li>Local Engine</li>
+                        <li>Google Drive Sync</li>
+                        <li>Vector / GIS</li>
+                    </ul>
+                </div>
+
+                <div class="card"
+                    style="border-top: 4px solid var(--accent-blue); transform: scale(1.05); z-index: 2; box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
+                    <h3 style="color: var(--accent-blue);">Pro / Cloud</h3>
+                    <div style="font-size: 3rem; font-weight: 800; margin: 15px 0;">$19<span
+                            style="font-size: 1rem; color: #8b949e;">/ay</span></div>
+                    <p style="font-size: 0.9rem; color: #8b949e; margin-bottom: 20px;">Takımlar ve Production
+                        uygulamalar.</p>
+                    <hr style="border: 0; border-top: 1px solid #30363d; margin-bottom: 15px;">
+                    <ul
+                        style="text-align: left; font-size: 0.9rem; padding-left: 20px; color: var(--text-main); line-height: 1.8;">
+                        <li>Turbo Lock Server</li>
+                        <li>Scale-to-Zero Proxy</li>
+                        <li>Managed S3 Storage</li>
+                    </ul>
+                </div>
+
+                <div class="card" style="border-top: 4px solid var(--accent-purple);">
+                    <h3 style="color: var(--accent-purple);">Enterprise</h3>
+                    <div style="font-size: 2rem; font-weight: 800; margin: 22px 0;">Custom</div>
+                    <p style="font-size: 0.9rem; color: #8b949e; margin-bottom: 20px;">Kurumsal şirketler ve on-premise.
+                    </p>
+                    <hr style="border: 0; border-top: 1px solid #30363d; margin-bottom: 15px;">
+                    <ul
+                        style="text-align: left; font-size: 0.9rem; padding-left: 20px; color: var(--text-main); line-height: 1.8;">
+                        <li>Encryption at Rest</li>
+                        <li>SLA Support</li>
+                        <li>Kubernetes Operator</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 6: ROADMAP & VISION -->
+        <div class="slide">
+            <h2>Gelecek Vizyonu</h2>
+            <div class="timeline anim-slide-up">
+                <div class="milestone">
+                    <div class="dot"><i class="fas fa-check"></i></div>
+                    <h4>Core Engine</h4>
+                    <p style="font-size: 0.9rem; color: #8b949e;">Rust Wrapper, Parquet Sync, LWW Conflict Resolution.
+                    </p>
+                    <div style="margin-top: 10px; font-weight: bold; color: var(--accent-green);">TAMAMLANDI</div>
+                </div>
+                <div class="milestone">
+                    <div class="dot" style="border-color: var(--accent-blue); color: var(--accent-blue);">2</div>
+                    <h4>The Proxy</h4>
+                    <p style="font-size: 0.9rem; color: #8b949e;">Postgres Wire Protocol sunucusu. DBeaver & Tableau
+                        bağlantısı.</p>
+                    <div style="margin-top: 10px; font-weight: bold; color: var(--accent-blue);">GELİŞTİRİLİYOR</div>
+                </div>
+                <div class="milestone">
+                    <div class="dot" style="border-color: var(--text-muted); color: var(--text-muted);">3</div>
+                    <h4>Ecosystem</h4>
+                    <p style="font-size: 0.9rem; color: #8b949e;">DuckDB Macros, Polars Integration, Native PG
+                        Extension.</p>
+                    <div style="margin-top: 10px; font-weight: bold; color: var(--text-muted);">SIRADA</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 7: END -->
+        <div class="slide">
+            <div class="hero-logo anim-float">db<span>.center</span></div>
+            <h2 style="margin-top: 20px; max-width: 800px; line-height: 1.4;">Veritabanının Geleceği "Serverless" Değil,
+                <br><span class="highlight">"Storage-less"</span>.
+            </h2>
+            <p class="subtitle" style="margin-top: 20px;">Bize katılın ve bu devrimin parçası olun.</p>
+
+            <div style="margin-top: 40px; display: flex; gap: 20px;">
+                <a href="#" class="card"
+                    style="text-decoration: none; color: white; display: flex; align-items: center; gap: 15px; padding: 15px 30px;">
+                    <i class="fab fa-github" style="font-size: 1.5rem;"></i> <span
+                        style="font-weight: 600;">GitHub</span>
+                </a>
+                <a href="#" class="card"
+                    style="text-decoration: none; color: white; display: flex; align-items: center; gap: 15px; padding: 15px 30px;">
+                    <i class="fas fa-globe" style="font-size: 1.5rem;"></i> <span
+                        style="font-weight: 600;">db.center</span>
+                </a>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const progressBar = document.getElementById('progressBar');
+        const totalSlides = slides.length;
+
+        function updateProgress() {
+            const progress = ((currentSlide + 1) / totalSlides) * 100;
+            progressBar.style.width = `${progress}%`;
+        }
+
+        function triggerAnimations() {
+            // Animasyonları sıfırla ve yeniden başlat
+            const activeSlide = slides[currentSlide];
+
+            // Bar chart animasyonu
+            const bars = activeSlide.querySelectorAll('.bar-fill');
+            bars.forEach(bar => {
+                bar.style.width = '0';
+                setTimeout(() => {
+                    const targetWidth = bar.getAttribute('data-width');
+                    if (targetWidth) bar.style.width = targetWidth;
+                }, 100);
+            });
+
+            // Slide-up animasyonlarını yeniden tetikle
+            const anims = activeSlide.querySelectorAll('.anim-slide-up');
+            anims.forEach(el => {
+                el.style.animation = 'none';
+                el.offsetHeight; /* trigger reflow */
+                el.style.animation = 'slideIn 0.8s ease-out forwards';
+            });
+        }
+
+        function moveSlide(n) {
+            slides[currentSlide].classList.remove('active');
+            currentSlide = (currentSlide + n + totalSlides) % totalSlides;
+            slides[currentSlide].classList.add('active');
+            updateProgress();
+            triggerAnimations();
+        }
+
+        // Klavye Kontrolü
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') moveSlide(1);
+            if (e.key === 'ArrowLeft') moveSlide(-1);
+        });
+
+        // Initial Progress & Animation
+        updateProgress();
+        triggerAnimations();
+    </script>
+</body>
+
+</html>

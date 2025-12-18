@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB.Center Promo Cards</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Fira+Code:wght@500&display=swap');
+
+        body {
+            background-color: #0d1117;
+            margin: 0;
+            padding: 40px;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 40px;
+            min-height: 100vh;
+        }
+
+        /* --- ORTAK KART STİLİ --- */
+        .card {
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            border: 1px solid #30363d;
+            border-radius: 20px;
+            width: 400px;
+            height: 500px;
+            padding: 30px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: #58a6ff;
+        }
+
+        .card-header {
+            margin-bottom: 20px;
+        }
+
+        .icon-box {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+        }
+
+        .title {
+            color: #fff;
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin: 0;
+            line-height: 1.2;
+        }
+
+        .subtitle {
+            color: #8b949e;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .tag {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            color: #8b949e;
+            border: 1px solid #30363d;
+        }
+
+        /* --- KART 1: PERFORMANS --- */
+        .perf-card .icon-box {
+            background: rgba(210, 153, 34, 0.1);
+            color: #d29922;
+        }
+
+        .bar-container {
+            margin-bottom: 20px;
+        }
+
+        .bar-label {
+            display: flex;
+            justify-content: space-between;
+            color: #c9d1d9;
+            font-size: 0.85rem;
+            margin-bottom: 5px;
+        }
+
+        .bar-bg {
+            background: #21262d;
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            position: relative;
+        }
+
+        .slow .bar-fill {
+            width: 10%;
+            background: #30363d;
+        }
+
+        /* FuzzyWuzzy */
+        .fast .bar-fill {
+            width: 95%;
+            background: linear-gradient(90deg, #d29922, #f2cc60);
+            animation: grow 1.5s ease-out;
+        }
+
+        /* DB.Center */
+
+        .stat-highlight {
+            font-size: 3rem;
+            font-weight: 800;
+            color: #d29922;
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        .stat-desc {
+            text-align: center;
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+
+        /* --- KART 2: MALİYET (SCALE-TO-ZERO) --- */
+        .cost-card .icon-box {
+            background: rgba(46, 160, 67, 0.1);
+            color: #2ea043;
+        }
+
+        .cost-comparison {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            height: 150px;
+            margin-bottom: 20px;
+            padding: 0 10px;
+        }
+
+        .cost-bar {
+            width: 45%;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        .competitor {
+            height: 90%;
+            background: #30363d;
+            border: 1px dashed #484f58;
+            color: #8b949e;
+        }
+
+        .us {
+            height: 10%;
+            background: linear-gradient(180deg, #2ea043, #238636);
+            color: #fff;
+        }
+
+        .price-tag {
+            font-weight: 800;
+            font-size: 1.2rem;
+        }
+
+        .price-label {
+            font-size: 0.8rem;
+            margin-top: 5px;
+            opacity: 0.8;
+        }
+
+        .zero-badge {
+            background: rgba(46, 160, 67, 0.2);
+            color: #2ea043;
+            padding: 10px;
+            border-radius: 12px;
+            text-align: center;
+            font-weight: 600;
+            border: 1px solid rgba(46, 160, 67, 0.3);
+        }
+
+        /* --- KART 3: DX (KOD) --- */
+        .code-card .icon-box {
+            background: rgba(88, 166, 255, 0.1);
+            color: #58a6ff;
+        }
+
+        .terminal {
+            background: #090c10;
+            border-radius: 12px;
+            padding: 20px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+            border: 1px solid #30363d;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .cmd {
+            color: #c9d1d9;
+            margin-bottom: 10px;
+        }
+
+        .cmd::before {
+            content: "$ ";
+            color: #58a6ff;
+        }
+
+        .comment {
+            color: #8b949e;
+            font-style: italic;
+            margin-top: 15px;
+        }
+
+        .py-code {
+            color: #a5d6ff;
+        }
+
+        .py-func {
+            color: #d2a8ff;
+        }
+
+        /* --- KART 4: MİMARİ (VİZYON) --- */
+        .arch-card .icon-box {
+            background: rgba(188, 140, 255, 0.1);
+            color: #bc8cff;
+        }
+
+        .layer-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .layer {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .layer i {
+            width: 20px;
+            text-align: center;
+        }
+
+        .layer.app {
+            border-color: #ff7b72;
+            color: #ff7b72;
+        }
+
+        .layer.engine {
+            border-color: #bc8cff;
+            color: #bc8cff;
+            background: rgba(188, 140, 255, 0.05);
+            font-weight: bold;
+        }
+
+        .layer.storage {
+            border-color: #8b949e;
+            color: #8b949e;
+        }
+
+        .arrow-down {
+            text-align: center;
+            color: #8b949e;
+            font-size: 0.8rem;
+            margin: -5px 0;
+        }
+
+        /* Animasyon */
+        @keyframes grow {
+            from {
+                width: 0;
+            }
+
+            to {
+                width: 95%;
+            }
+        }
+
+        .logo-small {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-weight: 800;
+            color: #fff;
+            opacity: 0.3;
+            font-size: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- KART 1: PERFORMANS -->
+    <div class="card perf-card">
+        <div class="tag">Benchmark</div>
+        <div class="card-header">
+            <div class="icon-box"><i class="fa-solid fa-bolt"></i></div>
+            <h2 class="title">Işık Hızında<br>Sorgular</h2>
+            <div class="subtitle">Python döngülerinden kurtulun.</div>
+        </div>
+        <div class="content">
+            <div class="bar-container">
+                <div class="bar-label"><span>FuzzyWuzzy (Python)</span><span>0.93s</span></div>
+                <div class="bar-bg">
+                    <div class="bar-fill slow"></div>
+                </div>
+            </div>
+            <div class="bar-container">
+                <div class="bar-label"><span style="color:#d29922">db.center (Rust/PgTrgm)</span><span>0.01s</span>
+                </div>
+                <div class="bar-bg">
+                    <div class="bar-fill fast"></div>
+                </div>
+            </div>
+
+            <div class="stat-highlight">93x</div>
+            <div class="stat-desc">Daha Hızlı String Eşleştirme</div>
+        </div>
+        <div class="logo-small">db.center</div>
+    </div>
+
+    <!-- KART 2: MALİYET -->
+    <div class="card cost-card">
+        <div class="tag">Serverless</div>
+        <div class="card-header">
+            <div class="icon-box"><i class="fa-solid fa-wallet"></i></div>
+            <h2 class="title">Scale-to-Zero<br>Maliyet</h2>
+            <div class="subtitle">Kullanmadığınız sunucuya ödemeyin.</div>
+        </div>
+        <div class="content">
+            <div class="cost-comparison">
+                <div class="cost-bar competitor">
+                    <div class="price-tag">$25+</div>
+                    <div class="price-label">RDS / Supabase</div>
+                    <div style="font-size:0.7rem; margin-top:5px;">(Idle Cost)</div>
+                </div>
+                <div class="cost-bar us">
+                    <div class="price-tag">$0</div>
+                    <div class="price-label">db.center</div>
+                </div>
+            </div>
+            <div class="zero-badge">
+                Trafik yoksa fatura SIFIR.
+            </div>
+        </div>
+        <div class="logo-small">db.center</div>
+    </div>
+
+    <!-- KART 3: DX (DEVELOPER EXPERIENCE) -->
+    <div class="card code-card">
+        <div class="tag">Developer Experience</div>
+        <div class="card-header">
+            <div class="icon-box"><i class="fa-solid fa-code"></i></div>
+            <h2 class="title">Docker Yok.<br>Config Yok.</h2>
+            <div class="subtitle">Sadece kodunuza odaklanın.</div>
+        </div>
+        <div class="content">
+            <div class="terminal">
+                <div class="cmd">pip install dbcenter</div>
+                <div class="comment"># 3 satırda Vektör DB hazır</div>
+                <div style="margin-top:10px;">
+                    <span class="py-code">from</span> dbcenter <span class="py-code">import</span> DB<br><br>
+                    db = DB(<span class="py-func">"project_x"</span>)<br>
+                    db.<span class="py-func">vector_search</span>([...])
+                </div>
+            </div>
+            <div style="margin-top:20px; color:#8b949e; font-size:0.9rem;">
+                <i class="fa-solid fa-check" style="color:#58a6ff; margin-right:5px;"></i> Embedded Postgres Engine<br>
+                <i class="fa-solid fa-check" style="color:#58a6ff; margin-right:5px;"></i> DBeaver ile Bağlan<br>
+            </div>
+        </div>
+        <div class="logo-small">db.center</div>
+    </div>
+
+    <!-- KART 4: MİMARİ -->
+    <div class="card arch-card">
+        <div class="tag">Architecture</div>
+        <div class="card-header">
+            <div class="icon-box"><i class="fa-solid fa-layer-group"></i></div>
+            <h2 class="title">Delta Layer<br>Mimarisi</h2>
+            <div class="subtitle">Lokal hızında çalış, Bulut ölçeğinde sakla.</div>
+        </div>
+        <div class="content">
+            <div class="layer-stack">
+                <div class="layer app">
+                    <i class="fa-brands fa-python"></i>
+                    <div>Sizin Uygulamanız (App)</div>
+                </div>
+                <div class="arrow-down"><i class="fa-solid fa-arrow-down"></i></div>
+                <div class="layer engine">
+                    <i class="fa-solid fa-gears"></i>
+                    <div>Embedded Engine (RAM)</div>
+                </div>
+                <div class="arrow-down"><i class="fa-solid fa-arrow-down-long"></i> Lazy Sync</div>
+                <div class="layer storage">
+                    <i class="fa-brands fa-google-drive"></i>
+                    <div>Object Storage (Parquet)</div>
+                </div>
+            </div>
+        </div>
+        <div class="logo-small">db.center</div>
+    </div>
+
+</body>
+
+</html>
