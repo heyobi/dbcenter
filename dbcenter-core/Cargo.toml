@@ -27,7 +27,8 @@ walkdir = "2.5"
 uuid.workspace = true
 indicatif.workspace = true
 parquet.workspace = true
-arrow.workspace = true
+arrow = { workspace = true, features = ["prettyprint", "ipc"] }
+base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 lru = "0.12"

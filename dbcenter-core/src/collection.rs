@@ -25,7 +25,7 @@ impl<'a> Collection<'a> {
         collection
     }
 
-    /// Ensure JSONB table exists
+    /// Ensure base table exists (Relational Model)
     fn ensure_table(&self) -> Result<()> {
         // Phase 2: Delta Layer
         if self.db.config().multi_user_sync_mode {
@@ -36,13 +36,11 @@ impl<'a> Collection<'a> {
             r#"
             CREATE TABLE IF NOT EXISTS "{}" (
                 id SERIAL PRIMARY KEY,
-                data JSONB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS idx_{}_data ON "{}" USING GIN (data);
             "#,
-            self.name, self.name, self.name
+            self.name
         );
 
         let mut client = self.db.get_client();
@@ -53,40 +51,181 @@ impl<'a> Collection<'a> {
         Ok(())
     }
 
-    /// Insert a single document
-    /// Returns the ID as a string (UUID or Integer depending on config)
-    pub fn insert_one(&self, document: &JsonValue) -> Result<String> {
-        let json_str = serde_json::to_string(document)
-            .map_err(crate::error::DBCenterError::SerializationError)?;
+    /// Check and create missing columns based on the document structure
+    fn ensure_columns(&self, document: &HashMap<String, JsonValue>) -> Result<()> {
+        let mut client = self.db.get_client();
 
-        // Use direct SQL embedding (escape single quotes for safety)
-        let escaped_json = json_str.replace("'", "''");
+        // 1. Get existing columns
+        let sql_cols = format!(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = '{}'",
+            self.name
+        );
+        let rows = client
+            .query(&sql_cols, &[])
+            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        let existing_cols: std::collections::HashSet<String> =
+            rows.iter().map(|r| r.get(0)).collect();
+
+        // 2. Identify new columns
+        let mut alter_stmts = Vec::new();
+        for (key, value) in document {
+            if key == "_id" || key == "id" || key == "created_at" || key == "updated_at" {
+                continue;
+            }
+            // Normalize key to be safe? For now assume user provides valid col names or we quote them.
+            // We'll quote them in SQL.
+
+            if !existing_cols.contains(key) {
+                let col_type = match value {
+                    JsonValue::Bool(_) => "BOOLEAN",
+                    JsonValue::Number(n) => {
+                        if n.is_i64() {
+                            "BIGINT"
+                        } else {
+                            "DOUBLE PRECISION"
+                        }
+                    }
+                    JsonValue::String(_) => "TEXT",
+                    JsonValue::Array(_) | JsonValue::Object(_) => "JSONB",
+                    JsonValue::Null => "TEXT", // Default to text for nulls if column doesn't exist
+                };
+                alter_stmts.push(format!("ADD COLUMN IF NOT EXISTS \"{}\" {}", key, col_type));
+            }
+        }
+
+        if !alter_stmts.is_empty() {
+            let sql_alter = format!("ALTER TABLE \"{}\" {}", self.name, alter_stmts.join(", "));
+            tracing::info!("Evolving schema: {}", sql_alter);
+            client.batch_execute(&sql_alter).map_err(|e| {
+                crate::error::DBCenterError::QueryError(format!("Schema evolution failed: {}", e))
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Insert a single document (Relational)
+    pub fn insert_one(&self, document: &JsonValue) -> Result<String> {
+        let obj = document.as_object().ok_or_else(|| {
+            crate::error::DBCenterError::ValidationError(
+                "Document must be a JSON object".to_string(),
+            )
+        })?;
+
+        // 1. Ensure columns exist
+        // Convert Map<String, Value> back to HashMap because verify logic used it.
+        // Or just use the serde map directly.
+        let mut map: HashMap<String, JsonValue> = HashMap::new();
+        for (k, v) in obj {
+            map.insert(k.clone(), v.clone());
+        }
+
+        self.ensure_columns(&map)?;
+
+        // 2. Build Insert SQL
+        let mut cols = Vec::new();
+        let mut vals = Vec::new();
+
+        for (k, v) in map {
+            if k == "_id" || k == "id" {
+                continue;
+            } // Auto-generated ID
+            cols.push(format!("\"{}\"", k));
+            vals.push(QueryBuilder::json_to_sql_literal(&v));
+        }
+
         let sql = format!(
-            r#"INSERT INTO "{}" (data) VALUES ('{}'::jsonb) RETURNING id::text"#,
-            self.name, escaped_json
+            r#"INSERT INTO "{}" ({}) VALUES ({}) RETURNING id::text"#,
+            self.name,
+            cols.join(", "),
+            vals.join(", ")
         );
 
-        tracing::debug!("Executing SQL: {}", sql);
+        tracing::debug!("Executing Relational Insert: {}", sql);
 
         let mut client = self.db.get_client();
         let row = client.query_one(&sql, &[]).map_err(|e| {
-            tracing::error!("Insert failed: {}", e);
             crate::error::DBCenterError::QueryError(format!("Insert failed: {}", e))
         })?;
 
         Ok(row.get(0))
     }
 
-    /// Insert multiple documents
+    /// Insert multiple documents (Relational Batch)
     pub fn insert_many(&self, documents: &[JsonValue]) -> Result<Vec<String>> {
-        let mut ids = Vec::new();
-        for doc in documents {
-            ids.push(self.insert_one(doc)?);
+        if documents.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(ids)
+
+        // 1. Analyze ALL documents to find the superset of columns
+        let mut all_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Also keep a sample value type for each key to determine column type
+        let mut schema_sample: HashMap<String, JsonValue> = HashMap::new();
+
+        for doc in documents {
+            if let Some(obj) = doc.as_object() {
+                for (k, v) in obj {
+                    if k != "_id" && k != "id" {
+                        all_keys.insert(k.clone());
+                        if !schema_sample.contains_key(k) && !v.is_null() {
+                            schema_sample.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Ensure Schema
+        self.ensure_columns(&schema_sample)?;
+
+        // 3. Batch Insert
+        // We can't use a single big VALUES (...) list easily if rows have different columns populated.
+        // We must ensure every row provides a value for every column in 'all_keys' (or DEFAULT/NULL).
+        // To optimize, we'll sort columns.
+
+        let sorted_cols: Vec<String> = all_keys.into_iter().collect();
+        let cols_sql: Vec<String> = sorted_cols.iter().map(|c| format!("\"{}\"", c)).collect();
+        let col_names_sql = cols_sql.join(", ");
+
+        let mut all_ids = Vec::new();
+        let mut client = self.db.get_client();
+
+        // Postgres has a parameter limit (65535). With N columns, batch size limit is approx 65000/N.
+        // But we are constructing raw SQL strings for values (using json_to_sql_literal), so no param limit.
+        // Still, avoid massive SQL strings. Chunk it.
+
+        for chunk in documents.chunks(500) {
+            let mut values_list = Vec::new();
+            for doc in chunk {
+                let obj = doc.as_object().unwrap(); // Safe assuming validate input upstream
+                let mut row_vals = Vec::new();
+                for col in &sorted_cols {
+                    let val = obj.get(col).unwrap_or(&JsonValue::Null);
+                    row_vals.push(QueryBuilder::json_to_sql_literal(val));
+                }
+                values_list.push(format!("({})", row_vals.join(", ")));
+            }
+
+            let sql = format!(
+                r#"INSERT INTO "{}" ({}) VALUES {} RETURNING id::text"#,
+                self.name,
+                col_names_sql,
+                values_list.join(", ")
+            );
+
+            let rows = client.query(&sql, &[]).map_err(|e| {
+                crate::error::DBCenterError::QueryError(format!("Batch insert failed: {}", e))
+            })?;
+
+            for r in rows {
+                all_ids.push(r.get(0));
+            }
+        }
+
+        Ok(all_ids)
     }
 
-    /// Find documents matching query
+    /// Find documents matching query (Hybrid Relational)
     pub fn find(&self, query: Option<&HashMap<String, JsonValue>>) -> Result<Vec<JsonValue>> {
         let (where_clause, _) = if let Some(q) = query {
             QueryBuilder::build_where(q)?
@@ -94,14 +233,12 @@ impl<'a> Collection<'a> {
             (String::new(), Vec::new())
         };
 
+        // We need JSON rows back. Postgres can convert ROW to JSON.
         let sql = if where_clause.is_empty() {
-            format!(
-                r#"SELECT id::text, data, created_at, updated_at FROM "{}""#,
-                self.name
-            )
+            format!(r#"SELECT to_jsonb(t) FROM "{}" t"#, self.name)
         } else {
             format!(
-                r#"SELECT id::text, data, created_at, updated_at FROM "{}" WHERE {}"#,
+                r#"SELECT to_jsonb(t) FROM "{}" t WHERE {}"#,
                 self.name, where_clause
             )
         };
@@ -113,24 +250,17 @@ impl<'a> Collection<'a> {
 
         let mut results = Vec::new();
         for row in rows {
-            // ID can be i32 (old tables) or UUID (new delta tables).
-            // We use simple check or just try parse.
-            // But 'row.get(0)' requires knowing the type.
-            // Safest: get as String (TEXT) if we cast it in query, BUT we didn't cast it in find query.
-            // We must cast ID to TEXT in the SQL query to be generic. 
-            // OR use 'try_get' with different types.
-            // Let's UPDATE the SQL to return id::text.
-            // Line 98 and 103.
-            
-            let id_val: String = row.get(0);
-            let mut data: JsonValue = row.get(1);
-
-            // Add _id field (as string)
-            if let JsonValue::Object(ref mut map) = data {
-                map.insert("_id".to_string(), JsonValue::String(id_val));
+            // Postgres returns the whole row as a JSONB value in column 0
+            if let Some(mut val) = row.get::<_, Option<JsonValue>>(0) {
+                // Ensure _id is present (mapped from id)
+                if let JsonValue::Object(ref mut map) = val {
+                    if let Some(id_val) = map.get("id") {
+                        // Copy id to _id for compatibility
+                        map.insert("_id".to_string(), id_val.clone());
+                    }
+                }
+                results.push(val);
             }
-
-            results.push(data);
         }
 
         Ok(results)
@@ -182,13 +312,21 @@ impl<'a> Collection<'a> {
         query: &HashMap<String, JsonValue>,
         update: &HashMap<String, JsonValue>,
     ) -> Result<i32> {
-        let (where_clause, where_params) = QueryBuilder::build_where(query)?;
-        let (update_clause, update_params) = QueryBuilder::build_update(update)?;
+        let (where_clause, _) = QueryBuilder::build_where(query)?;
+
+        // build_update returns a set clause.
+        // For relational, we need to handle "SET col = val"
+        // But QueryBuilder::build_update currently does JSON merge: "data || ...".
+        // We need to REWRITE QueryBuilder::build_update as well, or handle it here.
+        // For now, let's assume we implement a new update builder.
+        // Or strictly support $set.
+
+        let (update_clause, update_params) = QueryBuilder::build_relational_update(update)?;
 
         let sql = format!(
             r#"
             UPDATE "{}" 
-            SET data = {}, updated_at = CURRENT_TIMESTAMP
+            SET {}, updated_at = CURRENT_TIMESTAMP
             WHERE id = (
                 SELECT id FROM "{}" 
                 WHERE {} 
@@ -198,17 +336,14 @@ impl<'a> Collection<'a> {
             self.name, update_clause, self.name, where_clause
         );
 
-        let mut all_params = update_params;
-        all_params.extend(where_params);
+        // Note: We are using literal injection in build_relational_update, so params map be empty.
+        // If not, we need to handle them.
 
-        let param_refs: Vec<&(dyn postgres::types::ToSql + Sync)> = all_params
-            .iter()
-            .map(|p| p as &(dyn postgres::types::ToSql + Sync))
-            .collect();
-
+        let client = self.db.get_client(); // mut removed if we don't use it mutably? No, execute is on client.
         let mut client = self.db.get_client();
+
         client
-            .execute(&sql, &param_refs[..])
+            .execute(&sql, &[])
             .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
 
         Ok(1)
@@ -221,10 +356,10 @@ impl<'a> Collection<'a> {
         update: &HashMap<String, JsonValue>,
     ) -> Result<u64> {
         let (where_clause, _) = QueryBuilder::build_where(query)?;
-        let (update_clause, _) = QueryBuilder::build_update(update)?;
+        let (update_clause, _) = QueryBuilder::build_relational_update(update)?;
 
         let sql = format!(
-            r#"UPDATE "{}" SET data = {}, updated_at = CURRENT_TIMESTAMP WHERE {}"#,
+            r#"UPDATE "{}" SET {}, updated_at = CURRENT_TIMESTAMP WHERE {}"#,
             self.name, update_clause, where_clause
         );
 
@@ -300,11 +435,11 @@ impl<'a> Collection<'a> {
     }
     /// Fuzzy search using pg_trgm
     pub fn fuzzy_search(
-        &self, 
-        query: &str, 
+        &self,
+        query: &str,
         field: &str,
-        mode: Option<&str>, 
-        threshold: Option<f32>
+        mode: Option<&str>,
+        threshold: Option<f32>,
     ) -> Result<Vec<JsonValue>> {
         // Ensure pg_trgm
         if let Err(e) = self.db.install_extension("pg_trgm") {
@@ -313,15 +448,15 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         let search_mode = mode.unwrap_or("substring");
-        
+
         // set threshold
         let th = threshold.unwrap_or(0.3);
         // set BOTH just in case
         if let Err(e) = client.batch_execute(&format!(
-            "SET pg_trgm.similarity_threshold = {}; SET pg_trgm.word_similarity_threshold = {};", 
+            "SET pg_trgm.similarity_threshold = {}; SET pg_trgm.word_similarity_threshold = {};",
             th, th
         )) {
-             tracing::warn!("Failed to set similarity thresholds: {}", e);
+            tracing::warn!("Failed to set similarity thresholds: {}", e);
         }
 
         // Create index if not exists (critical for performance)
@@ -331,7 +466,10 @@ impl<'a> Collection<'a> {
             idx_name, self.name, field
         );
         if let Err(e) = client.batch_execute(&sql_idx) {
-             tracing::warn!("Failed to create trgm index (might already exist or permission issue): {}", e);
+            tracing::warn!(
+                "Failed to create trgm index (might already exist or permission issue): {}",
+                e
+            );
         }
 
         let sql_query = if search_mode == "exact" {
@@ -347,8 +485,8 @@ impl<'a> Collection<'a> {
                 field, self.name, field
             )
         } else {
-             // SUBSTRING similarity (<%), default
-             format!(
+            // SUBSTRING similarity (<%), default
+            format!(
                 r#"
                 SELECT data, word_similarity($1, data->>'{}') as score
                 FROM "{}"
@@ -360,8 +498,12 @@ impl<'a> Collection<'a> {
             )
         };
 
-        let rows = client.query(&sql_query, &[&query])
-             .map_err(|e| crate::error::DBCenterError::QueryError(format!("Fuzzy search failed: {}", crate::utils::format_postgres_error(&e))))?;
+        let rows = client.query(&sql_query, &[&query]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!(
+                "Fuzzy search failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -369,7 +511,7 @@ impl<'a> Collection<'a> {
             let score: f32 = row.get(1);
 
             if let JsonValue::Object(ref mut map) = data {
-                 map.insert("similarity".to_string(), serde_json::Value::from(score));
+                map.insert("similarity".to_string(), serde_json::Value::from(score));
             }
             results.push(data);
         }
@@ -380,13 +522,14 @@ impl<'a> Collection<'a> {
     /// Calculate similarity between two strings
     pub fn similarity(&self, s1: &str, s2: &str) -> Result<f32> {
         if let Err(e) = self.db.install_extension("pg_trgm") {
-             tracing::warn!("pg_trgm install warning: {}", e);
+            tracing::warn!("pg_trgm install warning: {}", e);
         }
 
         let mut client = self.db.get_client();
-        let row = client.query_one("SELECT similarity($1, $2)", &[&s1, &s2])
+        let row = client
+            .query_one("SELECT similarity($1, $2)", &[&s1, &s2])
             .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
-        
+
         Ok(row.get(0))
     }
 }

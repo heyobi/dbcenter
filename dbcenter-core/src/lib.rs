@@ -1,16 +1,17 @@
 pub mod binary;
 pub mod collection;
 pub mod config;
-pub mod error;
 pub mod delta_manager;
+pub mod error;
 pub mod extensions;
 pub mod geo_collection;
-pub mod vector_store;
+pub mod lazy_frame;
 pub mod process;
 pub mod query;
-pub mod utils;
 pub mod storage;
 pub mod sync_engine;
+pub mod utils;
+pub mod vector_store;
 pub mod vfs;
 
 pub use config::DBCenterConfig;
@@ -37,11 +38,11 @@ pub struct DBCenter {
 }
 
 /// Builder for creating DBCenter instances with a fluent API
-/// 
+///
 /// # Example
 /// ```no_run
 /// use dbcenter_core::DBCenter;
-/// 
+///
 /// let db = DBCenter::builder()
 ///     .path("./my_database")
 ///     .persist(true)
@@ -67,7 +68,7 @@ impl DBCenterBuilder {
     pub fn new() -> Self {
         Self {
             path: None,
-            persist: true,  // Default to persistent
+            persist: true, // Default to persistent
             daemon_mode: false,
             host: None,
             port: None,
@@ -142,11 +143,11 @@ impl DBCenterBuilder {
 
 impl DBCenter {
     /// Create a new DBCenterBuilder for fluent configuration
-    /// 
+    ///
     /// # Example
     /// ```no_run
     /// use dbcenter_core::DBCenter;
-    /// 
+    ///
     /// let db = DBCenter::builder()
     ///     .path("./data")
     ///     .build()?;
@@ -325,7 +326,11 @@ impl DBCenter {
     }
 
     /// Get a VectorStore (pgvector API)
-    pub fn vector_store(&self, name: &str, dimension: usize) -> Result<vector_store::VectorStore<'_>> {
+    pub fn vector_store(
+        &self,
+        name: &str,
+        dimension: usize,
+    ) -> Result<vector_store::VectorStore<'_>> {
         vector_store::VectorStore::new(self, name, dimension)
     }
 
@@ -597,9 +602,9 @@ impl DBCenter {
 
                     // Wait for process to actually terminate
                     if process::wait_for_pid(pid, 10) {
-                         tracing::info!("Process {} terminated confirmed.", pid);
+                        tracing::info!("Process {} terminated confirmed.", pid);
                     } else {
-                         tracing::warn!("Process {} still running after force kill attempt.", pid);
+                        tracing::warn!("Process {} still running after force kill attempt.", pid);
                     }
 
                     // Clean up postmaster.pid

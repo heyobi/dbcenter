@@ -32,6 +32,9 @@ pub enum DBCenterError {
     #[error("Invalid query: {0}")]
     InvalidQuery(String),
 
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
     #[error("Storage error: {0}")]
     StorageError(String),
 

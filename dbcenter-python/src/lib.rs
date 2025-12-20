@@ -1,8 +1,12 @@
+use dbcenter_core::lazy_frame::LazyFrame as CoreLazyFrame;
+use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, StorageAdapter};
+use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
+use dbcenter_core::vfs::google_drive::GoogleDriveAdapter as CoreGoogleDriveAdapter;
 use dbcenter_core::DBCenter as CoreDBCenter;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use pyo3::wrap_pyfunction;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PyModule};
+use pyo3::wrap_pyfunction;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::env;
@@ -11,9 +15,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, StorageAdapter};
-use dbcenter_core::vfs::google_drive::GoogleDriveAdapter as CoreGoogleDriveAdapter;
-use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -254,7 +255,9 @@ impl DBCenter {
 
     /// Get a VectorStore (pgvector API)
     fn vector_store(&self, name: &str, dimension: usize) -> PyResult<VectorStore> {
-        let store = self.inner.vector_store(name, dimension)
+        let store = self
+            .inner
+            .vector_store(name, dimension)
             .map_err(|e| PyException::new_err(e.to_string()))?;
 
         Ok(VectorStore {
@@ -375,19 +378,23 @@ impl DBCenter {
     #[staticmethod]
     fn force_remove(path: &str) -> PyResult<()> {
         let path_obj = Path::new(path);
-        
+
         // 1. Kill potential Watcher process first!
         // This prevents the "Old Watcher executes delayed cleanup on New DB" race condition.
         let watcher_pid_file = path_obj.join("watcher.pid");
         if watcher_pid_file.exists() {
             if let Ok(content) = fs::read_to_string(&watcher_pid_file) {
-                 if let Ok(pid) = content.trim().parse::<u32>() {
-                     tracing::info!("Found old watcher.pid: {}. Killing it...", pid);
-                     #[cfg(windows)]
-                     let _ = Command::new("taskkill").args(&["/F", "/PID", &pid.to_string()]).output();
-                     #[cfg(unix)]
-                     let _ = Command::new("kill").args(&["-9", &pid.to_string()]).output();
-                 }
+                if let Ok(pid) = content.trim().parse::<u32>() {
+                    tracing::info!("Found old watcher.pid: {}. Killing it...", pid);
+                    #[cfg(windows)]
+                    let _ = Command::new("taskkill")
+                        .args(&["/F", "/PID", &pid.to_string()])
+                        .output();
+                    #[cfg(unix)]
+                    let _ = Command::new("kill")
+                        .args(&["-9", &pid.to_string()])
+                        .output();
+                }
             }
             let _ = fs::remove_file(watcher_pid_file);
         }
@@ -580,11 +587,11 @@ impl DBCenterBuilder {
 
     fn build(self_: PyRef<Self>, py: Python<'_>) -> PyResult<DBCenter> {
         let pg_ver_bound = if let Some(ver) = &self_.postgres_version {
-             Some(ver.clone().into_py(py).bind(py).clone())
+            Some(ver.clone().into_py(py).bind(py).clone())
         } else {
-             None
+            None
         };
-        
+
         let pg_ver_ref = pg_ver_bound.as_ref();
 
         DBCenter::new(
@@ -1049,12 +1056,19 @@ impl Collection {
     ///     mode: Search mode ("substring" or "exact", default "substring")
     ///     threshold: Similarity threshold (0.0 - 1.0, default 0.3)
     #[pyo3(signature = (query, field, mode=None, threshold=None))]
-    fn fuzzy_search(&self, query: &str, field: &str, mode: Option<&str>, threshold: Option<f32>) -> PyResult<Vec<PyObject>> {
+    fn fuzzy_search(
+        &self,
+        query: &str,
+        field: &str,
+        mode: Option<&str>,
+        threshold: Option<f32>,
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let coll = self.db.collection(&self.name);
-            let results = coll.fuzzy_search(query, field, mode, threshold)
+            let results = coll
+                .fuzzy_search(query, field, mode, threshold)
                 .map_err(|e| PyException::new_err(e.to_string()))?;
-            
+
             let py_results: Vec<PyObject> = results.iter().map(|v| json_to_py(py, v)).collect();
             Ok(py_results)
         })
@@ -1078,9 +1092,31 @@ impl Collection {
     fn __repr__(&self) -> String {
         format!("<Collection '{}'>", self.name)
     }
+
+    // --- Arrow / LazyFrame API ---
+
+    /// Begin a lazy query (builds Query Plan)
+    fn lazy(&self) -> LazyFrame {
+        LazyFrame {
+            inner: Some(CoreLazyFrame::new(self.db.clone(), &self.name)),
+        }
+    }
+
+    /// Convert collection to Arrow Table (via IPC)
+    fn to_arrow(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.lazy().to_arrow(py)
+    }
+
+    /// Convert collection to Polars DataFrame
+    fn to_polars(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.lazy().to_polars(py)
+    }
+
+    /// Convert collection to Pandas DataFrame
+    fn to_pandas(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.lazy().to_pandas(py)
+    }
 }
-
-
 
 /// Python wrapper for GeoCollection
 #[pyclass]
@@ -1114,15 +1150,15 @@ impl GeoCollection {
             let results = coll
                 .find_within_radius(lat, lon, radius_km)
                 .map_err(|e| PyException::new_err(e.to_string()))?;
-            
-             let py_results: Vec<PyObject> = results.iter().map(|v| json_to_py(py, v)).collect();
-             Ok(py_results)
+
+            let py_results: Vec<PyObject> = results.iter().map(|v| json_to_py(py, v)).collect();
+            Ok(py_results)
         })
     }
 
     /// Calculate distance between two documents
     fn distance_between(&self, from_id: PyObject, to_id: PyObject) -> PyResult<Option<f64>> {
-         Python::with_gil(|py| {
+        Python::with_gil(|py| {
             let val1 = py_to_json(py, from_id.bind(py))?;
             let val2 = py_to_json(py, to_id.bind(py))?;
 
@@ -1136,7 +1172,7 @@ impl GeoCollection {
     fn contains_point(&self, polygon_id: PyObject, lat: f64, lon: f64) -> PyResult<bool> {
         Python::with_gil(|py| {
             let val = py_to_json(py, polygon_id.bind(py))?;
-            
+
             let coll = self.db.geo_collection(&self.name);
             coll.contains_point(&val, lat, lon)
                 .map_err(|e| PyException::new_err(e.to_string()))
@@ -1160,10 +1196,10 @@ impl VectorStore {
     /// metadatas: Optional[List[Dict]]
     #[pyo3(signature = (ids, embeddings, metadatas=None))]
     fn add(
-        &self, 
-        ids: Vec<String>, 
-        embeddings: Vec<Vec<f32>>, 
-        metadatas: Option<Vec<HashMap<String, PyObject>>>
+        &self,
+        ids: Vec<String>,
+        embeddings: Vec<Vec<f32>>,
+        metadatas: Option<Vec<HashMap<String, PyObject>>>,
     ) -> PyResult<()> {
         Python::with_gil(|py| {
             // Convert metadatas from PyObject to JsonValue
@@ -1181,10 +1217,13 @@ impl VectorStore {
                 None
             };
 
-            let store = self.db.vector_store(&self.name, self.dimension)
+            let store = self
+                .db
+                .vector_store(&self.name, self.dimension)
                 .map_err(|e| PyException::new_err(e.to_string()))?;
-            store.add(&ids, &embeddings, json_metas.as_deref())
-                 .map_err(|e| PyException::new_err(e.to_string()))
+            store
+                .add(&ids, &embeddings, json_metas.as_deref())
+                .map_err(|e| PyException::new_err(e.to_string()))
         })
     }
 
@@ -1194,10 +1233,10 @@ impl VectorStore {
     /// where: Optional[Dict]
     #[pyo3(signature = (query_embeddings, n_results=10, r#where=None))]
     fn query(
-        &self, 
-        query_embeddings: Vec<Vec<f32>>, 
-        n_results: i64, 
-        r#where: Option<HashMap<String, PyObject>>
+        &self,
+        query_embeddings: Vec<Vec<f32>>,
+        n_results: i64,
+        r#where: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             // where is a dict, convert to json map
@@ -1211,14 +1250,17 @@ impl VectorStore {
                 None
             };
 
-            let store = self.db.vector_store(&self.name, self.dimension)
+            let store = self
+                .db
+                .vector_store(&self.name, self.dimension)
                 .map_err(|e| PyException::new_err(e.to_string()))?;
             // Pass the vector list directly
-            let results = store.query(&query_embeddings, n_results, filter.as_ref())
-                 .map_err(|e| PyException::new_err(e.to_string()))?;
+            let results = store
+                .query(&query_embeddings, n_results, filter.as_ref())
+                .map_err(|e| PyException::new_err(e.to_string()))?;
 
             let py_results: Vec<PyObject> = results.iter().map(|v| json_to_py(py, v)).collect();
-             Ok(py_results)
+            Ok(py_results)
         })
     }
 }
@@ -1310,7 +1352,8 @@ fn dbcenter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LocalStorageAdapter>()?;
     m.add_class::<GoogleDriveAdapter>()?;
     m.add_class::<SyncEngine>()?;
-    
+    m.add_class::<LazyFrame>()?;
+
     #[pyfunction]
     fn init_logging() -> PyResult<()> {
         let subscriber = tracing_subscriber::fmt()
@@ -1320,7 +1363,7 @@ fn dbcenter(m: &Bound<'_, PyModule>) -> PyResult<()> {
         Ok(())
     }
     m.add_function(wrap_pyfunction!(init_logging, m)?)?;
-    
+
     Ok(())
 }
 
@@ -1379,15 +1422,17 @@ impl GoogleDriveAdapter {
     #[new]
     fn new(credential_path: String, root_folder_name: String) -> PyResult<Self> {
         let adapter = CoreGoogleDriveAdapter::new(&credential_path, &root_folder_name)
-             .map_err(|e| PyException::new_err(e.to_string()))?;
+            .map_err(|e| PyException::new_err(e.to_string()))?;
         Ok(GoogleDriveAdapter {
             inner: Arc::new(Box::new(adapter)),
             root_folder_name,
         })
     }
-    
+
     fn list(&self, prefix: &str) -> PyResult<Vec<String>> {
-        self.inner.list(prefix).map_err(|e| PyException::new_err(e.to_string()))
+        self.inner
+            .list(prefix)
+            .map_err(|e| PyException::new_err(e.to_string()))
     }
 }
 
@@ -1401,13 +1446,16 @@ struct SyncEngine {
 impl SyncEngine {
     #[new]
     fn new(db: &DBCenter, storage: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let adapter: Arc<Box<dyn StorageAdapter + Send + Sync>> = if let Ok(local) = storage.extract::<PyRef<LocalStorageAdapter>>() {
-            local.inner.clone()
-        } else if let Ok(drive) = storage.extract::<PyRef<GoogleDriveAdapter>>() {
-             drive.inner.clone()
-        } else {
-            return Err(PyValueError::new_err("storage must be LocalStorageAdapter or GoogleDriveAdapter"));
-        };
+        let adapter: Arc<Box<dyn StorageAdapter + Send + Sync>> =
+            if let Ok(local) = storage.extract::<PyRef<LocalStorageAdapter>>() {
+                local.inner.clone()
+            } else if let Ok(drive) = storage.extract::<PyRef<GoogleDriveAdapter>>() {
+                drive.inner.clone()
+            } else {
+                return Err(PyValueError::new_err(
+                    "storage must be LocalStorageAdapter or GoogleDriveAdapter",
+                ));
+            };
 
         Ok(SyncEngine {
             inner: CoreSyncEngine::new(db.inner.clone(), adapter),
@@ -1460,5 +1508,108 @@ impl SyncEngine {
                     .map_err(|e| PyException::new_err(e.to_string()))
             })
         })
+    }
+}
+
+/// Python wrapper for LazyFrame
+#[pyclass]
+struct LazyFrame {
+    inner: Option<CoreLazyFrame>,
+}
+
+#[pymethods]
+impl LazyFrame {
+    fn filter(mut slf: PyRefMut<Self>, condition: String) -> PyResult<Self> {
+        let inner = slf
+            .inner
+            .take()
+            .ok_or_else(|| PyException::new_err("LazyFrame consumed"))?;
+        Ok(LazyFrame {
+            inner: Some(inner.filter(condition)),
+        })
+    }
+
+    fn select(mut slf: PyRefMut<Self>, columns: Vec<String>) -> PyResult<Self> {
+        let inner = slf
+            .inner
+            .take()
+            .ok_or_else(|| PyException::new_err("LazyFrame consumed"))?;
+        Ok(LazyFrame {
+            inner: Some(inner.select(columns)),
+        })
+    }
+
+    fn limit(mut slf: PyRefMut<Self>, n: usize) -> PyResult<Self> {
+        let inner = slf
+            .inner
+            .take()
+            .ok_or_else(|| PyException::new_err("LazyFrame consumed"))?;
+        Ok(LazyFrame {
+            inner: Some(inner.limit(n)),
+        })
+    }
+
+    fn offset(mut slf: PyRefMut<Self>, n: usize) -> PyResult<Self> {
+        let inner = slf
+            .inner
+            .take()
+            .ok_or_else(|| PyException::new_err("LazyFrame consumed"))?;
+        Ok(LazyFrame {
+            inner: Some(inner.offset(n)),
+        })
+    }
+
+    fn order_by(mut slf: PyRefMut<Self>, order: String) -> PyResult<Self> {
+        let inner = slf
+            .inner
+            .take()
+            .ok_or_else(|| PyException::new_err("LazyFrame consumed"))?;
+        Ok(LazyFrame {
+            inner: Some(inner.order_by(order)),
+        })
+    }
+
+    fn collect(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        if let Some(inner) = &self.inner {
+            let results = inner
+                .collect()
+                .map_err(|e| PyException::new_err(e.to_string()))?;
+            Ok(results.iter().map(|v| json_to_py(py, v)).collect())
+        } else {
+            Err(PyException::new_err("LazyFrame consumed"))
+        }
+    }
+
+    fn to_arrow(&self, py: Python<'_>) -> PyResult<PyObject> {
+        if let Some(inner) = &self.inner {
+            let ipc_bytes = inner
+                .to_arrow_ipc()
+                .map_err(|e| PyException::new_err(e.to_string()))?;
+            let py_bytes = pyo3::types::PyBytes::new_bound(py, &ipc_bytes);
+
+            // Import pyarrow.ipc and open stream
+            let pa_ipc = py.import_bound("pyarrow.ipc")?;
+            let reader = pa_ipc.call_method1("open_stream", (py_bytes,))?;
+            let table = reader.call_method0("read_all")?;
+            Ok(table.to_object(py))
+        } else {
+            Err(PyException::new_err("LazyFrame consumed"))
+        }
+    }
+
+    fn to_polars(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Return Arrow Table wrapped in Polars
+        let arrow_table = self.to_arrow(py)?;
+        let pl = py.import_bound("polars")?;
+        let df = pl.call_method1("from_arrow", (arrow_table,))?;
+        Ok(df.to_object(py))
+    }
+
+    fn to_pandas(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Return Arrow Table -> to_pandas
+        let arrow_table_obj = self.to_arrow(py)?;
+        let arrow_table = arrow_table_obj.bind(py);
+        let df = arrow_table.call_method0("to_pandas")?;
+        Ok(df.to_object(py))
     }
 }
