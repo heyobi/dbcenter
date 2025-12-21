@@ -82,6 +82,17 @@ def test_lazy():
         print(df_lazy)
         assert df_lazy.height == 2
 
+    print("\n[7] Testing Python Quality of Life...")
+    print(f"Collection: {coll}") # Should show table preview
+    print(f"Count (len): {len(coll)}")
+    assert len(coll) == 3
+    
+    print("Testing attribute access (coll.score)...")
+    scores = coll.score
+    print(f"Scores: {scores}")
+    assert len(scores) == 3
+    assert 90.5 in scores
+
     print("\nSuccess! All LazyFrame tests passed.")
     # Clean shutdown
     db.shutdown()

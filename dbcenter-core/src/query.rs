@@ -10,6 +10,9 @@ impl QueryBuilder {
         let mut conditions = Vec::new();
 
         for (key, value) in query {
+            // Map _id to id
+            let db_key = if key == "_id" { "id" } else { key };
+
             // Special handling for operators
             match value {
                 JsonValue::Object(operators) => {
@@ -24,11 +27,11 @@ impl QueryBuilder {
                                     _ => unreachable!(),
                                 };
                                 let val_str = Self::json_to_sql_literal(op_value);
-                                conditions.push(format!("\"{}\" {} {}", key, op_sym, val_str));
+                                conditions.push(format!("\"{}\" {} {}", db_key, op_sym, val_str));
                             }
                             "$ne" => {
                                 let val_str = Self::json_to_sql_literal(op_value);
-                                conditions.push(format!("\"{}\" != {}", key, val_str));
+                                conditions.push(format!("\"{}\" != {}", db_key, val_str));
                             }
                             "$in" => {
                                 if let JsonValue::Array(values) = op_value {
@@ -36,14 +39,14 @@ impl QueryBuilder {
                                         values.iter().map(Self::json_to_sql_literal).collect();
                                     conditions.push(format!(
                                         "\"{}\" IN ({})",
-                                        key,
+                                        db_key,
                                         values_str.join(", ")
                                     ));
                                 }
                             }
                             "$regex" => {
                                 let val_str = Self::json_to_sql_literal(op_value);
-                                conditions.push(format!("\"{}\" ~ {}", key, val_str));
+                                conditions.push(format!("\"{}\" ~ {}", db_key, val_str));
                             }
                             _ => {
                                 // Ignore unknown or handle strictly?
@@ -54,7 +57,7 @@ impl QueryBuilder {
                 _ => {
                     // Direct equality
                     let val_str = Self::json_to_sql_literal(value);
-                    conditions.push(format!("\"{}\" = {}", key, val_str));
+                    conditions.push(format!("\"{}\" = {}", db_key, val_str));
                 }
             }
         }

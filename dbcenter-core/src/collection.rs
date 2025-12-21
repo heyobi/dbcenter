@@ -53,52 +53,79 @@ impl<'a> Collection<'a> {
 
     /// Check and create missing columns based on the document structure
     fn ensure_columns(&self, document: &HashMap<String, JsonValue>) -> Result<()> {
+        // Delta Logic: Apply to _base and _adds
+        let delta_mode = self.db.config().multi_user_sync_mode;
+
+        let target_tables = if delta_mode {
+            vec![format!("{}_base", self.name), format!("{}_adds", self.name)]
+        } else {
+            vec![self.name.clone()]
+        };
+
         let mut client = self.db.get_client();
 
-        // 1. Get existing columns
-        let sql_cols = format!(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = '{}'",
-            self.name
-        );
-        let rows = client
-            .query(&sql_cols, &[])
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
-        let existing_cols: std::collections::HashSet<String> =
-            rows.iter().map(|r| r.get(0)).collect();
+        // We need to sync schema for ALL target tables
+        for table in target_tables {
+            // 1. Get existing columns for this table
+            let sql_cols = format!(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = '{}'",
+                table
+            );
+            let rows = client
+                .query(&sql_cols, &[])
+                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            let existing_cols: std::collections::HashSet<String> =
+                rows.iter().map(|r| r.get(0)).collect();
 
-        // 2. Identify new columns
-        let mut alter_stmts = Vec::new();
-        for (key, value) in document {
-            if key == "_id" || key == "id" || key == "created_at" || key == "updated_at" {
-                continue;
-            }
-            // Normalize key to be safe? For now assume user provides valid col names or we quote them.
-            // We'll quote them in SQL.
+            // 2. Identify new columns
+            let mut alter_stmts = Vec::new();
+            for (key, value) in document {
+                if key == "_id" || key == "id" || key == "created_at" || key == "updated_at" {
+                    continue;
+                }
+                // Also skip data column if it exists (legacy/delta jsonb)
+                if key == "data" {
+                    continue;
+                }
 
-            if !existing_cols.contains(key) {
-                let col_type = match value {
-                    JsonValue::Bool(_) => "BOOLEAN",
-                    JsonValue::Number(n) => {
-                        if n.is_i64() {
-                            "BIGINT"
-                        } else {
-                            "DOUBLE PRECISION"
+                if !existing_cols.contains(key) {
+                    let col_type = match value {
+                        JsonValue::Bool(_) => "BOOLEAN",
+                        JsonValue::Number(n) => {
+                            if n.is_i64() {
+                                "BIGINT"
+                            } else {
+                                "DOUBLE PRECISION"
+                            }
                         }
-                    }
-                    JsonValue::String(_) => "TEXT",
-                    JsonValue::Array(_) | JsonValue::Object(_) => "JSONB",
-                    JsonValue::Null => "TEXT", // Default to text for nulls if column doesn't exist
-                };
-                alter_stmts.push(format!("ADD COLUMN IF NOT EXISTS \"{}\" {}", key, col_type));
+                        JsonValue::String(_) => "TEXT",
+                        JsonValue::Array(_) | JsonValue::Object(_) => "JSONB",
+                        JsonValue::Null => "TEXT", // Default to text for nulls
+                    };
+                    alter_stmts.push(format!("ADD COLUMN IF NOT EXISTS \"{}\" {}", key, col_type));
+                }
+            }
+
+            if !alter_stmts.is_empty() {
+                let sql_alter = format!("ALTER TABLE \"{}\" {}", table, alter_stmts.join(", "));
+                tracing::info!("Evolving schema for {}: {}", table, sql_alter);
+                client.batch_execute(&sql_alter).map_err(|e| {
+                    crate::error::DBCenterError::QueryError(format!(
+                        "Schema evolution failed: {}",
+                        e
+                    ))
+                })?;
             }
         }
 
-        if !alter_stmts.is_empty() {
-            let sql_alter = format!("ALTER TABLE \"{}\" {}", self.name, alter_stmts.join(", "));
-            tracing::info!("Evolving schema: {}", sql_alter);
-            client.batch_execute(&sql_alter).map_err(|e| {
-                crate::error::DBCenterError::QueryError(format!("Schema evolution failed: {}", e))
-            })?;
+        // Special handling for Delta Views:
+        // When we add columns to base/adds, the VIEW (SELECT * ...) might need recreating
+        // depending on Postgres version/behavior (early versions didn't auto-update views on SELECT *).
+        // Postgres views generally capture the * at creation time.
+        // So we MUST recreate the Delta View if we added columns.
+        if delta_mode {
+            // Simply call ensure_delta_tables again? It does CREATE OR REPLACE VIEW.
+            crate::delta_manager::DeltaManager::ensure_delta_tables(self.db, &self.name)?;
         }
 
         Ok(())
@@ -312,41 +339,46 @@ impl<'a> Collection<'a> {
         query: &HashMap<String, JsonValue>,
         update: &HashMap<String, JsonValue>,
     ) -> Result<i32> {
+        // 1. Find the ID of the document to update
         let (where_clause, _) = QueryBuilder::build_where(query)?;
 
-        // build_update returns a set clause.
-        // For relational, we need to handle "SET col = val"
-        // But QueryBuilder::build_update currently does JSON merge: "data || ...".
-        // We need to REWRITE QueryBuilder::build_update as well, or handle it here.
-        // For now, let's assume we implement a new update builder.
-        // Or strictly support $set.
+        let select_sql = if where_clause.is_empty() {
+            format!(r#"SELECT id::text FROM "{}" LIMIT 1"#, self.name)
+        } else {
+            format!(
+                r#"SELECT id::text FROM "{}" WHERE {} LIMIT 1"#,
+                self.name, where_clause
+            )
+        };
 
-        let (update_clause, update_params) = QueryBuilder::build_relational_update(update)?;
+        let mut client = self.db.get_client();
+        let rows = client.query(&select_sql, &[]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!("Update (find) failed: {}", e))
+        })?;
 
-        let sql = format!(
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        let id_str: String = rows[0].get(0);
+
+        // 2. Perform Update by ID
+        let (update_clause, _) = QueryBuilder::build_relational_update(update)?;
+
+        let update_sql = format!(
             r#"
             UPDATE "{}" 
             SET {}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = (
-                SELECT id FROM "{}" 
-                WHERE {} 
-                LIMIT 1
-            )
+            WHERE id = {}
             "#,
-            self.name, update_clause, self.name, where_clause
+            self.name, update_clause, id_str
         );
 
-        // Note: We are using literal injection in build_relational_update, so params map be empty.
-        // If not, we need to handle them.
+        let affected = client.execute(&update_sql, &[]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!("Update (execute) failed: {}", e))
+        })?;
 
-        let client = self.db.get_client(); // mut removed if we don't use it mutably? No, execute is on client.
-        let mut client = self.db.get_client();
-
-        client
-            .execute(&sql, &[])
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
-
-        Ok(1)
+        Ok(affected as i32)
     }
 
     /// Update many documents
@@ -373,26 +405,37 @@ impl<'a> Collection<'a> {
 
     /// Delete one document
     pub fn delete_one(&self, query: &HashMap<String, JsonValue>) -> Result<i32> {
+        // 1. Find the ID of the document to delete
         let (where_clause, _) = QueryBuilder::build_where(query)?;
 
-        let sql = format!(
-            r#"
-            DELETE FROM "{}" 
-            WHERE id = (
-                SELECT id FROM "{}" 
-                WHERE {} 
-                LIMIT 1
+        let select_sql = if where_clause.is_empty() {
+            format!(r#"SELECT id::text FROM "{}" LIMIT 1"#, self.name)
+        } else {
+            format!(
+                r#"SELECT id::text FROM "{}" WHERE {} LIMIT 1"#,
+                self.name, where_clause
             )
-            "#,
-            self.name, self.name, where_clause
-        );
+        };
 
         let mut client = self.db.get_client();
-        client.execute(&sql, &[]).map_err(|e| {
+        let rows = client.query(&select_sql, &[]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!("Delete (find) failed: {}", e))
+        })?;
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        let id_str: String = rows[0].get(0);
+
+        // 2. Perform Delete by ID
+        let sql = format!(r#"DELETE FROM "{}" WHERE id = {}"#, self.name, id_str);
+
+        let affected = client.execute(&sql, &[]).map_err(|e| {
             crate::error::DBCenterError::QueryError(format!("Delete failed: {}", e))
         })?;
 
-        Ok(1)
+        Ok(affected as i32)
     }
 
     /// Delete many documents

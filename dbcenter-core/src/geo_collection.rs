@@ -17,18 +17,22 @@ impl<'a> GeoCollection<'a> {
 
         // Ensure PostGIS extension is installed
         if let Err(e) = db.install_extension("postgis") {
-             tracing::error!("Failed to install PostGIS for GeoCollection: {}", e);
+            tracing::error!("Failed to install PostGIS for GeoCollection: {}", e);
         }
 
         // Ensure table exists (delegate to standard collection logic via a temporary instance)
         // or just create it directly. Since standard collection handles it well, let's just use specific logic here
-        // to ensure we have control, but re-using would be cleaner. 
+        // to ensure we have control, but re-using would be cleaner.
         // We can just ensure the table exists by "instantiating" a standard collection temporarily
         // or just running the CREATE TABLE SQL if we want to be explicit.
         // For simplicity and robustness, let's explicitly create it here or assume the user might have used it as a normal collection before.
         // Actually, we should just ensure it exists.
         if let Err(e) = collection.ensure_table_and_index() {
-            tracing::error!("Failed to initialize GeoCollection table/index '{}': {}", name, e);
+            tracing::error!(
+                "Failed to initialize GeoCollection table/index '{}': {}",
+                name,
+                e
+            );
         }
 
         collection
@@ -40,6 +44,9 @@ impl<'a> GeoCollection<'a> {
             CREATE TABLE IF NOT EXISTS "{}" (
                 id SERIAL PRIMARY KEY,
                 data JSONB,
+                "lat" DOUBLE PRECISION,
+                "lon" DOUBLE PRECISION,
+                "geometry" JSONB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -50,20 +57,18 @@ impl<'a> GeoCollection<'a> {
             -- Spatial index on (lon, lat)
             -- We cast to float. Note: using 4326 (WGS 84)
             CREATE INDEX IF NOT EXISTS idx_{}_geo ON "{}" USING GIST (
-                ST_SetSRID(ST_MakePoint(
-                    CAST(data->>'lon' AS FLOAT), 
-                    CAST(data->>'lat' AS FLOAT)
-                ), 4326)
+                ST_SetSRID(ST_MakePoint("lon", "lat"), 4326)
             );
             "#,
-            self.name, 
-            self.name, self.name,
-            self.name, self.name
+            self.name, self.name, self.name, self.name, self.name
         );
 
         let mut client = self.db.get_client();
         client.batch_execute(&sql).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("GeoCollection init failed: {}", crate::utils::format_postgres_error(&e)))
+            crate::error::DBCenterError::QueryError(format!(
+                "GeoCollection init failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(())
@@ -78,15 +83,14 @@ impl<'a> GeoCollection<'a> {
     pub fn find_within_radius(&self, lat: f64, lon: f64, radius_km: f64) -> Result<Vec<JsonValue>> {
         // PostGIS ST_DWithin uses meters for geography type
         let radius_meters = radius_km * 1000.0;
-        
-        // Query using the index we created
-        // We use geography type for accurate distance calculation in meters
+
+        // Query using relational columns "lon", "lat"
         let sql = format!(
             r#"
-            SELECT id, data 
-            FROM "{}"
+            SELECT id, to_jsonb(t) as doc
+            FROM "{}" t
             WHERE ST_DWithin(
-                ST_SetSRID(ST_MakePoint(CAST(data->>'lon' AS FLOAT), CAST(data->>'lat' AS FLOAT)), 4326)::geography,
+                ST_SetSRID(ST_MakePoint("lon", "lat"), 4326)::geography,
                 ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
                 $3
             )
@@ -95,16 +99,23 @@ impl<'a> GeoCollection<'a> {
         );
 
         let mut client = self.db.get_client();
-        let rows = client.query(&sql, &[&lon, &lat, &radius_meters])
-            .map_err(|e| crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e)))?;
+        let rows = client
+            .query(&sql, &[&lon, &lat, &radius_meters])
+            .map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
 
         let mut results = Vec::new();
         for row in rows {
-            let id: i32 = row.get(0);
+            // let id: i32 = row.get(0);
             let mut data: JsonValue = row.get(1);
-            
+
+            // Ensure ID is present in the document
             if let JsonValue::Object(ref mut map) = data {
-                map.insert("_id".to_string(), JsonValue::Number(id.into()));
+                // Map id to _id if present in fetched row (it's in to_jsonb(t))
+                if let Some(id_val) = map.get("id") {
+                    map.insert("_id".to_string(), id_val.clone());
+                }
             }
             results.push(data);
         }
@@ -112,13 +123,13 @@ impl<'a> GeoCollection<'a> {
         Ok(results)
     }
 
-    /// Calculate distance between two documents (identified by their IDs or some field - user request says `from_id`, `to_id`. 
+    /// Calculate distance between two documents (identified by their IDs or some field - user request says `from_id`, `to_id`.
     /// The user example uses "store_a" which implies string IDs inside the doc or the auto-increment ID?
-    /// User code: `stores.insert_many([...])` -> these get auto IDs. 
+    /// User code: `stores.insert_many([...])` -> these get auto IDs.
     /// User query: `distance_between(from_id="store_a", to_id="store_b")`.
     /// Wait, the inserted docs have `name: Store A`. It's likely the user intends to query by some field.
     /// BUT `from_id` implies the primary key or a specific unique field.
-    /// The DB auto-generates integer IDs. 
+    /// The DB auto-generates integer IDs.
     /// However, usually in such APIs, if you pass a string, it might be looking up by `_id` (if string) or maybe a custom ID field?
     /// The user prompt `from_id="store_a"` is tricky because the inserted data doesn't have `id: "store_a"`.
     /// It has `name: "Store A"`.
@@ -134,39 +145,24 @@ impl<'a> GeoCollection<'a> {
     /// I will assume the user considers `name` or some unique identifier.
     /// Let's query the two documents first, then calculate.
     /// Or do it in one SQL.
-    /// Let's assume `id` refers to the `id` column (integer) OR a field named `id` in JSON. 
+    /// Let's assume `id` refers to the `id` column (integer) OR a field named `id` in JSON.
     /// Given the user example: `from_id="store_a"`, and the insert had `name="Store A"`.
     /// Maybe they meant `name`?
     /// I will interpret `from_id` as: look for document where `id` (PK) = val OR `data->>'id'` = val OR `data->>'name'` = val.
-    
+
     pub fn distance_between(&self, from_id: &JsonValue, to_id: &JsonValue) -> Result<Option<f64>> {
-        // Helper to generate SQL condition for an ID
-        let id_condition = |param_idx: usize| {
-            format!(
-                "(id = ${0}::text::int OR data->>'id' = ${0} OR data->>'name' = ${0})", 
-                param_idx
-            )
-        };
-        // We use text for parameter to allow both string and int matching (via cast for PK)
-        // But if param is stricly int, `id = $1` works. 
-        // Postgres casting from text to int might fail if text is not int.
-        
-        // Safer approach: Query by keys.
-        // Let's iterate: find doc1, find doc2. Then calc distance.
-        // Or single query.
-        
-        // Let's assume strictly: 
-        // If from_id is Number -> PK.
-        // If String -> `data->>'id'` or `data->>'name'`.
-        
         let (val1, is_int1) = self.extract_id_val(from_id);
         let (val2, is_int2) = self.extract_id_val(to_id);
 
         let get_cond = |val: &String, is_int: bool, placeholder: &str| {
             if is_int {
-                format!("id = {}", val) // unsafe if val not sanitized? val comes from number, safe.
+                format!("id = {}", val)
             } else {
-                format!("(data->>'id' = '{}' OR data->>'name' = '{}')", val.replace("'", "''"), val.replace("'", "''"))
+                format!(
+                    "(data->>'id' = '{}' OR data->>'name' = '{}')",
+                    val.replace("'", "''"),
+                    val.replace("'", "''")
+                )
             }
         };
 
@@ -175,12 +171,12 @@ impl<'a> GeoCollection<'a> {
 
         let sql = format!(
             r#"
-            WITH p1 AS (SELECT data FROM "{0}" WHERE {1} LIMIT 1),
-                 p2 AS (SELECT data FROM "{0}" WHERE {2} LIMIT 1)
+            WITH p1 AS (SELECT "lon", "lat" FROM "{0}" WHERE {1} LIMIT 1),
+                 p2 AS (SELECT "lon", "lat" FROM "{0}" WHERE {2} LIMIT 1)
             SELECT 
                 ST_Distance(
-                    ST_SetSRID(ST_MakePoint((p1.data->>'lon')::float, (p1.data->>'lat')::float), 4326)::geography,
-                    ST_SetSRID(ST_MakePoint((p2.data->>'lon')::float, (p2.data->>'lat')::float), 4326)::geography
+                    ST_SetSRID(ST_MakePoint(p1.lon, p1.lat), 4326)::geography,
+                    ST_SetSRID(ST_MakePoint(p2.lon, p2.lat), 4326)::geography
                 )
             FROM p1, p2
             "#,
@@ -188,8 +184,9 @@ impl<'a> GeoCollection<'a> {
         );
 
         let mut client = self.db.get_client();
-        let rows = client.query(&sql, &[])
-            .map_err(|e| crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e)))?;
+        let rows = client.query(&sql, &[]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         if let Some(row) = rows.first() {
             let dist: Option<f64> = row.get(0);
@@ -206,7 +203,7 @@ impl<'a> GeoCollection<'a> {
             _ => (v.to_string(), false),
         }
     }
-    
+
     /// Check if point is inside a polygon (identified by ID)
     /// Polygon is assumed to be in `data->'geometry'` or `data->'polygon'`?
     /// User prompt says: `contains_point(polygon_id="...", lat=..., lon=...)`.
@@ -220,26 +217,27 @@ impl<'a> GeoCollection<'a> {
     /// The user didn't specify format. I will try to handle `geometry` (GeoJSON) or `wkt`.
     /// Most likely GeoJSON in `data`.
     pub fn contains_point(&self, polygon_id: &JsonValue, lat: f64, lon: f64) -> Result<bool> {
-         let (val, is_int) = self.extract_id_val(polygon_id);
-         let get_cond = |val: &String, is_int: bool| {
+        let (val, is_int) = self.extract_id_val(polygon_id);
+        let get_cond = |val: &String, is_int: bool| {
             if is_int {
                 format!("id = {}", val)
             } else {
-                format!("(data->>'id' = '{}' OR data->>'name' = '{}')", val.replace("'", "''"), val.replace("'", "''"))
+                format!(
+                    "(data->>'id' = '{}' OR data->>'name' = '{}')",
+                    val.replace("'", "''"),
+                    val.replace("'", "''")
+                )
             }
         };
         let cond = get_cond(&val, is_int);
 
         // ST_Contains(polygon, point)
-        // We assume the stored document has a field that can be cast to geometry.
-        // Try `data->>'geometry'` (GeoJSON string or WKT) or `data->'geometry'` (GeoJSON object).
-        // ST_GeomFromGeoJSON(data->'geometry') is standard.
-        
+        // Use "geometry" column
         let sql = format!(
             r#"
             SELECT 
                 ST_Contains(
-                    ST_SetSRID(ST_GeomFromGeoJSON(data->'geometry'), 4326),
+                    ST_SetSRID(ST_GeomFromGeoJSON("geometry"), 4326),
                     ST_SetSRID(ST_MakePoint($1, $2), 4326)
                 )
             FROM "{}"
@@ -250,15 +248,15 @@ impl<'a> GeoCollection<'a> {
         );
 
         let mut client = self.db.get_client();
-        let rows = client.query(&sql, &[&lon, &lat])
-            .map_err(|e| crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e)))?;
+        let rows = client.query(&sql, &[&lon, &lat]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
-         if let Some(row) = rows.first() {
+        if let Some(row) = rows.first() {
             let contains: Option<bool> = row.get(0);
             return Ok(contains.unwrap_or(false));
-         }
+        }
 
         Ok(false)
     }
-
 }

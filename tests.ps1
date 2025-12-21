@@ -40,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to install Python wheel" }
 
 # Run test script
 $PyTestFile = Join-Path $ProjectRoot "python_tests/test_final.py"
-python $PyTestFile
+python -u $PyTestFile
 if ($LASTEXITCODE -ne 0) { throw "Python tests failed on Windows" }
 
 # C. Rust Tests (Local)

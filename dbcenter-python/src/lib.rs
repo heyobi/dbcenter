@@ -3,7 +3,7 @@ use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, Sto
 use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
 use dbcenter_core::vfs::google_drive::GoogleDriveAdapter as CoreGoogleDriveAdapter;
 use dbcenter_core::DBCenter as CoreDBCenter;
-use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::exceptions::{PyAttributeError, PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PyModule};
 use pyo3::wrap_pyfunction;
@@ -450,6 +450,11 @@ impl DBCenter {
             }
             Ok(self.collection(name).into_py(py))
         })
+    }
+
+    /// String representation
+    fn __repr__(&self) -> String {
+        format!("<DBCenter path='{}'>", self.path)
     }
 
     /// Context manager support: __enter__
@@ -1088,9 +1093,80 @@ impl Collection {
             .map_err(|e| PyException::new_err(e.to_string()))
     }
 
-    /// String representation
+    /// Attribute access for columns (e.g. coll.age) or lazy chaining
+    fn __getattr__(&self, name: &str) -> PyResult<PyObject> {
+        // If attribute is a valid column name, return its values (eagerly)?
+        // Or return a lazy expression?
+        // User log showed `db.test.abc` expecting something.
+        // Let's implement simple eager column fetch for now to match intuitive interactive use.
+
+        Python::with_gil(|py| {
+            // Avoid recursion for special methods
+            if name.starts_with("__") {
+                return Err(PyAttributeError::new_err(format!(
+                    "'Collection' object has no attribute '{}'",
+                    name
+                )));
+            }
+
+            // Try to query just this column
+            // We can use our existing infrastructure
+            let sql = format!("SELECT \"{}\" FROM \"{}\" LIMIT 100", name, self.name);
+            let res = self.db.query(&sql, &[]);
+
+            match res {
+                Ok(rows) => {
+                    // Extract just the values
+                    let mut values = Vec::new();
+                    for row in rows {
+                        // Row is {"col": val}
+                        if let Some(val) = row.as_object().and_then(|m| m.get(name)) {
+                            values.push(val.clone());
+                        }
+                    }
+                    Ok(json_to_py(py, &JsonValue::Array(values)))
+                }
+                Err(_) => {
+                    // Not a column or query failed, assume it's not an attribute
+                    Err(PyAttributeError::new_err(format!(
+                        "'Collection' object has no attribute '{}'",
+                        name
+                    )))
+                }
+            }
+        })
+    }
+
+    /// String representation - Show preview of data
     fn __repr__(&self) -> String {
-        format!("<Collection '{}'>", self.name)
+        // Fetch first 5 rows for preview
+        let preview_sql = format!("SELECT * FROM \"{}\" LIMIT 5", self.name);
+        match self.db.query(&preview_sql, &[]) {
+            Ok(rows) => {
+                if rows.is_empty() {
+                    return format!("<Collection '{}': (empty)>", self.name);
+                }
+
+                // Simple formatting
+                let count = self
+                    .db
+                    .query(&format!("SELECT count(*) FROM \"{}\"", self.name), &[])
+                    .map(|r| {
+                        r.first()
+                            .and_then(|row| row.get("count"))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+
+                format!("<Collection '{}': {} rows>\n{:?}", self.name, count, rows)
+            }
+            Err(_) => format!("<Collection '{}' (error loading preview)>", self.name),
+        }
+    }
+
+    fn __len__(&self) -> PyResult<usize> {
+        self.count(None).map(|c| c as usize)
     }
 
     // --- Arrow / LazyFrame API ---
