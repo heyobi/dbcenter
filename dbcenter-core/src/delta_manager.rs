@@ -1,6 +1,6 @@
-use crate::DBCenter;
 use crate::error::{DBCenterError, Result};
-// use crate::utils; 
+use crate::DBCenter;
+// use crate::utils;
 
 pub struct DeltaManager;
 
@@ -13,7 +13,7 @@ impl DeltaManager {
         let mut client = db.get_client();
 
         // 1. Create Physical Tables
-        
+
         // 1. Create Base Table
         let create_base_sql = format!(
             r#"CREATE TABLE IF NOT EXISTS "{}_base" (
@@ -24,7 +24,9 @@ impl DeltaManager {
             );"#,
             table_name
         );
-        client.batch_execute(&create_base_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create base table: {}", e)))?;
+        client.batch_execute(&create_base_sql).map_err(|e| {
+            DBCenterError::QueryError(format!("Failed to create base table: {}", e))
+        })?;
 
         // 2. Create Adds Table
         let create_adds_sql = format!(
@@ -36,7 +38,9 @@ impl DeltaManager {
             );"#,
             table_name
         );
-        client.batch_execute(&create_adds_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create adds table: {}", e)))?;
+        client.batch_execute(&create_adds_sql).map_err(|e| {
+            DBCenterError::QueryError(format!("Failed to create adds table: {}", e))
+        })?;
 
         // 3. Create Dels Table
         let create_dels_sql = format!(
@@ -46,7 +50,9 @@ impl DeltaManager {
             );"#,
             table_name
         );
-        client.batch_execute(&create_dels_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create dels table: {}", e)))?;
+        client.batch_execute(&create_dels_sql).map_err(|e| {
+            DBCenterError::QueryError(format!("Failed to create dels table: {}", e))
+        })?;
 
         // Create indexes
         let create_indexes_sql = format!(
@@ -54,18 +60,19 @@ impl DeltaManager {
             CREATE INDEX IF NOT EXISTS idx_{}_base_data ON "{}_base" USING GIN (data);
             CREATE INDEX IF NOT EXISTS idx_{}_adds_data ON "{}_adds" USING GIN (data);
             "#,
-            table_name, table_name,
-            table_name, table_name
+            table_name, table_name, table_name, table_name
         );
-        client.batch_execute(&create_indexes_sql).map_err(|e| DBCenterError::QueryError(format!("Failed to create indexes: {}", e)))?;
+        client
+            .batch_execute(&create_indexes_sql)
+            .map_err(|e| DBCenterError::QueryError(format!("Failed to create indexes: {}", e)))?;
 
         // 2. Create Create "Transparent View"
         // Union of base and adds, filtering out dels
-        // Logic: 
+        // Logic:
         // Rows from ADDS (new or updated)
         // UNION ALL
         // Rows from BASE (excluding those updated in ADDS or deleted in DELS)
-        
+
         let view_sql = format!(
             r#"
             CREATE OR REPLACE VIEW "{}" AS
@@ -75,22 +82,38 @@ impl DeltaManager {
             "#,
             table_name,
             adds, // Adds - NO DELS FILTER
-            base, adds, dels // Base - Filtered by both
+            base,
+            adds,
+            dels // Base - Filtered by both
         );
 
+        tracing::info!("Creating/Replacing View for {}", table_name);
         client.batch_execute(&view_sql).map_err(|e| {
-             DBCenterError::QueryError(format!("Failed to create delta view: {}", e))
+            DBCenterError::QueryError(format!("Failed to create delta view: {}", e))
         })?;
 
         // 3. Implement INSTEAD OF TRIGGERS
-        
+        tracing::info!("Creating Triggers for {}", table_name);
+
         // INSERT trigger
         let insert_trigger_func = format!("func_insert_{}", table_name);
         let insert_sql = format!(
             r#"
             CREATE OR REPLACE FUNCTION {}() RETURNS TRIGGER AS $$
             BEGIN
-                INSERT INTO "{}" (data) VALUES (NEW.data) RETURNING id, created_at, updated_at INTO NEW.id, NEW.created_at, NEW.updated_at;
+                -- Handle defaults because NEW.* contains NULLs for omitted columns
+                IF NEW.id IS NULL THEN
+                    NEW.id := gen_random_uuid();
+                END IF;
+                IF NEW.created_at IS NULL THEN
+                    NEW.created_at := CURRENT_TIMESTAMP;
+                END IF;
+                IF NEW.updated_at IS NULL THEN
+                    NEW.updated_at := CURRENT_TIMESTAMP;
+                END IF;
+
+                -- Use NEW.* to support dynamic columns
+                INSERT INTO "{}" VALUES (NEW.*) RETURNING id, created_at, updated_at INTO NEW.id, NEW.created_at, NEW.updated_at;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql;
@@ -100,14 +123,17 @@ impl DeltaManager {
             INSTEAD OF INSERT ON "{}"
             FOR EACH ROW EXECUTE FUNCTION {}();
             "#,
-            insert_trigger_func, adds,
-            table_name, table_name,
-            table_name, table_name,
+            insert_trigger_func,
+            adds,
+            table_name,
+            table_name,
+            table_name,
+            table_name,
             insert_trigger_func
         );
 
         // UPDATE trigger
-        // Mark old ID as deleted (in dels)? 
+        // Mark old ID as deleted (in dels)?
         // If we update, we insert new version into ADDs.
         // But what about the ID?
         // If we want to preserve ID (standard SQL update), we must insert into ADDS with the SAME ID.
@@ -124,7 +150,7 @@ impl DeltaManager {
         // 1. DELETE FROM x_adds WHERE id = OLD.id; (Clean up potential previous add)
         // 2. INSERT INTO x_dels (id) VALUES (OLD.id) ON CONFLICT DO NOTHING; (Hide base)
         // 3. INSERT INTO x_adds (id, data) VALUES (OLD.id, NEW.data); (Add new version)
-        
+
         let update_trigger_func = format!("func_update_{}", table_name);
         let update_sql = format!(
             r#"
@@ -136,8 +162,8 @@ impl DeltaManager {
                 -- Mark as deleted (hides base version)
                 INSERT INTO "{}" (id) VALUES (OLD.id) ON CONFLICT (id) DO NOTHING;
                 
-                -- Insert new version into adds
-                INSERT INTO "{}" (id, data) VALUES (OLD.id, NEW.data);
+                -- Insert new version into adds (using NEW.*)
+                INSERT INTO "{}" VALUES (NEW.*);
                 
                 RETURN NEW;
             END;
@@ -148,12 +174,14 @@ impl DeltaManager {
             INSTEAD OF UPDATE ON "{}"
             FOR EACH ROW EXECUTE FUNCTION {}();
             "#,
-            update_trigger_func, 
+            update_trigger_func,
             adds,
             dels,
             adds,
-            table_name, table_name,
-            table_name, table_name,
+            table_name,
+            table_name,
+            table_name,
+            table_name,
             update_trigger_func
         );
 
@@ -182,14 +210,18 @@ impl DeltaManager {
             delete_trigger_func,
             dels,
             adds,
-            table_name, table_name,
-            table_name, table_name,
+            table_name,
+            table_name,
+            table_name,
+            table_name,
             delete_trigger_func
         );
 
-        client.batch_execute(&format!("{}{}{}", insert_sql, update_sql, delete_sql)).map_err(|e| {
-             DBCenterError::QueryError(format!("Failed to create delta triggers: {}", e))
-        })?;
+        client
+            .batch_execute(&format!("{}{}{}", insert_sql, update_sql, delete_sql))
+            .map_err(|e| {
+                DBCenterError::QueryError(format!("Failed to create delta triggers: {}", e))
+            })?;
 
         Ok(())
     }

@@ -123,6 +123,9 @@ impl<'a> Collection<'a> {
         // depending on Postgres version/behavior (early versions didn't auto-update views on SELECT *).
         // Postgres views generally capture the * at creation time.
         // So we MUST recreate the Delta View if we added columns.
+        // Drop client to release Mutex lock before calling ensure_delta_tables (which acquires lock)
+        drop(client);
+
         if delta_mode {
             // Simply call ensure_delta_tables again? It does CREATE OR REPLACE VIEW.
             crate::delta_manager::DeltaManager::ensure_delta_tables(self.db, &self.name)?;

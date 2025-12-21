@@ -249,7 +249,17 @@ class TestDBCenterDelta(unittest.TestCase):
         
         # Verify it's in _adds
         adds_content = self.db.query("SELECT * FROM products_adds")
-        self.assertTrue(any(row['data']['name'] == 'Laptop' for row in adds_content if 'data' in row), "Laptop not found in _adds")
+        found = False
+        for row in adds_content:
+             # Check flattened column (new behavior)
+             if row.get('name') == 'Laptop': 
+                 found = True
+                 break
+             # Check legacy nested data
+             if row.get('data') and isinstance(row['data'], dict) and row['data'].get('name') == 'Laptop': 
+                 found = True
+                 break
+        self.assertTrue(found, f"Laptop not found in _adds. Content: {adds_content}")
         
         # UPDATE
         products.update_one({"_id": doc_id}, {"$set": {"price": 1200}})
