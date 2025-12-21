@@ -372,7 +372,7 @@ impl<'a> Collection<'a> {
             r#"
             UPDATE "{}" 
             SET {}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = {}
+            WHERE id = '{}'
             "#,
             self.name, update_clause, id_str
         );
@@ -432,7 +432,7 @@ impl<'a> Collection<'a> {
         let id_str: String = rows[0].get(0);
 
         // 2. Perform Delete by ID
-        let sql = format!(r#"DELETE FROM "{}" WHERE id = {}"#, self.name, id_str);
+        let sql = format!(r#"DELETE FROM "{}" WHERE id = '{}'"#, self.name, id_str);
 
         let affected = client.execute(&sql, &[]).map_err(|e| {
             crate::error::DBCenterError::QueryError(format!("Delete failed: {}", e))
