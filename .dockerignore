@@ -1,0 +1,7 @@
+target/
+.git/
+dist_debug/
+*.whl
+dbcenterwebsite/
+python_tests/
+**/*.txt

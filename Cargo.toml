@@ -6,6 +6,7 @@ members = [
     "dbcenter-watcher",
     "dbcenter-node",
     "dbcenter-java",
+    "dbcenter-serve",
 ]
 resolver = "2"
 

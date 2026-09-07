@@ -497,12 +497,19 @@ fn update_pg_hba_for_network(
         host.is_some_and(|h| h == "0.0.0.0" || (!h.starts_with("127.") && h != "localhost"));
 
     if needs_network {
-        let auth_method = if has_password {
-            "scram-sha-256"
-        } else {
-            "trust"
-        };
-        let entry = format!("\n# Allow network connections\nhost    all             all             0.0.0.0/0               {}\n", auth_method);
+        // Never `trust` from anywhere. Listening on a network interface without
+        // a password used to write a rule that let anyone who could reach the
+        // port in as the superuser. Requiring scram fails closed instead: with
+        // no password set nobody can authenticate, which is the right outcome
+        // for a database that was exposed by accident.
+        if !has_password {
+            tracing::error!(
+                "PostgreSQL is listening on a network interface but no password \
+                 is configured. Network connections will be refused until one is \
+                 set; pass .password(..) or set DBCENTER_PASSWORD."
+            );
+        }
+        let entry = "\n# Allow network connections\nhost    all             all             0.0.0.0/0               scram-sha-256\n".to_string();
 
         fs::OpenOptions::new()
             .append(true)
@@ -513,10 +520,7 @@ fn update_pg_hba_for_network(
             })
             .map_err(DBCenterError::IoError)?;
 
-        tracing::info!(
-            "Updated pg_hba.conf for network access with {}",
-            auth_method
-        );
+        tracing::info!("Updated pg_hba.conf for network access with scram-sha-256");
     }
 
     Ok(())
