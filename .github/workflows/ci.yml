@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # The embedded PostgreSQL distribution is downloaded from Maven Central on
+      # first use and cached under ~/.dbcenter, so cache it alongside cargo.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.dbcenter
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      # Every crate in the workspace must keep compiling. The Java and Node
+      # bindings drifted out of sync with DBCenter::new once already because
+      # nothing built them.
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy -p dbcenter-core -- -D warnings
+
+      # Integration tests boot a real embedded PostgreSQL, so keep them serial.
+      - name: Test
+        run: cargo test -p dbcenter-core -- --test-threads=1

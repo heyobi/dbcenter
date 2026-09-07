@@ -26,7 +26,7 @@ impl DBCenter {
         let rt = Runtime::new().map_err(|e| Error::from_reason(e.to_string()))?;
         
         let db = rt.block_on(async {
-            CoreDBCenter::new(path, is_persist, false, None, None, None, None)
+            CoreDBCenter::new(path, is_persist, false, None, None, None, None, false)
         }).map_err(|e| Error::from_reason(e.to_string()))?;
 
         Ok(DBCenter { inner: db })

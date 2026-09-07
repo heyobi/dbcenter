@@ -33,7 +33,7 @@ pub extern "system" fn Java_com_dbcenter_DBCenter_nativeNew(
 
     let runtime = Runtime::new().unwrap();
     let db = runtime.block_on(async {
-        DBCenter::new(Some(path), is_persist, false, None, None, None, None)
+        DBCenter::new(Some(path), is_persist, false, None, None, None, None, false)
     });
 
     match db {

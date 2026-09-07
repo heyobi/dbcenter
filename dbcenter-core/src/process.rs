@@ -492,22 +492,39 @@ fn update_postgresql_conf_library_path(data_dir: &std::path::Path) -> Result<()>
         if let Some(bin_dir) = pg_ctl.parent() {
                      // Look for lib directory relative to bin
                      if let Some(root_dir) = bin_dir.parent() {
-                         let lib_dir = root_dir.join("lib");
-                         let mut search_paths = Vec::new();
+                         // $libdir comes first: it is where the distribution's own
+                         // modules live, and extension scripts reference it directly
+                         // (AS '$libdir/pg_trgm'). Extra directories are only a
+                         // fallback for extensions we unpack ourselves.
+                         let mut search_paths = vec!["$libdir".to_string()];
 
-                         // Add root directory to search path (some distributions put DLLs here)
-                         let root_path_str = root_dir.to_string_lossy().replace("\\", "/");
-                         search_paths.push(root_path_str.replace("'", "\\'"));
-
-                         if lib_dir.exists() {
-                             let lib_path_str = lib_dir.to_string_lossy().replace("\\", "/");
-                             search_paths.push(lib_path_str.replace("'", "\\'"));
+                         // Modules usually sit in lib/postgresql; some distributions
+                         // put them straight in lib, or beside the binaries.
+                         for candidate in [
+                             root_dir.join("lib").join("postgresql"),
+                             root_dir.join("lib"),
+                             root_dir.to_path_buf(),
+                         ] {
+                             if !candidate.exists() {
+                                 continue;
+                             }
+                             let path_str = candidate
+                                 .to_string_lossy()
+                                 .replace("\\", "/")
+                                 .replace("'", "\\'");
+                             if !search_paths.contains(&path_str) {
+                                 search_paths.push(path_str);
+                             }
                          }
-                         
-                         // Always include $libdir
-                         search_paths.push("$libdir".to_string());
-                         
-                         let setting = format!("dynamic_library_path = '{}'", search_paths.join(";"));
+
+                         // PostgreSQL splits dynamic_library_path on the platform's
+                         // path separator: ';' on Windows, ':' everywhere else.
+                         // Using ';' on Linux collapses the whole list into one
+                         // nonexistent directory, so no extension can ever load.
+                         let separator = if cfg!(windows) { ";" } else { ":" };
+
+                         let setting =
+                             format!("dynamic_library_path = '{}'", search_paths.join(separator));
                       
                          // Read and update config
                          if let Ok(content) = fs::read_to_string(&conf_path) {
