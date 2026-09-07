@@ -39,14 +39,18 @@ services:
     environment: &node-env
       DBCENTER_STORAGE: s3
       DBCENTER_BUCKET: dbcenter
-      DBCENTER_PREFIX: cluster
+      # Overridable so a test run starts from an empty namespace instead of
+      # restoring the previous run's rows.
+      DBCENTER_PREFIX: ${DBCENTER_PREFIX:-cluster}
       AWS_ENDPOINT_URL_S3: http://storage:9000
       AWS_ACCESS_KEY_ID: dbcenter
       AWS_SECRET_ACCESS_KEY: dbcenter123
       AWS_REGION: us-east-1
       AWS_S3_FORCE_PATH_STYLE: "true"
       DBCENTER_PASSWORD: dbcenter123
-      DBCENTER_SYNC_INTERVAL_SECS: "5"
+      DBCENTER_SYNC_INTERVAL_SECS: "20"
+      DBCENTER_PULL: "true"
+      DBCENTER_COMPACT_INTERVAL_SECS: "0"
       DBCENTER_NODE_ID: node-a
       DBCENTER_COLLECTIONS: users
       RUST_LOG: info

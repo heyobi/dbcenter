@@ -164,37 +164,6 @@ fn tables_in_storage(storage: &Storage) -> Result<Vec<String>, String> {
     Ok(tables)
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn table_names_come_from_both_markers() {
-        let keys = [
-            "users_BASE_1700000000_abc.parquet",
-            "users_DELTA_1700000100_def.parquet",
-            "order_items_DELTA_1700000200_ghi.parquet",
-            "notes.txt",
-        ];
-        let mut tables: Vec<String> = keys
-            .iter()
-            .filter(|key| key.ends_with(".parquet"))
-            .filter_map(|key| {
-                let base = key.split_once("_BASE_").map(|(t, _)| t);
-                let delta = key.split_once("_DELTA_").map(|(t, _)| t);
-                match (base, delta) {
-                    (Some(b), Some(d)) => Some(if b.len() < d.len() { b } else { d }),
-                    (Some(b), None) => Some(b),
-                    (None, Some(d)) => Some(d),
-                    (None, None) => None,
-                }
-                .map(|t| t.to_string())
-            })
-            .collect();
-        tables.sort();
-        tables.dedup();
-        assert_eq!(tables, vec!["order_items".to_string(), "users".to_string()]);
-    }
-}
-
 fn restore(engine: &SyncEngine, storage: &Storage, db: &Arc<DBCenter>) -> Result<(), String> {
     let tables = tables_in_storage(storage)?;
     if tables.is_empty() {
@@ -220,17 +189,61 @@ fn restore(engine: &SyncEngine, storage: &Storage, db: &Arc<DBCenter>) -> Result
     Ok(())
 }
 
-/// Push pending changes for every collection this database knows about.
-fn push_all(engine: &SyncEngine, db: &Arc<DBCenter>, batch: usize) -> Result<usize, String> {
+/// Take in whatever the other nodes have published since the last pass.
+///
+/// Deltas only: a base snapshot is a full rewrite of a table, and re-reading
+/// one every interval would dominate the traffic. A node that needs the base
+/// gets it at boot, when it restores.
+fn pull_all(engine: &SyncEngine, db: &Arc<DBCenter>) -> Result<(), String> {
+    let names = collection_names(db)?;
+    if names.is_empty() {
+        return Ok(());
+    }
+    for name in &names {
+        if let Err(e) = engine.pull_and_apply(name, SyncMode::Partial) {
+            tracing::error!("Could not pull '{}': {}", name, e);
+        }
+    }
+    tracing::info!("Pulled {} collection(s) from object storage", names.len());
+    Ok(())
+}
+
+/// Fold each table's accumulated deltas into a fresh base snapshot.
+///
+/// Every push leaves another Parquet object in the bucket and a restore reads
+/// all of them, so cold starts get slower without bound until something
+/// compacts. The engine takes the storage lock for this, so with several nodes
+/// running exactly one does the work and the rest find the lock held and move
+/// on - which is what the lock is there for.
+fn compact_all(engine: &SyncEngine, db: &Arc<DBCenter>) {
+    let names = match collection_names(db) {
+        Ok(names) => names,
+        Err(e) => {
+            tracing::error!("Could not list collections to compact: {}", e);
+            return;
+        }
+    };
+
+    for name in names {
+        match engine.vacuum(&name) {
+            Ok(()) => tracing::info!("Compacted '{}'", name),
+            // Another node holding the lock is the normal case, not a fault.
+            Err(e) => tracing::debug!("Skipped compacting '{}': {}", name, e),
+        }
+    }
+}
+
+/// Collection names, derived from their delta tables.
+///
+/// In delta mode a collection is a view over `<name>_base`, `<name>_adds` and
+/// `<name>_dels`, and list_collections reads pg_tables, which does not include
+/// views - so the view name never appears. The `_adds` table is both present in
+/// that list and exactly where pending rows live.
+fn collection_names(db: &Arc<DBCenter>) -> Result<Vec<String>, String> {
     let tables = db
         .list_collections()
         .map_err(|e| format!("Could not list tables: {}", e))?;
 
-    // In delta mode a collection is a *view* over <name>_base, <name>_adds and
-    // <name>_dels, and list_collections reads pg_tables, which does not include
-    // views. Filtering the view name out of that list therefore left nothing to
-    // sync at all. Derive the collection name from its _adds table instead,
-    // which is also exactly where the pending rows live.
     let mut names: Vec<String> = tables
         .iter()
         .filter_map(|t| t.strip_suffix("_adds"))
@@ -238,9 +251,13 @@ fn push_all(engine: &SyncEngine, db: &Arc<DBCenter>, batch: usize) -> Result<usi
         .collect();
     names.sort();
     names.dedup();
+    Ok(names)
+}
 
+/// Push pending changes for every collection this database knows about.
+fn push_all(engine: &SyncEngine, db: &Arc<DBCenter>, batch: usize) -> Result<usize, String> {
     let mut total = 0;
-    for name in names {
+    for name in collection_names(db)? {
         match engine.sync_table(&name, batch) {
             Ok(rows) => {
                 if rows > 0 {
@@ -272,21 +289,69 @@ fn serve_until_signalled(
     }
 
     let mut last_sync = Instant::now();
+    let mut last_compact = Instant::now();
+
     while !stop.load(Ordering::Relaxed) {
         // Wake often enough that a stop signal is acted on promptly, rather
         // than after a whole sync interval.
         std::thread::sleep(Duration::from_millis(250));
 
-        if let Some(engine) = engine {
-            if last_sync.elapsed() >= config.sync_interval {
-                last_sync = Instant::now();
-                if let Err(e) = push_all(engine, db, config.sync_batch) {
-                    tracing::error!("Periodic sync failed: {}", e);
+        let Some(engine) = engine else { continue };
+
+        if last_sync.elapsed() >= config.sync_interval {
+            last_sync = Instant::now();
+
+            // Push first: publishing what this node knows before taking in
+            // what others wrote keeps a crash between the two from losing
+            // local work.
+            if let Err(e) = push_all(engine, db, config.sync_batch) {
+                tracing::error!("Periodic push failed: {}", e);
+            }
+
+            if config.pull_enabled {
+                if let Err(e) = pull_all(engine, db) {
+                    tracing::error!("Periodic pull failed: {}", e);
                 }
             }
+        }
+
+        if !config.compact_interval.is_zero() && last_compact.elapsed() >= config.compact_interval {
+            last_compact = Instant::now();
+            compact_all(engine, db);
         }
     }
 
     tracing::info!("Stop requested");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn table_names_come_from_both_markers() {
+        let keys = [
+            "users_BASE_1700000000_abc.parquet",
+            "users_DELTA_1700000100_def.parquet",
+            "order_items_DELTA_1700000200_ghi.parquet",
+            "notes.txt",
+        ];
+        let mut tables: Vec<String> = keys
+            .iter()
+            .filter(|key| key.ends_with(".parquet"))
+            .filter_map(|key| {
+                let base = key.split_once("_BASE_").map(|(t, _)| t);
+                let delta = key.split_once("_DELTA_").map(|(t, _)| t);
+                match (base, delta) {
+                    (Some(b), Some(d)) => Some(if b.len() < d.len() { b } else { d }),
+                    (Some(b), None) => Some(b),
+                    (None, Some(d)) => Some(d),
+                    (None, None) => None,
+                }
+                .map(|t| t.to_string())
+            })
+            .collect();
+        tables.sort();
+        tables.dedup();
+        assert_eq!(tables, vec!["order_items".to_string(), "users".to_string()]);
+    }
 }

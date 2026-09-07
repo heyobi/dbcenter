@@ -27,6 +27,18 @@ pub struct ServeConfig {
     pub sync_interval: Duration,
     /// Rows pushed per table per sync pass.
     pub sync_batch: usize,
+    /// Whether to pull other nodes' changes on each pass.
+    ///
+    /// Only worth paying for when more than one node writes to the bucket. A
+    /// single scale-to-zero machine restores once at boot and is then the only
+    /// writer, so pulling again buys nothing.
+    pub pull_enabled: bool,
+    /// How often to compact a table's deltas into a fresh base snapshot.
+    ///
+    /// Every incremental push leaves another Parquet object behind, and a
+    /// restore reads all of them, so without compaction cold starts get slower
+    /// without bound. Zero disables it.
+    pub compact_interval: Duration,
     /// Identifies this instance in storage locks.
     pub node_id: String,
     /// Collections to create at boot, comma separated.
@@ -85,6 +97,14 @@ impl ServeConfig {
             storage,
             sync_interval: Duration::from_secs(parsed("DBCENTER_SYNC_INTERVAL_SECS", 30u64)?),
             sync_batch: parsed("DBCENTER_SYNC_BATCH", 10_000usize)?,
+            pull_enabled: matches!(
+                var("DBCENTER_PULL").as_deref(),
+                Some("1") | Some("true") | Some("yes")
+            ),
+            compact_interval: Duration::from_secs(parsed(
+                "DBCENTER_COMPACT_INTERVAL_SECS",
+                900u64,
+            )?),
             // Fly sets FLY_MACHINE_ID; anywhere else a random id is fine, since
             // it only has to be unique among the writers sharing the bucket.
             collections: var("DBCENTER_COLLECTIONS")

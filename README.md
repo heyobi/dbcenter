@@ -91,6 +91,8 @@ docker run --rm -p 5432:5432 \
 | `DBCENTER_PASSWORD` | *(none)* | Required for TCP clients; without it only the local socket is usable |
 | `DBCENTER_COLLECTIONS` | *(none)* | Comma-separated collections to create at boot |
 | `DBCENTER_SYNC_INTERVAL_SECS` | `30` | How often to push pending changes |
+| `DBCENTER_PULL` | `false` | Also take in other nodes' changes each pass |
+| `DBCENTER_COMPACT_INTERVAL_SECS` | `900` | Fold deltas into a fresh base snapshot; `0` disables |
 | `DBCENTER_NODE_ID` | `$FLY_MACHINE_ID` | Identifies this writer in storage locks |
 
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` and
@@ -108,12 +110,35 @@ not data.
 ### Checking it locally
 
 `docker-compose.yml` stands MinIO in for Tigris and runs two nodes against one
-bucket. `scripts/cluster-test.sh` writes through one node, destroys that node
-and its disk, and checks the row comes back on the other:
+bucket.
+
+`scripts/cluster-test.sh` covers the scale-to-zero case: it writes through one
+node, destroys that node and its disk, and checks the row comes back on the
+other. That is the claim that the machine is disposable.
+
+`scripts/convergence-test.sh` covers the horizontal case, with both nodes live:
+each writes a row of its own, and both end up with both. It first checks that
+the nodes *disagree* before syncing, so a pass cannot come from them sharing
+state some other way.
 
 ```bash
 ./scripts/cluster-test.sh
+./scripts/convergence-test.sh
 ```
+
+### More than one writer
+
+`DBCENTER_PULL` is off by default. A single scale-to-zero machine restores once
+at boot and is then the only writer, so pulling again buys nothing. Turn it on
+when several nodes share a bucket.
+
+Conflict resolution is last-write-wins on `updated_at`, so two nodes editing the
+same row concurrently keep the later edit and lose the earlier one. That is fine
+for append-heavy and partitioned workloads and wrong for a shared counter.
+
+Compaction takes the storage lock, so with several nodes running exactly one
+does the work and the others move on. Without it every push leaves another
+Parquet object behind and cold starts get slower without bound.
 
 ## Building
 

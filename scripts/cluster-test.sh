@@ -8,6 +8,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# MinIO keeps its data across `compose down`, so give every run its own key
+# namespace. Otherwise a node restores the previous run's rows at boot and
+# the result says nothing about this one.
+export DBCENTER_PREFIX="run-$(date +%s)"
+echo "storage prefix: $DBCENTER_PREFIX"
+
 PSQL="docker run --rm --network dbcenter_default -e PGPASSWORD=dbcenter123 postgres:14 psql"
 CONN_A="-h node-a -U postgres -d postgres -tAq"
 CONN_B="-h node-b -U postgres -d postgres -tAq"
