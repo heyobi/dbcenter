@@ -11,6 +11,10 @@ pub struct PostgresProcess {
     child: Option<Child>,
     host: String,
     port: u16,
+    /// Unix socket directory, kept so callers can locate the socket and so the
+    /// path stays owned for the lifetime of the process. Unused on Windows,
+    /// which connects over TCP.
+    #[allow(dead_code)]
     socket_dir: Option<PathBuf>,
 }
 
@@ -42,7 +46,7 @@ impl PostgresProcess {
         let log_file = fs::File::create(&log_path)?;
 
         let mut cmd = Command::new(&postgres_path);
-        
+
         // CRITICAL FIX: On Windows, add the bin directory AND root directory to PATH
         // This allows PostgreSQL to find DLLs for extensions like PostGIS which might be in root or bin
         #[cfg(windows)]
@@ -50,7 +54,7 @@ impl PostgresProcess {
             if let Some(bin_dir) = postgres_path.parent() {
                 let mut new_path_parts = Vec::new();
                 new_path_parts.push(bin_dir.to_string_lossy().to_string());
-                
+
                 if let Some(root_dir) = bin_dir.parent() {
                     new_path_parts.push(root_dir.to_string_lossy().to_string());
                 }
@@ -58,12 +62,12 @@ impl PostgresProcess {
                 if let Ok(path_var) = std::env::var("PATH") {
                     new_path_parts.push(path_var);
                 }
-                
+
                 let new_path = new_path_parts.join(";");
                 cmd.env("PATH", new_path);
             }
         }
-        
+
         cmd.arg("-D").arg(&config.data_dir);
 
         if cfg!(windows) {
@@ -90,7 +94,7 @@ impl PostgresProcess {
         };
 
         // Wait for server to be ready
-        let conn_str = process.connection_string(&config);
+        let conn_str = process.connection_string(config);
         wait_for_ready(&conn_str, &config.data_dir)?;
 
         tracing::info!("PostgreSQL listening on {}:{}", listen_host, port);
@@ -221,7 +225,7 @@ impl PostgresProcess {
                 #[cfg(unix)]
                 {
                     let _ = Command::new("kill")
-                        .args(&["-TERM", &pid.to_string()])
+                        .args(["-TERM", &pid.to_string()])
                         .output();
 
                     // Wait for process to actually terminate
@@ -318,7 +322,7 @@ impl PostgresProcess {
         #[cfg(unix)]
         {
             let status = Command::new("kill")
-                .args(&["-0", &pid.to_string()])
+                .args(["-0", &pid.to_string()])
                 .status()
                 .map_err(|e| {
                     DBCenterError::ProcessError(format!("Failed to check process: {}", e))
@@ -345,7 +349,7 @@ pub fn initialize_db(config: &DBCenterConfig) -> Result<()> {
     }
 
     // Create data directory if it doesn't exist
-    fs::create_dir_all(&config.data_dir).map_err(|e| DBCenterError::IoError(e))?;
+    fs::create_dir_all(&config.data_dir).map_err(DBCenterError::IoError)?;
 
     let (initdb_path, _) = binary::ensure_binaries(config)?;
 
@@ -361,7 +365,7 @@ pub fn initialize_db(config: &DBCenterConfig) -> Result<()> {
     // Ensure parent directory exists for password file, but NOT data_dir itself
     // (initdb wants data_dir to be empty or non-existent)
     if let Some(parent) = config.data_dir.parent() {
-        fs::create_dir_all(parent).map_err(|e| DBCenterError::IoError(e))?;
+        fs::create_dir_all(parent).map_err(DBCenterError::IoError)?;
     }
 
     let mut cmd = Command::new(&initdb_path);
@@ -378,7 +382,7 @@ pub fn initialize_db(config: &DBCenterConfig) -> Result<()> {
     let temp_pwfile = if let Some(ref password) = config.password {
         // Create temp file in parent directory, not inside data_dir
         let pwfile = config.data_dir.with_extension("initdb_password");
-        fs::write(&pwfile, password.as_bytes()).map_err(|e| DBCenterError::IoError(e))?;
+        fs::write(&pwfile, password.as_bytes()).map_err(DBCenterError::IoError)?;
         cmd.arg("--pwfile").arg(&pwfile);
         Some(pwfile)
     } else {
@@ -428,9 +432,8 @@ fn update_pg_hba_for_network(
     let pg_hba_path = data_dir.join("pg_hba.conf");
 
     // Check if we need network access (host is 0.0.0.0 or non-localhost)
-    let needs_network = host.map_or(false, |h| {
-        h == "0.0.0.0" || (!h.starts_with("127.") && h != "localhost")
-    });
+    let needs_network =
+        host.is_some_and(|h| h == "0.0.0.0" || (!h.starts_with("127.") && h != "localhost"));
 
     if needs_network {
         let auth_method = if has_password {
@@ -447,7 +450,7 @@ fn update_pg_hba_for_network(
                 use std::io::Write;
                 file.write_all(entry.as_bytes())
             })
-            .map_err(|e| DBCenterError::IoError(e))?;
+            .map_err(DBCenterError::IoError)?;
 
         tracing::info!(
             "Updated pg_hba.conf for network access with {}",
@@ -484,76 +487,83 @@ fn update_postgresql_conf_library_path(data_dir: &std::path::Path) -> Result<()>
     //
     // BUT! data_dir can be anywhere. The binaries are in .dbcenter/postgres-X.
     // We need to find the lib dir relative to the postgres executable.
-    
+
     // Let's try to locate the lib directory by finding pg_ctl.
     // We can recycle binary::find_pg_ctl_for_data_dir logic or just search up/around.
-    
+
     if let Some(pg_ctl) = binary::find_pg_ctl_for_data_dir(data_dir) {
         if let Some(bin_dir) = pg_ctl.parent() {
-                     // Look for lib directory relative to bin
-                     if let Some(root_dir) = bin_dir.parent() {
-                         // $libdir comes first: it is where the distribution's own
-                         // modules live, and extension scripts reference it directly
-                         // (AS '$libdir/pg_trgm'). Extra directories are only a
-                         // fallback for extensions we unpack ourselves.
-                         let mut search_paths = vec!["$libdir".to_string()];
+            // Look for lib directory relative to bin
+            if let Some(root_dir) = bin_dir.parent() {
+                // $libdir comes first: it is where the distribution's own
+                // modules live, and extension scripts reference it directly
+                // (AS '$libdir/pg_trgm'). Extra directories are only a
+                // fallback for extensions we unpack ourselves.
+                let mut search_paths = vec!["$libdir".to_string()];
 
-                         // Modules usually sit in lib/postgresql; some distributions
-                         // put them straight in lib, or beside the binaries.
-                         for candidate in [
-                             root_dir.join("lib").join("postgresql"),
-                             root_dir.join("lib"),
-                             root_dir.to_path_buf(),
-                         ] {
-                             if !candidate.exists() {
-                                 continue;
-                             }
-                             let path_str = candidate
-                                 .to_string_lossy()
-                                 .replace("\\", "/")
-                                 .replace("'", "\\'");
-                             if !search_paths.contains(&path_str) {
-                                 search_paths.push(path_str);
-                             }
-                         }
+                // Modules usually sit in lib/postgresql; some distributions
+                // put them straight in lib, or beside the binaries.
+                for candidate in [
+                    root_dir.join("lib").join("postgresql"),
+                    root_dir.join("lib"),
+                    root_dir.to_path_buf(),
+                ] {
+                    if !candidate.exists() {
+                        continue;
+                    }
+                    let path_str = candidate
+                        .to_string_lossy()
+                        .replace("\\", "/")
+                        .replace("'", "\\'");
+                    if !search_paths.contains(&path_str) {
+                        search_paths.push(path_str);
+                    }
+                }
 
-                         // PostgreSQL splits dynamic_library_path on the platform's
-                         // path separator: ';' on Windows, ':' everywhere else.
-                         // Using ';' on Linux collapses the whole list into one
-                         // nonexistent directory, so no extension can ever load.
-                         let separator = if cfg!(windows) { ";" } else { ":" };
+                // PostgreSQL splits dynamic_library_path on the platform's
+                // path separator: ';' on Windows, ':' everywhere else.
+                // Using ';' on Linux collapses the whole list into one
+                // nonexistent directory, so no extension can ever load.
+                let separator = if cfg!(windows) { ";" } else { ":" };
 
-                         let setting =
-                             format!("dynamic_library_path = '{}'", search_paths.join(separator));
-                      
-                         // Read and update config
-                         if let Ok(content) = fs::read_to_string(&conf_path) {
-                             let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-                             let mut found = false;
-                             
-                             for line in lines.iter_mut() {
-                                 let trimmed = line.trim();
-                                 if trimmed.starts_with("dynamic_library_path") || (trimmed.starts_with("#") && trimmed.contains("dynamic_library_path")) {
-                                     *line = setting.clone();
-                                     found = true;
-                                     break;
-                                 }
-                             }
-                             
-                             let updated = if found {
-                                 lines.join("\n")
-                             } else {
-                                 format!("{}\n# DBCenter: Extension library path\n{}\n", content, setting)
-                             };
-                             
-                             fs::write(&conf_path, updated).map_err(|e| DBCenterError::IoError(e))?;
-                             tracing::info!("Updated postgresql.conf with dynamic_library_path = {}", setting);
-                         }
-                     }
+                let setting = format!("dynamic_library_path = '{}'", search_paths.join(separator));
 
+                // Read and update config
+                if let Ok(content) = fs::read_to_string(&conf_path) {
+                    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                    let mut found = false;
+
+                    for line in lines.iter_mut() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("dynamic_library_path")
+                            || (trimmed.starts_with("#")
+                                && trimmed.contains("dynamic_library_path"))
+                        {
+                            *line = setting.clone();
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    let updated = if found {
+                        lines.join("\n")
+                    } else {
+                        format!(
+                            "{}\n# DBCenter: Extension library path\n{}\n",
+                            content, setting
+                        )
+                    };
+
+                    fs::write(&conf_path, updated).map_err(DBCenterError::IoError)?;
+                    tracing::info!(
+                        "Updated postgresql.conf with dynamic_library_path = {}",
+                        setting
+                    );
+                }
+            }
         }
     }
-    
+
     Ok(())
 }
 
@@ -564,7 +574,7 @@ fn update_pg_hba_for_password(data_dir: &std::path::Path) -> Result<()> {
     if let Ok(content) = fs::read_to_string(&pg_hba_path) {
         // Replace trust with scram-sha-256
         let updated = content.replace("trust", "scram-sha-256");
-        fs::write(&pg_hba_path, updated).map_err(|e| DBCenterError::IoError(e))?;
+        fs::write(&pg_hba_path, updated).map_err(DBCenterError::IoError)?;
         tracing::info!("Updated pg_hba.conf to use scram-sha-256 authentication");
     }
 
@@ -643,7 +653,7 @@ pub fn is_process_running_global(pid: u32) -> bool {
     #[cfg(unix)]
     {
         Command::new("kill")
-            .args(&["-0", &pid.to_string()])
+            .args(["-0", &pid.to_string()])
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
@@ -654,7 +664,7 @@ pub fn is_process_running_global(pid: u32) -> bool {
 pub fn wait_for_pid(pid: u32, timeout_secs: u64) -> bool {
     let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
-    
+
     while start.elapsed() < timeout {
         if !is_process_running_global(pid) {
             return true;

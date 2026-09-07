@@ -168,7 +168,7 @@ impl LazyFrame {
         }
 
         for row in &rows {
-            for (i, field) in schema.fields().iter().enumerate() {
+            for (i, _field) in schema.fields().iter().enumerate() {
                 let builder = &mut builders[i];
 
                 // Rust robust handling for different builders

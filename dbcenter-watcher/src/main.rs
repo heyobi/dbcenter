@@ -221,9 +221,12 @@ fn main() {
     // Handle persist flag
     // Override: If FORCE_REMOVE, we always delete (unless service mode? No, force remove is explicit)
     let should_delete = !config.persist || is_force_remove;
-    
+
     if should_delete {
-        log!(log_file, "persist=false veya FORCE_REMOVE - dosyalar siliniyor");
+        log!(
+            log_file,
+            "persist=false veya FORCE_REMOVE - dosyalar siliniyor"
+        );
         if data_dir.exists() {
             match std::fs::remove_dir_all(&data_dir) {
                 Ok(_) => log!(log_file, "Dosyalar silindi"),
@@ -235,7 +238,7 @@ fn main() {
     }
 
     log!(log_file, "=== Temizlik tamamlandi ===");
-    
+
     // Handshake signal for Python
     if is_force_remove {
         println!("CLEANUP_DONE");

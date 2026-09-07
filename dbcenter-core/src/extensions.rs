@@ -24,26 +24,50 @@ struct ExtensionVersion {
 
 /// pgvector versions (Windows)
 const PGVECTOR_WINDOWS_VERSIONS: &[ExtensionVersion] = &[
-    ExtensionVersion { version: "0.8.1", min_pg: 13, max_pg: 18 },
-    ExtensionVersion { version: "0.8.0", min_pg: 15, max_pg: 17 },
+    ExtensionVersion {
+        version: "0.8.1",
+        min_pg: 13,
+        max_pg: 18,
+    },
+    ExtensionVersion {
+        version: "0.8.0",
+        min_pg: 15,
+        max_pg: 17,
+    },
 ];
 
 /// pgvector versions (Linux)
-const PGVECTOR_LINUX_VERSIONS: &[ExtensionVersion] = &[
-    ExtensionVersion { version: "0.8.1", min_pg: 12, max_pg: 18 },
-];
+const PGVECTOR_LINUX_VERSIONS: &[ExtensionVersion] = &[ExtensionVersion {
+    version: "0.8.1",
+    min_pg: 12,
+    max_pg: 18,
+}];
 
 /// pghttp versions (Windows)
 const PGHTTP_WINDOWS_VERSIONS: &[ExtensionVersion] = &[
-    ExtensionVersion { version: "1.7.0", min_pg: 18, max_pg: 18 }, // Only 18 has 1.7.0 in list
-    ExtensionVersion { version: "1.6.3", min_pg: 17, max_pg: 17 },
-    ExtensionVersion { version: "1.6.1", min_pg: 13, max_pg: 16 },
+    ExtensionVersion {
+        version: "1.7.0",
+        min_pg: 18,
+        max_pg: 18,
+    }, // Only 18 has 1.7.0 in list
+    ExtensionVersion {
+        version: "1.6.3",
+        min_pg: 17,
+        max_pg: 17,
+    },
+    ExtensionVersion {
+        version: "1.6.1",
+        min_pg: 13,
+        max_pg: 16,
+    },
 ];
 
 /// pghttp versions (Linux)
-const PGHTTP_LINUX_VERSIONS: &[ExtensionVersion] = &[
-    ExtensionVersion { version: "1.7.0", min_pg: 12, max_pg: 18 },
-];
+const PGHTTP_LINUX_VERSIONS: &[ExtensionVersion] = &[ExtensionVersion {
+    version: "1.7.0",
+    min_pg: 12,
+    max_pg: 18,
+}];
 
 /// Available PostGIS versions on CDN for Windows
 /// postgis-3.6.1: pg13-18
@@ -218,45 +242,43 @@ fn install_postgis(db: &DBCenter, requested_version: Option<&str>) -> Result<()>
 /// Install pgvector extension
 fn install_pgvector(db: &DBCenter, requested_version: Option<&str>) -> Result<()> {
     install_simple_extension(
-        db, 
-        "vector", 
-        "pgvector", 
-        PGVECTOR_WINDOWS_VERSIONS, 
-        PGVECTOR_LINUX_VERSIONS, 
+        db,
+        "vector",
+        "pgvector",
+        PGVECTOR_WINDOWS_VERSIONS,
+        PGVECTOR_LINUX_VERSIONS,
         requested_version,
-        "vector" // filename prefix
+        "vector", // filename prefix
     )
 }
 
 /// Install pghttp extension
 fn install_pghttp(db: &DBCenter, requested_version: Option<&str>) -> Result<()> {
-     install_simple_extension(
-        db, 
-        "http", 
-        "pghttp", 
-        PGHTTP_WINDOWS_VERSIONS, 
-        PGHTTP_LINUX_VERSIONS, 
+    install_simple_extension(
+        db,
+        "http",
+        "pghttp",
+        PGHTTP_WINDOWS_VERSIONS,
+        PGHTTP_LINUX_VERSIONS,
         requested_version,
-        "pghttp" // filename prefix
+        "pghttp", // filename prefix
     )
 }
-
-
 
 /// Generic installer for bundled extensions (like pg_trgm)
 fn install_bundled_extension(db: &DBCenter, ext_name: &str) -> Result<()> {
     let mut client = db.get_client();
     let create_sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext_name);
-    
+
     match client.execute(&create_sql, &[]) {
         Ok(_) => {
             tracing::info!("Extension '{}' activated successfully.", ext_name);
             Ok(())
-        },
+        }
         Err(e) => {
-             tracing::error!("Failed to install bundled extension '{}': {}", ext_name, e);
-             let err_msg = format!("{:?}", e);
-             Err(DBCenterError::ExtensionError(format!(
+            tracing::error!("Failed to install bundled extension '{}': {}", ext_name, e);
+            let err_msg = format!("{:?}", e);
+            Err(DBCenterError::ExtensionError(format!(
                 "Failed to create bundled extension '{}'. Ensure standard PostgreSQL contrib modules are installed. Details: {}",
                 ext_name, err_msg
             )))
@@ -267,7 +289,7 @@ fn install_bundled_extension(db: &DBCenter, ext_name: &str) -> Result<()> {
 /// Generic installer for standard zip/tar extensions (like pgvector, pghttp)
 fn install_simple_extension(
     db: &DBCenter,
-    ext_name: &str, // e.g. "vector" or "http" (dbname)
+    ext_name: &str,    // e.g. "vector" or "http" (dbname)
     folder_name: &str, // e.g. "pgvector" (CDN folder)
     win_versions: &[ExtensionVersion],
     nix_versions: &[ExtensionVersion],
@@ -276,38 +298,50 @@ fn install_simple_extension(
 ) -> Result<()> {
     let mut client = db.get_client();
     // Check if installed using basic query
-    let check_sql = format!("SELECT extname FROM pg_extension WHERE extname = '{}'", ext_name);
-    match client.query(&check_sql, &[]) {
-        Ok(rows) => {
-            if !rows.is_empty() {
-                tracing::info!("Extension '{}' already installed.", ext_name);
-                return Ok(());
-            }
+    let check_sql = format!(
+        "SELECT extname FROM pg_extension WHERE extname = '{}'",
+        ext_name
+    );
+    if let Ok(rows) = client.query(&check_sql, &[]) {
+        if !rows.is_empty() {
+            tracing::info!("Extension '{}' already installed.", ext_name);
+            return Ok(());
         }
-        Err(_) => {}
     }
     drop(client);
 
     tracing::info!("Installing {} extension...", ext_name);
 
     if cfg!(windows) {
-        install_extension_windows(db, folder_name, win_versions, requested_version, file_prefix)?;
+        install_extension_windows(
+            db,
+            folder_name,
+            win_versions,
+            requested_version,
+            file_prefix,
+        )?;
     } else {
-        install_extension_unix(db, folder_name, nix_versions, requested_version, file_prefix)?;
+        install_extension_unix(
+            db,
+            folder_name,
+            nix_versions,
+            requested_version,
+            file_prefix,
+        )?;
     }
 
     // Activate
     let mut client = db.get_client();
     let create_sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext_name);
-    
+
     match client.execute(&create_sql, &[]) {
         Ok(_) => {
             tracing::info!("Extension '{}' activated successfully.", ext_name);
             Ok(())
-        },
+        }
         Err(e) => {
-             let err_msg = format!("{:?}", e);
-             Err(DBCenterError::ExtensionError(format!(
+            let err_msg = format!("{:?}", e);
+            Err(DBCenterError::ExtensionError(format!(
                 "Failed to create extension '{}': {}. Details: {}",
                 ext_name, e, err_msg
             )))
@@ -316,20 +350,21 @@ fn install_simple_extension(
 }
 
 fn install_extension_windows(
-    db: &DBCenter, 
+    db: &DBCenter,
     folder_name: &str,
-    versions: &[ExtensionVersion], 
+    versions: &[ExtensionVersion],
     requested_version: Option<&str>,
-    file_prefix: &str
+    file_prefix: &str,
 ) -> Result<()> {
     let pg_version = postgres_major_version(db);
-    // Reuse logic from find_best_postgis_version but need generic struct. 
+    // Reuse logic from find_best_postgis_version but need generic struct.
     // Since ExtensionVersion and PostGISVersion are identical structure, we can cast or clone logic.
     // For simplicity, I'll essentially duplicate or adapt the finder logic locally or make finder generic.
     // Let's adapt logic here for now.
-    
-    let (ver_str, target_pg) = find_best_extension_version(pg_version, versions, requested_version)?;
-    
+
+    let (ver_str, target_pg) =
+        find_best_extension_version(pg_version, versions, requested_version)?;
+
     let url = format!(
         "https://cdn.db.center/extensions/{}/{}-{}-windows-amd64-pg{}.zip?token=admin-secret-key",
         folder_name, file_prefix, ver_str, target_pg
@@ -354,14 +389,15 @@ fn install_extension_windows(
 }
 
 fn install_extension_unix(
-     db: &DBCenter, 
-     folder_name: &str,
-     versions: &[ExtensionVersion], 
-     requested_version: Option<&str>,
-     file_prefix: &str
+    db: &DBCenter,
+    folder_name: &str,
+    versions: &[ExtensionVersion],
+    requested_version: Option<&str>,
+    file_prefix: &str,
 ) -> Result<()> {
     let pg_version = postgres_major_version(db);
-    let (ver_str, target_pg) = find_best_extension_version(pg_version, versions, requested_version)?;
+    let (ver_str, target_pg) =
+        find_best_extension_version(pg_version, versions, requested_version)?;
 
     let url = format!(
         "https://cdn.db.center/extensions/{}/{}-{}-linux-amd64-pg{}.tar.gz?token=admin-secret-key",
@@ -372,7 +408,10 @@ fn install_extension_unix(
     let cache_dir = base_dir.join("cache").join("extensions");
     fs::create_dir_all(&cache_dir)?;
 
-    let tar_path = cache_dir.join(format!("{}-{}-pg{}.tar.gz", file_prefix, ver_str, target_pg));
+    let tar_path = cache_dir.join(format!(
+        "{}-{}-pg{}.tar.gz",
+        file_prefix, ver_str, target_pg
+    ));
 
     if !tar_path.exists() {
         download_with_progress(&url, &tar_path, &format!("{} {}", file_prefix, ver_str))?;
@@ -390,17 +429,26 @@ fn find_best_extension_version(
     requested_version: Option<&str>,
 ) -> Result<(&'static str, u32)> {
     if let Some(req_ver) = requested_version {
-         for v in versions {
+        for v in versions {
             if v.version == req_ver {
                 if pg_version >= v.min_pg && pg_version <= v.max_pg {
                     return Ok((v.version, pg_version));
                 } else if pg_version > v.max_pg {
-                     tracing::warn!("PG {} too new for {} {}. Using pg{}", pg_version, req_ver, v.version, v.max_pg);
-                     return Ok((v.version, v.max_pg));
+                    tracing::warn!(
+                        "PG {} too new for {} {}. Using pg{}",
+                        pg_version,
+                        req_ver,
+                        v.version,
+                        v.max_pg
+                    );
+                    return Ok((v.version, v.max_pg));
                 }
             }
-         }
-         return Err(DBCenterError::ExtensionError(format!("Requested version {} not found", req_ver)));
+        }
+        return Err(DBCenterError::ExtensionError(format!(
+            "Requested version {} not found",
+            req_ver
+        )));
     }
 
     for v in versions {
@@ -408,16 +456,24 @@ fn find_best_extension_version(
             return Ok((v.version, pg_version));
         }
     }
-    
+
     // Fallback newest
     if let Some(v) = versions.first() {
         if pg_version > v.max_pg {
-             tracing::warn!("PG {} too new. Using {} pg{}", pg_version, v.version, v.max_pg);
-             return Ok((v.version, v.max_pg));
+            tracing::warn!(
+                "PG {} too new. Using {} pg{}",
+                pg_version,
+                v.version,
+                v.max_pg
+            );
+            return Ok((v.version, v.max_pg));
         }
     }
 
-    Err(DBCenterError::ExtensionError(format!("No compatible version for PG {}", pg_version)))
+    Err(DBCenterError::ExtensionError(format!(
+        "No compatible version for PG {}",
+        pg_version
+    )))
 }
 
 /// Find the best PostGIS version for the given PostgreSQL version
@@ -648,7 +704,11 @@ fn install_postgis_unix(db: &DBCenter, requested_version: Option<&str>) -> Resul
 fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
     use zip::ZipArchive;
 
-    tracing::info!("Extracting PostGIS files from {:?} to {:?}", zip_path, pg_root);
+    tracing::info!(
+        "Extracting PostGIS files from {:?} to {:?}",
+        zip_path,
+        pg_root
+    );
 
     let file = fs::File::open(zip_path)?;
     let mut archive = ZipArchive::new(file)
@@ -661,16 +721,16 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
     for i in 0..archive.len() {
         if let Ok(file) = archive.by_index(i) {
             let name = file.name();
-            // Skip paths ending with / (directories) for root check, 
-            // unless they are the only thing. 
+            // Skip paths ending with / (directories) for root check,
+            // unless they are the only thing.
             // Better: get the first component.
             let parts: Vec<&str> = name.split('/').collect();
             if parts.is_empty() {
                 continue;
             }
-            
+
             let first_part = parts[0];
-            
+
             // If we haven't set a common root yet
             if common_root.is_none() {
                 common_root = Some(first_part.to_string());
@@ -682,12 +742,12 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
             }
         }
     }
-    
+
     // If we only have files at root (len 1 parts), common_root might set to filename.
-    // If has_common_root is true, we must ensure that common_root is actually a directory 
-    // that contains EVERY file. 
+    // If has_common_root is true, we must ensure that common_root is actually a directory
+    // that contains EVERY file.
     // If the zip contains just "foo.txt", common_root="foo.txt". We shouldn't strip it.
-    // So we should only strip if the zip ENTRIES imply a directory structure where everything 
+    // So we should only strip if the zip ENTRIES imply a directory structure where everything
     // is under `dir/`.
     // Actually, simple heuristic: if has_common_root is true, we strip the first component.
     // BUT we must be careful not to strip files if the "root" is just a file itself?
@@ -695,7 +755,7 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
     // If you have `file1`, `file2`, common root mismatch.
     // If you have `folder/file1`, `folder/file2`. Common root `folder`.
     // Using `strip_prefix` boolean.
-    
+
     let strip_prefix = has_common_root && common_root.is_some();
     if strip_prefix {
         tracing::info!("Detected common root '{:?}', stripping it.", common_root);
@@ -717,17 +777,17 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
             DBCenterError::ExtensionError(format!("Failed to read ZIP entry: {}", e))
         })?;
 
-        let name = file.name().to_string(); 
+        let name = file.name().to_string();
         let parts: Vec<&str> = name.split('/').collect();
 
         // Determine target path
         let target_path = if strip_prefix {
-             if parts.len() <= 1 {
-                 continue;
-             }
-             pg_root.join(&parts[1..].join("/"))
+            if parts.len() <= 1 {
+                continue;
+            }
+            pg_root.join(parts[1..].join("/"))
         } else {
-             pg_root.join(&name)
+            pg_root.join(&name)
         };
 
         if file.is_dir() {
@@ -737,72 +797,84 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
             // Check if we need to reorganize the file (e.g. DLLs at root)
             // This happens if zip is flat OR if zip has a container folder with flat files inside.
             // We use component count to robustly detect if the file is directly under pg_root
-            let is_root_dll = name.to_lowercase().ends_with(".dll") && 
-                              target_path.components().count() == pg_root.components().count() + 1;
-            
+            let is_root_dll = name.to_lowercase().ends_with(".dll")
+                && target_path.components().count() == pg_root.components().count() + 1;
+
             if is_root_dll {
                 let filename = Path::new(&name).file_name().unwrap_or_default();
-                
+
                 // Extract directly to lib (avoiding root lock)
                 let lib_target = pg_root.join("lib").join(filename);
-                if let Some(parent) = lib_target.parent() { fs::create_dir_all(parent)?; }
-                
+                if let Some(parent) = lib_target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+
                 match fs::File::create(&lib_target) {
                     Ok(mut outfile) => {
-                         if let Err(e) = std::io::copy(&mut file, &mut outfile) {
-                             let is_lock_error = e.raw_os_error() == Some(32); // Windows sharing violation
-                             if is_lock_error {
-                                 tracing::warn!("Skipping locked file (lib): {} ({})", name, e);
-                             } else {
-                                 return Err(DBCenterError::ExtensionError(format!("Failed to write to lib {}: {}", name, e)));
-                             }
-                         } else {
-                             file_count += 1;
-                         }
+                        if let Err(e) = std::io::copy(&mut file, &mut outfile) {
+                            let is_lock_error = e.raw_os_error() == Some(32); // Windows sharing violation
+                            if is_lock_error {
+                                tracing::warn!("Skipping locked file (lib): {} ({})", name, e);
+                            } else {
+                                return Err(DBCenterError::ExtensionError(format!(
+                                    "Failed to write to lib {}: {}",
+                                    name, e
+                                )));
+                            }
+                        } else {
+                            file_count += 1;
+                        }
                     }
                     Err(e) => {
-                         let is_lock_error = e.raw_os_error() == Some(32);
-                         if is_lock_error {
-                             tracing::warn!("Skipping locked file (lib): {} ({})", name, e);
-                         } else {
-                             return Err(DBCenterError::ExtensionError(format!("Failed to create file in lib {}: {}", name, e)));
-                         }
+                        let is_lock_error = e.raw_os_error() == Some(32);
+                        if is_lock_error {
+                            tracing::warn!("Skipping locked file (lib): {} ({})", name, e);
+                        } else {
+                            return Err(DBCenterError::ExtensionError(format!(
+                                "Failed to create file in lib {}: {}",
+                                name, e
+                            )));
+                        }
                     }
                 }
-                
+
                 // Copy to bin
                 let bin_target = pg_root.join("bin").join(filename);
-                if let Some(parent) = bin_target.parent() { fs::create_dir_all(parent)?; }
+                if let Some(parent) = bin_target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
                 // ignore copy errors to bin if locked (unlikely since we just created lib file)
                 // actually we copy FROM lib_target.
                 // If lib_target skipped, we might fail here?
                 if lib_target.exists() {
-                     if let Err(e) = fs::copy(&lib_target, &bin_target) {
-                         let is_lock_error = e.raw_os_error() == Some(32);
-                         if is_lock_error {
-                             tracing::warn!("Skipping locked file (bin): {} ({})", name, e);
-                         } else {
-                             tracing::warn!("Failed to copy to bin {}: {}", name, e);
-                         }
-                     }
+                    if let Err(e) = fs::copy(&lib_target, &bin_target) {
+                        let is_lock_error = e.raw_os_error() == Some(32);
+                        if is_lock_error {
+                            tracing::warn!("Skipping locked file (bin): {} ({})", name, e);
+                        } else {
+                            tracing::warn!("Failed to copy to bin {}: {}", name, e);
+                        }
+                    }
                 }
-                
             } else {
                 if let Some(parent) = target_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                
+
                 match fs::File::create(&target_path) {
                     Ok(mut outfile) => {
                         if let Err(e) = std::io::copy(&mut file, &mut outfile) {
-                           let is_lock_error = e.raw_os_error() == Some(32);
-                           if is_lock_error {
-                               tracing::warn!("Skipping locked file: {} ({})", name, e);
-                           } else {
-                               return Err(DBCenterError::ExtensionError(format!("Failed to extract {}: {}", name, e)));
-                           }
+                            let is_lock_error = e.raw_os_error() == Some(32);
+                            if is_lock_error {
+                                tracing::warn!("Skipping locked file: {} ({})", name, e);
+                            } else {
+                                return Err(DBCenterError::ExtensionError(format!(
+                                    "Failed to extract {}: {}",
+                                    name, e
+                                )));
+                            }
                         } else {
-                           file_count += 1;
+                            file_count += 1;
                         }
                     }
                     Err(e) => {
@@ -810,7 +882,10 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
                         if is_lock_error {
                             tracing::warn!("Skipping locked file: {} ({})", name, e);
                         } else {
-                            return Err(DBCenterError::ExtensionError(format!("Failed to create {}: {}", name, e)));
+                            return Err(DBCenterError::ExtensionError(format!(
+                                "Failed to create {}: {}",
+                                name, e
+                            )));
                         }
                     }
                 }
@@ -827,18 +902,22 @@ fn extract_postgis_tarball(tar_path: &Path, pg_root: &Path) -> Result<()> {
     use flate2::read::GzDecoder;
     use tar::Archive;
 
-    tracing::info!("Extracting extension tarball from {:?} to {:?}", tar_path, pg_root);
+    tracing::info!(
+        "Extracting extension tarball from {:?} to {:?}",
+        tar_path,
+        pg_root
+    );
 
     // Detect target layout quirks
     // Linux builds often use share/postgresql/extension instead of share/extension
     let use_share_postgresql = pg_root.join("share").join("postgresql").exists();
     let use_lib_postgresql = pg_root.join("lib").join("postgresql").exists();
-    
+
     if use_share_postgresql {
         tracing::debug!("Detected share/postgresql layout, will adjust extension paths.");
     }
     if use_lib_postgresql {
-         tracing::debug!("Detected lib/postgresql layout, will adjust library paths.");
+        tracing::debug!("Detected lib/postgresql layout, will adjust library paths.");
     }
 
     // First pass: detect common root
@@ -850,21 +929,30 @@ fn extract_postgis_tarball(tar_path: &Path, pg_root: &Path) -> Result<()> {
     let mut has_common_root = true;
     let mut entries_count = 0;
 
-    for entry in archive.entries().map_err(|e| DBCenterError::ExtensionError(format!("Failed to read tar entries: {}", e)))? {
-        let file = entry.map_err(|e| DBCenterError::ExtensionError(format!("Failed to read tar entry: {}", e)))?;
-        let path = file.path().map_err(|e| DBCenterError::ExtensionError(format!("Failed to get path: {}", e)))?;
+    for entry in archive
+        .entries()
+        .map_err(|e| DBCenterError::ExtensionError(format!("Failed to read tar entries: {}", e)))?
+    {
+        let file = entry.map_err(|e| {
+            DBCenterError::ExtensionError(format!("Failed to read tar entry: {}", e))
+        })?;
+        let path = file
+            .path()
+            .map_err(|e| DBCenterError::ExtensionError(format!("Failed to get path: {}", e)))?;
         let path_str = path.to_string_lossy();
-        
+
         let parts: Vec<&str> = path_str.split('/').collect();
-        if parts.is_empty() { continue; }
-        
+        if parts.is_empty() {
+            continue;
+        }
+
         let first_part = parts[0];
-        
+
         if common_root.is_none() {
             common_root = Some(first_part.to_string());
         } else if common_root.as_deref() != Some(first_part) {
             has_common_root = false;
-            break; 
+            break;
         }
         entries_count += 1;
     }
@@ -883,38 +971,47 @@ fn extract_postgis_tarball(tar_path: &Path, pg_root: &Path) -> Result<()> {
     let decompressor = GzDecoder::new(tar_file);
     let mut archive = Archive::new(decompressor);
 
-    for entry in archive.entries().map_err(|e| DBCenterError::ExtensionError(format!("Failed to read tar entries: {}", e)))? {
-        let mut file = entry.map_err(|e| DBCenterError::ExtensionError(format!("Failed to read tar entry: {}", e)))?;
-        let path = file.path().map_err(|e| DBCenterError::ExtensionError(format!("Failed to get path: {}", e)))?;
+    for entry in archive
+        .entries()
+        .map_err(|e| DBCenterError::ExtensionError(format!("Failed to read tar entries: {}", e)))?
+    {
+        let mut file = entry.map_err(|e| {
+            DBCenterError::ExtensionError(format!("Failed to read tar entry: {}", e))
+        })?;
+        let path = file
+            .path()
+            .map_err(|e| DBCenterError::ExtensionError(format!("Failed to get path: {}", e)))?;
         let path_str = path.to_string_lossy().to_string(); // Own the string
-        
+
         let mut parts: Vec<&str> = path_str.split('/').collect();
-         
+
         if strip_prefix {
             if parts.len() <= 1 {
                 continue; // Skip the root dir itself
             }
             parts = parts[1..].to_vec();
         }
-        
-        // Handle layout adjustments
-        let final_path_buf; 
-        if parts.is_empty() { continue; }
 
-        if parts[0] == "share" && use_share_postgresql {
-             // Inject "postgresql" -> share/postgresql/...
-             let mut new_parts = vec!["share", "postgresql"];
-             new_parts.extend_from_slice(&parts[1..]);
-             final_path_buf = pg_root.join(new_parts.join("/"));
-        } else if parts[0] == "lib" && use_lib_postgresql {
-             // Inject "postgresql" -> lib/postgresql/...
-             let mut new_parts = vec!["lib", "postgresql"];
-             new_parts.extend_from_slice(&parts[1..]);
-             final_path_buf = pg_root.join(new_parts.join("/"));
-        } else {
-             final_path_buf = pg_root.join(parts.join("/"));
+        // Handle layout adjustments
+
+        if parts.is_empty() {
+            continue;
         }
-        
+
+        let final_path_buf = if parts[0] == "share" && use_share_postgresql {
+            // Inject "postgresql" -> share/postgresql/...
+            let mut new_parts = vec!["share", "postgresql"];
+            new_parts.extend_from_slice(&parts[1..]);
+            pg_root.join(new_parts.join("/"))
+        } else if parts[0] == "lib" && use_lib_postgresql {
+            // Inject "postgresql" -> lib/postgresql/...
+            let mut new_parts = vec!["lib", "postgresql"];
+            new_parts.extend_from_slice(&parts[1..]);
+            pg_root.join(new_parts.join("/"))
+        } else {
+            pg_root.join(parts.join("/"))
+        };
+
         let target_path = final_path_buf;
 
         if let Some(parent) = target_path.parent() {
@@ -922,7 +1019,11 @@ fn extract_postgis_tarball(tar_path: &Path, pg_root: &Path) -> Result<()> {
         }
 
         file.unpack(&target_path).map_err(|e| {
-             DBCenterError::ExtensionError(format!("Failed to unpack to {}: {}", target_path.display(), e))
+            DBCenterError::ExtensionError(format!(
+                "Failed to unpack to {}: {}",
+                target_path.display(),
+                e
+            ))
         })?;
     }
 

@@ -17,6 +17,12 @@ pub mod vfs;
 pub use config::DBCenterConfig;
 pub use error::{DBCenterError, Result};
 
+// Re-exported so the binding crates bind query parameters against exactly the
+// postgres types this crate was built with, instead of a second copy of the
+// crate pulled in at a slightly different version.
+pub use bytes;
+pub use postgres;
+
 use once_cell::sync::Lazy;
 use postgres::{Client, NoTls};
 use std::collections::HashMap;
@@ -158,6 +164,11 @@ impl DBCenter {
     }
 
     /// Create a new DBCenter instance
+    ///
+    /// Prefer [`DBCenter::builder`] for anything but the simplest call; this
+    /// positional form exists because the C, Python, Go, Java and Node bindings
+    /// all cross the FFI boundary with a flat argument list.
+    #[allow(clippy::too_many_arguments)]
     pub fn new<P: AsRef<Path>>(
         path: Option<P>,
         persist: bool,
@@ -190,7 +201,7 @@ impl DBCenter {
                 (canonical, Some(requested))
             }
             None => {
-                let temp = tempfile::tempdir().map_err(|e| DBCenterError::IoError(e))?;
+                let temp = tempfile::tempdir().map_err(DBCenterError::IoError)?;
                 let temp_path = temp.path().to_path_buf();
                 (temp_path.clone(), Some(temp_path))
             }
@@ -237,15 +248,16 @@ impl DBCenter {
         };
 
         // Create new instance
-        let mut config = DBCenterConfig::default();
-        config.data_dir = path_buf.clone();
-        config.persist = persist;
-        config.daemon_mode = daemon_mode;
-        config.host = host;
-        config.port = port;
-        config.port = port;
-        config.password = password;
-        config.multi_user_sync_mode = multi_user_sync_mode;
+        let mut config = DBCenterConfig {
+            data_dir: path_buf.clone(),
+            persist,
+            daemon_mode,
+            host,
+            port,
+            password,
+            multi_user_sync_mode,
+            ..DBCenterConfig::default()
+        };
 
         let (resolved_version, warning) =
             binary::resolve_artifact_version(requested_version.as_deref(), existing_major)?;
@@ -432,10 +444,10 @@ impl DBCenter {
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&pg_hba_path)
-            .map_err(|e| DBCenterError::IoError(e))?;
+            .map_err(DBCenterError::IoError)?;
 
         file.write_all(entry.as_bytes())
-            .map_err(|e| DBCenterError::IoError(e))?;
+            .map_err(DBCenterError::IoError)?;
 
         tracing::info!("Added pg_hba.conf entry: {}", entry.trim());
 
@@ -493,7 +505,7 @@ impl DBCenter {
                 self.path
             );
             if self.path.exists() {
-                std::fs::remove_dir_all(&self.path).map_err(|e| DBCenterError::IoError(e))?;
+                std::fs::remove_dir_all(&self.path).map_err(DBCenterError::IoError)?;
                 tracing::info!("Database directory deleted successfully");
             }
         } else {
@@ -596,7 +608,7 @@ impl DBCenter {
                     #[cfg(unix)]
                     {
                         let _ = std::process::Command::new("kill")
-                            .args(&["-9", &pid.to_string()])
+                            .args(["-9", &pid.to_string()])
                             .output();
                     }
 

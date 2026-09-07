@@ -369,7 +369,7 @@ fn parse_major(input: &str) -> Option<u32> {
 }
 
 fn version_tuple(value: &str) -> (u32, u32, u32, u32) {
-    let mut parts = value.split(|c| c == '.' || c == '_');
+    let mut parts = value.split(['.', '_']);
     let major = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let minor = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let patch = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);

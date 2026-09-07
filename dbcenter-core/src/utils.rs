@@ -6,11 +6,11 @@ use std::net::TcpListener;
 
 /// Get a free port for PostgreSQL
 pub fn get_free_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| DBCenterError::IoError(e))?;
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(DBCenterError::IoError)?;
 
     let port = listener
         .local_addr()
-        .map_err(|e| DBCenterError::IoError(e))?
+        .map_err(DBCenterError::IoError)?
         .port();
 
     Ok(port)
@@ -22,17 +22,17 @@ pub fn format_postgres_error(error: &postgres::Error) -> String {
         let severity = db_error.severity();
         let message = db_error.message();
         let code = db_error.code().code();
-        
+
         let mut formatted = format!("[{}] {} (SQLSTATE: {})", severity, message, code);
-        
+
         if let Some(detail) = db_error.detail() {
             formatted.push_str(&format!("\nDETAIL: {}", detail));
         }
-        
+
         if let Some(hint) = db_error.hint() {
             formatted.push_str(&format!("\nHINT: {}", hint));
         }
-        
+
         formatted
     } else {
         error.to_string()
@@ -97,7 +97,7 @@ pub fn row_value_to_json(row: &Row, idx: usize) -> JsonValue {
 /// Remove a directory recursively with retries (robust for Windows)
 pub fn remove_dir_all_with_retry(path: &std::path::Path) -> Result<()> {
     use std::time::Duration;
-    
+
     let max_attempts = 20;
     let retry_interval = Duration::from_millis(250);
 
@@ -113,7 +113,7 @@ pub fn remove_dir_all_with_retry(path: &std::path::Path) -> Result<()> {
             Err(e) => {
                 // Check if path still exists - maybe it was gone
                 if !path.exists() {
-                     return Ok(());
+                    return Ok(());
                 }
                 return Err(DBCenterError::IoError(e));
             }

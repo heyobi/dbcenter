@@ -145,9 +145,9 @@ impl QueryBuilder {
         update: &HashMap<String, JsonValue>,
     ) -> Result<(String, Vec<JsonValue>)> {
         let set_data = match update.get("$set") {
-            Some(data) => data.as_object().ok_or_else(|| {
-                DBCenterError::InvalidQuery("$set must be an object".to_string())
-            })?,
+            Some(data) => data
+                .as_object()
+                .ok_or_else(|| DBCenterError::InvalidQuery("$set must be an object".to_string()))?,
             // No $set: treat the whole map as column assignments.
             None => return Self::build_direct_update_string(update),
         };
@@ -198,7 +198,10 @@ mod tests {
     use serde_json::json;
 
     fn q(pairs: &[(&str, JsonValue)]) -> HashMap<String, JsonValue> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]

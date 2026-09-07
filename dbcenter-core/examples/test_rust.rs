@@ -45,7 +45,7 @@ fn main() {
         "age": 25,
         "city": "Istanbul"
     });
-    
+
     match users.insert_one(&doc1) {
         Ok(id) => println!("✓ Inserted document (Ali) with ID: {}", id),
         Err(e) => {
@@ -59,7 +59,7 @@ fn main() {
         "age": 30,
         "city": "Izmir"
     });
-    
+
     match users.insert_one(&doc2) {
         Ok(id) => println!("✓ Inserted document (Zeynep) with ID: {}", id),
         Err(e) => {
@@ -75,7 +75,10 @@ fn main() {
         Ok(rows) => {
             println!("✓ SQL Result:");
             for row in &rows {
-                println!("  {}", serde_json::to_string_pretty(row).unwrap_or_default());
+                println!(
+                    "  {}",
+                    serde_json::to_string_pretty(row).unwrap_or_default()
+                );
             }
         }
         Err(e) => {
@@ -97,14 +100,11 @@ fn main() {
     match db.vector_store("embeddings", 3) {
         Ok(vs) => {
             println!("✓ Got vector store 'embeddings' (dim=3)");
-            
+
             // Add vectors
             let ids = vec!["v1".to_string(), "v2".to_string()];
-            let embeddings = vec![
-                vec![1.0, 0.0, 0.0],
-                vec![0.0, 1.0, 0.0],
-            ];
-            
+            let embeddings = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+
             match vs.add(&ids, &embeddings, None) {
                 Ok(_) => println!("✓ Added 2 vectors"),
                 Err(e) => println!("⚠ Vector add failed: {}", e),
@@ -146,7 +146,7 @@ fn main() {
         Ok(_) => println!("✓ Database shutdown"),
         Err(e) => eprintln!("Shutdown warning: {}", e),
     }
-    
+
     // Force remove test data
     match DBCenter::force_remove("./testdata_rust") {
         Ok(_) => println!("✓ Test data removed"),

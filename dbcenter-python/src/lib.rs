@@ -2,6 +2,8 @@ use dbcenter_core::lazy_frame::LazyFrame as CoreLazyFrame;
 use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, StorageAdapter};
 use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
 use dbcenter_core::vfs::google_drive::GoogleDriveAdapter as CoreGoogleDriveAdapter;
+use dbcenter_core::bytes::BytesMut;
+use dbcenter_core::postgres::types::{IsNull, ToSql, Type as PgType};
 use dbcenter_core::DBCenter as CoreDBCenter;
 use pyo3::exceptions::{PyAttributeError, PyException, PyValueError};
 use pyo3::prelude::*;
@@ -275,12 +277,25 @@ impl DBCenter {
     ///
     /// Returns:
     ///     List of results
-    fn query(&self, sql: &str, _params: Option<Vec<PyObject>>) -> PyResult<Vec<PyObject>> {
+    #[pyo3(signature = (sql, params=None))]
+    fn query(&self, sql: &str, params: Option<Vec<PyObject>>) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
-            // For simplicity, we'll support no-param queries first
+            // Bind the parameters rather than ignoring them. Silently dropping
+            // them left callers writing "WHERE id = $1" with a value that never
+            // arrived, believing the query was parameterised.
+            let bound: Vec<SqlParam> = match params {
+                Some(values) => values
+                    .iter()
+                    .map(|v| SqlParam::from_py(v.bind(py)))
+                    .collect::<PyResult<_>>()?,
+                None => Vec::new(),
+            };
+            let refs: Vec<&(dyn ToSql + Sync)> =
+                bound.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
+
             let results = self
                 .inner
-                .query(sql, &[])
+                .query(sql, &refs)
                 .map_err(|e| PyException::new_err(e.to_string()))?;
 
             let py_results: Vec<PyObject> = results.iter().map(|v| json_to_py(py, v)).collect();
@@ -1344,6 +1359,82 @@ impl VectorStore {
 // ============================================================================
 // Helper Functions: Python <-> JSON conversion
 // ============================================================================
+
+/// A Python value bound as a PostgreSQL query parameter.
+///
+/// Only the scalar types PostgreSQL can infer on its own are accepted. Anything
+/// else is rejected with a clear message rather than being coerced into a shape
+/// the query did not ask for.
+#[derive(Debug)]
+enum SqlParam {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Json(JsonValue),
+}
+
+impl SqlParam {
+    fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if obj.is_none() {
+            return Ok(SqlParam::Null);
+        }
+        // bool before int: Python's bool is a subclass of int.
+        if let Ok(v) = obj.extract::<bool>() {
+            return Ok(SqlParam::Bool(v));
+        }
+        if let Ok(v) = obj.extract::<i64>() {
+            return Ok(SqlParam::Int(v));
+        }
+        if let Ok(v) = obj.extract::<f64>() {
+            return Ok(SqlParam::Float(v));
+        }
+        if let Ok(v) = obj.extract::<String>() {
+            return Ok(SqlParam::Text(v));
+        }
+        if obj.is_instance_of::<PyDict>() || obj.is_instance_of::<PyList>() {
+            let py = obj.py();
+            return Ok(SqlParam::Json(py_to_json(py, obj)?));
+        }
+        Err(PyException::new_err(format!(
+            "Unsupported query parameter of type '{}'. \
+             Supported: None, bool, int, float, str, dict, list",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+impl ToSql for SqlParam {
+    fn to_sql(
+        &self,
+        ty: &PgType,
+        out: &mut BytesMut,
+    ) -> std::result::Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        match self {
+            SqlParam::Null => Ok(IsNull::Yes),
+            SqlParam::Bool(v) => v.to_sql(ty, out),
+            SqlParam::Int(v) => v.to_sql(ty, out),
+            SqlParam::Float(v) => v.to_sql(ty, out),
+            SqlParam::Text(v) => v.to_sql(ty, out),
+            SqlParam::Json(v) => v.to_sql(ty, out),
+        }
+    }
+
+    // The value's own type decides what it can be sent as, so accept whatever
+    // PostgreSQL inferred for the placeholder and let to_sql do the encoding.
+    fn accepts(_ty: &PgType) -> bool {
+        true
+    }
+
+    fn to_sql_checked(
+        &self,
+        ty: &PgType,
+        out: &mut BytesMut,
+    ) -> std::result::Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        self.to_sql(ty, out)
+    }
+}
 
 fn py_to_json(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
     if obj.is_none() {

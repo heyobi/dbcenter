@@ -30,13 +30,23 @@ fn collection_query_regressions() {
     // An unrecognised operator used to contribute no condition at all, which
     // turned a targeted delete into "delete everything".
     let c = db.collection("unknown_op");
-    c.insert_many(&[json!({"name": "a", "age": 10}), json!({"name": "b", "age": 20})])
-        .unwrap();
+    c.insert_many(&[
+        json!({"name": "a", "age": 10}),
+        json!({"name": "b", "age": 20}),
+    ])
+    .unwrap();
     let err = c
         .delete_many(Some(&q(vec![("age", json!({"$bogus": 999}))])))
         .expect_err("unknown operator must be rejected");
-    assert!(err.to_string().contains("Unsupported query operator"), "{err}");
-    assert_eq!(c.count(None).unwrap(), 2, "rows must survive a rejected query");
+    assert!(
+        err.to_string().contains("Unsupported query operator"),
+        "{err}"
+    );
+    assert_eq!(
+        c.count(None).unwrap(),
+        2,
+        "rows must survive a rejected query"
+    );
 
     // Same failure shape: $in with a non-array dropped the condition.
     let err = c
@@ -56,8 +66,11 @@ fn collection_query_regressions() {
     // An empty query means "every row"; it used to splice a bare `WHERE` and
     // fail with a syntax error.
     let c = db.collection("empty_query");
-    c.insert_many(&[json!({"name": "a", "age": 1}), json!({"name": "b", "age": 1})])
-        .unwrap();
+    c.insert_many(&[
+        json!({"name": "a", "age": 1}),
+        json!({"name": "b", "age": 1}),
+    ])
+    .unwrap();
     assert_eq!(
         c.update_many(&q(vec![]), &q(vec![("$set", json!({"age": 2}))]))
             .unwrap(),
@@ -91,7 +104,8 @@ fn collection_query_regressions() {
     // ordinary field, and used to be dropped at schema-evolution time so the
     // insert failed against a column that was never created.
     let c = db.collection("data_field");
-    c.insert_one(&json!({"name": "x", "data": "payload"})).unwrap();
+    c.insert_one(&json!({"name": "x", "data": "payload"}))
+        .unwrap();
     assert_eq!(c.find(None).unwrap()[0]["data"], json!("payload"));
 
     // insert_many must reject a non-object document instead of panicking.

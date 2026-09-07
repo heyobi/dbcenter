@@ -143,18 +143,17 @@ impl<'a> GeoCollection<'a> {
     /// Let's implement `distance_between` taking two generic criteria (JsonValue).
     /// But typically `id` means the PK. The user's example is slightly inconsistent with the insert (no explicit ID).
     /// I will assume the user considers `name` or some unique identifier.
-    /// Let's query the two documents first, then calculate.
-    /// Or do it in one SQL.
-    /// Let's assume `id` refers to the `id` column (integer) OR a field named `id` in JSON.
-    /// Given the user example: `from_id="store_a"`, and the insert had `name="Store A"`.
-    /// Maybe they meant `name`?
-    /// I will interpret `from_id` as: look for document where `id` (PK) = val OR `data->>'id'` = val OR `data->>'name'` = val.
-
+    /// Great-circle distance in metres between two documents' points.
+    ///
+    /// Each argument identifies one document. A number matches the `id` primary
+    /// key; a string matches either `data->>'id'` or `data->>'name'`, so callers
+    /// can refer to a place by its name without knowing the generated id.
+    /// Returns `None` when either document is missing or has no coordinates.
     pub fn distance_between(&self, from_id: &JsonValue, to_id: &JsonValue) -> Result<Option<f64>> {
         let (val1, is_int1) = self.extract_id_val(from_id);
         let (val2, is_int2) = self.extract_id_val(to_id);
 
-        let get_cond = |val: &String, is_int: bool, placeholder: &str| {
+        let get_cond = |val: &String, is_int: bool, _placeholder: &str| {
             if is_int {
                 format!("id = {}", val)
             } else {
