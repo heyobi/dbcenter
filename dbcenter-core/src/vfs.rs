@@ -39,26 +39,35 @@ impl ChunkReader for RemoteParquetReader {
 
     fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
         let length = self.length.saturating_sub(start) as usize;
-        tracing::debug!("RemoteParquetReader: reading {} bytes from offset {}", length, start);
+        tracing::debug!(
+            "RemoteParquetReader: reading {} bytes from offset {}",
+            length,
+            start
+        );
         let data = self
             .storage
             .download_range(&self.key, start, length as u64)
             .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))?;
-        
+
         Ok(Box::new(std::io::Cursor::new(data)))
     }
-    
+
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
-        tracing::debug!("RemoteParquetReader: getting bytes {} from offset {}", length, start);
-         let data = self
+        tracing::debug!(
+            "RemoteParquetReader: getting bytes {} from offset {}",
+            length,
+            start
+        );
+        let data = self
             .storage
             .download_range(&self.key, start, length as u64)
             .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))?;
-            
+
         Ok(Bytes::from(data))
     }
 }
 
-pub mod smart_reader;
-pub mod remote_file;
 pub mod google_drive;
+pub mod s3;
+pub mod remote_file;
+pub mod smart_reader;
