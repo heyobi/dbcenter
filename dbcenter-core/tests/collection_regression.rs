@@ -186,3 +186,31 @@ fn starts_from_a_data_directory_too_deep_for_a_unix_socket() {
     db.shutdown().unwrap();
     let _ = std::fs::remove_dir_all(std::env::temp_dir().join("dbcenter_deep"));
 }
+
+#[test]
+fn a_password_containing_a_quote_is_set_literally() {
+    // ALTER USER takes no bind parameters, so the password was interpolated
+    // straight into SQL. An apostrophe in it either broke the statement or ran
+    // as SQL - and this path is fed straight from an environment variable when
+    // the engine runs in a container.
+    let path = std::env::temp_dir().join("dbcenter_password_quoting");
+    let _ = std::fs::remove_dir_all(&path);
+    let db = DBCenter::builder()
+        .path(&path)
+        .persist(false)
+        .build()
+        .unwrap();
+
+    let awkward = "p'a\"ss--word;";
+    db.set_user_password("postgres", awkward)
+        .expect("an awkward password must still be accepted");
+
+    // The role must still exist and the server must still be usable, which
+    // would not be true if the trailing fragment had executed as SQL.
+    let c = db.collection("after_password");
+    c.insert_one(&json!({"ok": 1})).unwrap();
+    assert_eq!(c.count(None).unwrap(), 1);
+
+    db.shutdown().unwrap();
+    let _ = std::fs::remove_dir_all(&path);
+}

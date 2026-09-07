@@ -80,10 +80,12 @@ impl PostgresProcess {
             };
             (listen_host, port, None)
         } else {
-            let socket_dir = choose_socket_dir(&config.data_dir, config.port.unwrap_or(5432))?;
+            // On Unix the port only names the socket file, which is already
+            // namespaced by its directory, so the default stays 5432.
+            let port = config.port.unwrap_or(5432);
+            let socket_dir = choose_socket_dir(&config.data_dir, port)?;
             fs::create_dir_all(&socket_dir)?;
             let host = socket_dir.to_string_lossy().to_string();
-            let port = config.port.unwrap_or(5432);
             (host, port, Some(socket_dir))
         };
         // Start PostgreSQL
@@ -121,7 +123,21 @@ impl PostgresProcess {
             cmd.arg("-c").arg("dynamic_shared_memory_type=windows");
         } else {
             cmd.arg("-k").arg(socket_dir.as_ref().unwrap());
-            cmd.arg("-h").arg("");
+            // The Unix socket is always there for local clients and the watcher.
+            // TCP is off unless a host was configured: a database that is
+            // embedded in a process has no business on the network by default,
+            // but one running in a container has to be reachable from outside
+            // it, so `host` opens that up explicitly.
+            match &config.host {
+                Some(tcp_host) if !tcp_host.is_empty() => {
+                    cmd.arg("-h").arg(tcp_host);
+                    cmd.arg("-p").arg(port.to_string());
+                    tracing::info!("Also listening on TCP {}:{}", tcp_host, port);
+                }
+                _ => {
+                    cmd.arg("-h").arg("");
+                }
+            }
         }
 
         cmd.stdout(Stdio::from(log_file.try_clone()?));

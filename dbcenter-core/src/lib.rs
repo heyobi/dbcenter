@@ -473,7 +473,16 @@ impl DBCenter {
     pub fn set_user_password(&self, username: &str, password: &str) -> Result<()> {
         let mut client = self.client.lock().map_err(|_| DBCenterError::LockError)?;
 
-        let sql = format!("ALTER USER {} WITH PASSWORD '{}'", username, password);
+        // ALTER USER takes no bind parameters, so both halves have to be
+        // escaped by hand. A password holding an apostrophe is ordinary, and
+        // without this it would either fail or run as SQL.
+        let sql = format!(
+            "ALTER USER {} WITH PASSWORD {}",
+            query::quote_ident(username),
+            query::QueryBuilder::json_to_sql_literal(&serde_json::Value::String(
+                password.to_string()
+            ))
+        );
         client
             .execute(&sql, &[])
             .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
