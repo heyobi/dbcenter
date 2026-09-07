@@ -220,19 +220,27 @@ fn restore(engine: &SyncEngine, storage: &Storage, db: &Arc<DBCenter>) -> Result
     Ok(())
 }
 
-/// Push pending changes for every table this database knows about.
+/// Push pending changes for every collection this database knows about.
 fn push_all(engine: &SyncEngine, db: &Arc<DBCenter>, batch: usize) -> Result<usize, String> {
-    let collections = db
+    let tables = db
         .list_collections()
         .map_err(|e| format!("Could not list tables: {}", e))?;
 
-    // The delta layer exposes each collection as a view over <name>_base,
-    // <name>_adds and <name>_dels. Only the view name is a table to sync.
+    // In delta mode a collection is a *view* over <name>_base, <name>_adds and
+    // <name>_dels, and list_collections reads pg_tables, which does not include
+    // views. Filtering the view name out of that list therefore left nothing to
+    // sync at all. Derive the collection name from its _adds table instead,
+    // which is also exactly where the pending rows live.
+    let mut names: Vec<String> = tables
+        .iter()
+        .filter_map(|t| t.strip_suffix("_adds"))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+
     let mut total = 0;
-    for name in collections {
-        if name.ends_with("_base") || name.ends_with("_adds") || name.ends_with("_dels") {
-            continue;
-        }
+    for name in names {
         match engine.sync_table(&name, batch) {
             Ok(rows) => {
                 if rows > 0 {

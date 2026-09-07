@@ -24,7 +24,7 @@ wait_for() { # wait_for <conn args...>
 }
 
 step "Bringing the cluster up"
-docker compose up -d --build
+docker compose up -d
 wait_for $CONN_A
 wait_for $CONN_B
 echo "both nodes accepting connections"
@@ -46,6 +46,7 @@ echo "node-a is gone"
 step "Restarting node-b so it restores from the bucket"
 docker compose restart node-b >/dev/null
 wait_for $CONN_B
+docker compose logs node-b 2>/dev/null | grep -E "Restoring|Restored|Nothing in object" | tail -3 | sed 's/^/  /' || true
 
 count_b=$($PSQL $CONN_B -c "select count(*) from users")
 echo "node-b sees $count_b row(s) after restoring"
@@ -54,6 +55,6 @@ if [ "$count_b" -ge 1 ]; then
   printf '\n\033[32mPASS\033[0m the row survived the node that wrote it\n'
 else
   printf '\n\033[31mFAIL\033[0m the row did not come back from object storage\n'
-  docker compose logs node-b --tail 40
+  docker compose logs node-b --tail 25
   exit 1
 fi

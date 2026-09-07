@@ -215,6 +215,15 @@ impl PostgresProcess {
 
         tracing::info!("Shutting down PostgreSQL at {:?}", config.data_dir);
 
+        // Shutdown runs both on the explicit call and again from Drop. Without
+        // postmaster.pid the server is already down, and going on to the
+        // fallback would send SIGTERM to a PID that has exited - and that the
+        // kernel is free to have handed to something else by now.
+        if !config.data_dir.join("postmaster.pid").exists() {
+            tracing::debug!("PostgreSQL is already stopped");
+            return Ok(());
+        }
+
         // First, try graceful shutdown with pg_ctl
         let pg_ctl_result = if let Ok((_, postgres_path)) = binary::ensure_binaries(config) {
             let pg_ctl_path = postgres_path.parent().and_then(|p| p.parent()).map(|p| {

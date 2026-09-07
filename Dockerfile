@@ -14,7 +14,8 @@ WORKDIR /src
 # memory than a small build machine has. Thin LTO gives almost the same binary
 # for a fraction of the peak.
 ENV CARGO_PROFILE_RELEASE_LTO=thin \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+    CARGO_BUILD_JOBS=2
 
 COPY . .
 
