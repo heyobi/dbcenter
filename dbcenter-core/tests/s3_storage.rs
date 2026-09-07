@@ -52,16 +52,25 @@ fn round_trips_objects() {
     s3.upload("tables/users.parquet", &payload).unwrap();
 
     assert_eq!(s3.download("tables/users.parquet").unwrap(), payload);
-    assert_eq!(s3.size("tables/users.parquet").unwrap(), payload.len() as u64);
+    assert_eq!(
+        s3.size("tables/users.parquet").unwrap(),
+        payload.len() as u64
+    );
 
     // Ranged reads are what the Parquet VFS relies on: it fetches the footer
     // and then only the row groups it needs.
-    assert_eq!(s3.download_range("tables/users.parquet", 4, 5).unwrap(), b"quick");
+    assert_eq!(
+        s3.download_range("tables/users.parquet", 4, 5).unwrap(),
+        b"quick"
+    );
     assert_eq!(
         s3.download_range("tables/users.parquet", 40, 3).unwrap(),
         b"dog"
     );
-    assert!(s3.download_range("tables/users.parquet", 0, 0).unwrap().is_empty());
+    assert!(s3
+        .download_range("tables/users.parquet", 0, 0)
+        .unwrap()
+        .is_empty());
 
     s3.delete("tables/users.parquet").unwrap();
     assert!(s3.download("tables/users.parquet").is_err());
@@ -79,11 +88,18 @@ fn lists_by_prefix_and_strips_the_namespace() {
 
     let mut found = s3.list("a/").unwrap();
     found.sort();
-    assert_eq!(found, vec!["a/one.txt".to_string(), "a/two.txt".to_string()]);
+    assert_eq!(
+        found,
+        vec!["a/one.txt".to_string(), "a/two.txt".to_string()]
+    );
 
     let mut all = s3.list("").unwrap();
     all.sort();
-    assert_eq!(all.len(), 3, "prefix must be stripped from returned keys: {all:?}");
+    assert_eq!(
+        all.len(),
+        3,
+        "prefix must be stripped from returned keys: {all:?}"
+    );
 
     for key in ["a/one.txt", "a/two.txt", "b/three.txt"] {
         s3.delete(key).unwrap();

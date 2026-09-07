@@ -3,7 +3,7 @@ use crate::config::DBCenterConfig;
 use crate::error::{DBCenterError, Result};
 use crate::utils;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,51 @@ pub struct PostgresProcess {
     /// which connects over TCP.
     #[allow(dead_code)]
     socket_dir: Option<PathBuf>,
+}
+
+/// Pick a directory for the Unix socket that PostgreSQL will actually accept.
+///
+/// `sockaddr_un.sun_path` holds 108 bytes including the terminator, so the
+/// socket file - `<dir>/.s.PGSQL.<port>` - cannot exceed that. Placing it under
+/// the data directory is the obvious choice and keeps everything together, but
+/// a data directory more than about sixty characters deep pushes it over, and
+/// PostgreSQL then fails to start with an error that points at the socket
+/// rather than at the path length. Deep paths are ordinary in CI workspaces and
+/// containers, so fall back to a short directory under the system temp dir,
+/// named from a hash of the data directory so two databases never collide.
+fn choose_socket_dir(data_dir: &Path, port: u16) -> Result<PathBuf> {
+    // Longest name PostgreSQL will create inside the directory.
+    let socket_file_len = format!("/.s.PGSQL.{}", port).len();
+    const SUN_PATH_MAX: usize = 107;
+
+    let preferred = data_dir.join("sockets");
+    if preferred.as_os_str().len() + socket_file_len <= SUN_PATH_MAX {
+        return Ok(preferred);
+    }
+
+    let digest = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        data_dir.hash(&mut hasher);
+        hasher.finish()
+    };
+    let fallback = std::env::temp_dir().join(format!("dbcenter-{:016x}", digest));
+
+    if fallback.as_os_str().len() + socket_file_len > SUN_PATH_MAX {
+        return Err(DBCenterError::ConfigError(format!(
+            "No usable Unix socket directory: '{}' is too long and the temp \
+             directory '{}' is too long as well. Set TMPDIR to a shorter path.",
+            preferred.display(),
+            fallback.display()
+        )));
+    }
+
+    tracing::info!(
+        "Data directory path is too long for a Unix socket; using {} instead",
+        fallback.display()
+    );
+    Ok(fallback)
 }
 
 impl PostgresProcess {
@@ -35,7 +80,7 @@ impl PostgresProcess {
             };
             (listen_host, port, None)
         } else {
-            let socket_dir = config.data_dir.join("sockets");
+            let socket_dir = choose_socket_dir(&config.data_dir, config.port.unwrap_or(5432))?;
             fs::create_dir_all(&socket_dir)?;
             let host = socket_dir.to_string_lossy().to_string();
             let port = config.port.unwrap_or(5432);

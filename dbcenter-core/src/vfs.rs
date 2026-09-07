@@ -68,6 +68,6 @@ impl ChunkReader for RemoteParquetReader {
 }
 
 pub mod google_drive;
-pub mod s3;
 pub mod remote_file;
+pub mod s3;
 pub mod smart_reader;

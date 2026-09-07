@@ -166,13 +166,7 @@ impl S3StorageAdapter {
         pairs.sort();
         let canonical_query = pairs
             .iter()
-            .map(|(k, v)| {
-                format!(
-                    "{}={}",
-                    urlencoding::encode(k),
-                    urlencoding::encode(v)
-                )
-            })
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
             .collect::<Vec<_>>()
             .join("&");
 
@@ -308,7 +302,9 @@ impl S3StorageAdapter {
     }
 
     fn read_lock(&self, key: &str) -> Option<LockFile> {
-        let response = self.send("GET", &self.object_key(key), &[], None, &[]).ok()?;
+        let response = self
+            .send("GET", &self.object_key(key), &[], None, &[])
+            .ok()?;
         if !response.status().is_success() {
             return None;
         }
@@ -316,8 +312,7 @@ impl S3StorageAdapter {
     }
 
     fn write_lock(&self, key: &str, lock: &LockFile, only_if_absent: bool) -> Result<bool> {
-        let body =
-            serde_json::to_vec(lock).map_err(DBCenterError::SerializationError)?;
+        let body = serde_json::to_vec(lock).map_err(DBCenterError::SerializationError)?;
         let extra: Vec<(&str, String)> = if only_if_absent {
             vec![("if-none-match", "*".to_string())]
         } else {
@@ -446,7 +441,13 @@ impl StorageAdapter for S3StorageAdapter {
             })?;
 
             for object in parsed.contents {
-                keys.push(object.key.strip_prefix(&strip).unwrap_or(&object.key).to_string());
+                keys.push(
+                    object
+                        .key
+                        .strip_prefix(&strip)
+                        .unwrap_or(&object.key)
+                        .to_string(),
+                );
             }
 
             match parsed.next_continuation_token {
@@ -466,9 +467,7 @@ impl StorageAdapter for S3StorageAdapter {
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok())
-            .ok_or_else(|| {
-                DBCenterError::StorageError(format!("No Content-Length for '{}'", key))
-            })
+            .ok_or_else(|| DBCenterError::StorageError(format!("No Content-Length for '{}'", key)))
     }
 
     fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>> {
@@ -477,13 +476,7 @@ impl StorageAdapter for S3StorageAdapter {
         }
         // HTTP ranges are inclusive at both ends.
         let range = format!("bytes={}-{}", start, start + length - 1);
-        let response = self.send(
-            "GET",
-            &self.object_key(key),
-            &[],
-            None,
-            &[("range", range)],
-        )?;
+        let response = self.send("GET", &self.object_key(key), &[], None, &[("range", range)])?;
         let response = Self::check(response, &format!("Ranged read of '{}'", key))?;
         response
             .bytes()
@@ -558,7 +551,11 @@ impl StorageAdapter for S3StorageAdapter {
 
     fn rename(&self, src: &str, dest: &str) -> Result<()> {
         // S3 has no rename: copy server-side, then drop the original.
-        let source = format!("/{}/{}", self.config.bucket, Self::encode_path(&self.object_key(src)));
+        let source = format!(
+            "/{}/{}",
+            self.config.bucket,
+            Self::encode_path(&self.object_key(src))
+        );
         let response = self.send(
             "PUT",
             &self.object_key(dest),
@@ -593,7 +590,10 @@ mod tests {
 
     #[test]
     fn prefix_is_applied_to_keys() {
-        assert_eq!(adapter(true).object_key("tables/a.parquet"), "db1/tables/a.parquet");
+        assert_eq!(
+            adapter(true).object_key("tables/a.parquet"),
+            "db1/tables/a.parquet"
+        );
         assert_eq!(adapter(true).object_key("/leading"), "db1/leading");
     }
 
@@ -615,7 +615,10 @@ mod tests {
 
     #[test]
     fn slashes_survive_path_encoding() {
-        assert_eq!(S3StorageAdapter::encode_path("a/b c/d.txt"), "a/b%20c/d.txt");
+        assert_eq!(
+            S3StorageAdapter::encode_path("a/b c/d.txt"),
+            "a/b%20c/d.txt"
+        );
     }
 
     #[test]

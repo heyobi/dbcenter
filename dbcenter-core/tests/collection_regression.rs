@@ -153,3 +153,36 @@ fn fuzzy_search_works_on_the_relational_layout() {
 
     db.shutdown().unwrap();
 }
+
+#[test]
+#[cfg(unix)]
+fn starts_from_a_data_directory_too_deep_for_a_unix_socket() {
+    // sockaddr_un.sun_path holds 108 bytes, so a data directory much more than
+    // sixty characters deep used to make PostgreSQL fail at startup with an
+    // error about the socket rather than the path. Deep paths are ordinary in
+    // CI workspaces and containers.
+    let deep = std::env::temp_dir()
+        .join("dbcenter_deep")
+        .join("a".repeat(40))
+        .join("b".repeat(40))
+        .join("c".repeat(40));
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("dbcenter_deep"));
+
+    assert!(
+        deep.join("sockets/.s.PGSQL.5432").as_os_str().len() > 107,
+        "the test path must actually exceed the limit"
+    );
+
+    let db = DBCenter::builder()
+        .path(&deep)
+        .persist(false)
+        .build()
+        .expect("a deep data directory must not prevent startup");
+
+    let c = db.collection("deep");
+    c.insert_one(&json!({"ok": 1})).unwrap();
+    assert_eq!(c.count(None).unwrap(), 1);
+
+    db.shutdown().unwrap();
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("dbcenter_deep"));
+}
