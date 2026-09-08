@@ -33,6 +33,23 @@ which does not include views, so the collection name never appears in it. Derive
 names from the `_adds` tables instead. This is why the sync loop once found
 nothing to push and the bucket silently stayed empty.
 
+**There are two read paths and they are separate on purpose.** `<name>` is the
+collection - ordinary PostgreSQL, where writes and point lookups go.
+`<name>_columnar` is the same rows read from Parquet by DuckDB, where aggregates
+go: 45.7x on a million-row aggregate. Do not be tempted to union them into one
+view. pg_duckdb takes a whole query or none of it and DuckDB cannot use
+PostgreSQL's indexes, so a unified view sends every query through DuckDB and
+turns a 0.1 ms point lookup into 55 ms. `docs/columnar-reads.md` has the
+measurements.
+
+**Anything written to Parquet gets one column per document field.** The
+temptation is to serialise the document into a single `data` column, because
+that is what a document store does and the code is shorter. It was that way, and
+it made reads off object storage 1.8x *slower* than PostgreSQL at 2.1x the
+bytes, because Parquet then has nothing to be columnar about. `sync_columns`
+reads the real columns from the catalog; three separate code paths used to
+hard-code the four-column shape and two of them silently dropped the document.
+
 **Extensions are per-PostgreSQL-major and there is no fallback.** PostgreSQL
 stamps every loadable module with the major version it was built against and
 refuses to load one that disagrees. Asking for a version with no published build

@@ -39,16 +39,10 @@ Fixed and verified against a real server:
 
 ## What is still wrong
 
-**The PyPI package is stale.** 0.1.0, published 12 December 2025, predates all of
-this. It installs and the core works - insert, count and query are fine - but
-`fuzzy_search` fails, because pg_trgm cannot load on Linux, and PostGIS and
-pgvector fail because the CDN they came from is gone. It has no macOS or arm64
-wheel and an empty description on PyPI.
-
-It is also, in one respect, safer than the source it was cut from: it rejects an
-unrecognised query operator. The behaviour that silently dropped the condition,
-turning `delete_many` into a full-table delete, was introduced between that
-release and the last commit before this work.
+**PyPI is at 0.2.0**, published 8 September 2026, with wheels for five
+platforms. Verified from a real `pip install`: fuzzy search, NUMERIC, arrays,
+PostGIS and pgvector all work. 0.1.0 is still on PyPI and predates everything
+here - it cannot load any extension on Linux.
 
 **Linux PostGIS is being rebuilt with bundled dependencies.** The published
 archives carry the modules alone, so they only load where GEOS and PROJ already
@@ -58,15 +52,26 @@ still going. `build-systems/postgis-pg18` in the extensions repo is the recipe.
 **`vector-0.8.1-windows-amd64-pg15` is quarantined.** It shipped an import library
 instead of a DLL. Windows PostgreSQL 15 resolves to pgvector 0.8.0 instead.
 
-**Nothing that reaches object storage is faithful before this.** Documents are
-stored as columns - inserts add a column per field - while `sync_table` read only
-the `data` JSONB column, which those inserts leave null. Everything written
-through the collection API therefore synced as an id and two timestamps, with the
-document dropped. Restoring put the JSON back into `data` rather than expanding it
-into columns, so a round trip came back in a shape `find()` never produces. Both
-sides are fixed and `tests/lazy_read.rs` covers the round trip. Worth knowing why
-it went unnoticed for so long: the cluster tests wrote through psql directly into
-`data`, which is the one path that worked.
+**Object storage is columnar now, and it was the whole read story.** Everything
+synced used to go into four Parquet columns with the document serialised into
+one of them as JSON. That left Parquet nothing to be columnar about: measured
+over five million rows, reads off object storage were 1.8x *slower* than the
+PostgreSQL they were meant to beat, at 2.1x the stored bytes. It is one column
+per document field now, with the type the field had, and
+`<table>_columnar` publishes those files as an ordinary PostgreSQL view through
+pg_duckdb - 45.7x on a million-row aggregate, end to end through DBCenter's own
+API, with both paths returning identical results. `docs/columnar-reads.md` has
+the numbers and the method.
+
+Three separate places wrote or read the four-column shape and two were losing
+data outright: `sync_table`'s move to `_base` inserted four columns, so a synced
+row arrived locally with no document at all; `vacuum`'s base export did the same,
+so a compaction replaced the deltas with an empty base; and `pull_and_apply` read
+columns by position. All three are fixed, and
+`synced_parquet_has_a_column_per_field` pins the shape.
+
+Worth knowing why it went unnoticed for so long: the cluster tests wrote through
+psql directly into `data`, which is the one path that worked.
 
 **Reading remotely still costs more than it should.** A single-id lookup now reads
 31% of a 15MB table instead of 100%, and the fraction falls as the table grows
@@ -102,13 +107,38 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 
 ## Next, in order
 
-1. Republish to PyPI: bundle the watcher, add macOS and arm64 wheels, fill in the
-   description, and add an install smoke test to CI that does `pip install`,
-   constructs a database and calls `fuzzy_search` in a clean container.
-2. Merge this branch.
-3. Rebuild the pg12-pg17 Linux PostGIS archives with bundled dependencies.
-4. Decide what "lazy sync" should mean, and either make the restore path lazy or
+1. **Publish the pg_duckdb archive.** The extension is what makes the columnar
+   view work, and nothing has been released yet: `install_extension("pg_duckdb")`
+   fetches `pg_duckdb-1.1.1-linux-amd64-pg<major>.tar.gz` from the
+   `extensions-v1` release, which does not have it. The build system is
+   `build-systems/pg_duckdb` in the extensions repo; it needs its checksum added
+   to `EXTENSION_CHECKSUMS` once built. Everything downstream of it has been
+   validated against a repackaged upstream build, so this is packaging, not
+   design.
+2. **Call `ensure_columnar_view` from somewhere a user reaches.** It is a
+   `SyncEngine` method and no binding exposes it, which is exactly the position
+   `scan_smart` has been stuck in.
+3. **Republish to PyPI** with the columnar sync, since 0.2.0 predates it.
+4. Rebuild the pg12-pg17 Linux PostGIS archives with bundled dependencies.
+5. Decide what "lazy sync" should mean, and either make the restore path lazy or
    stop claiming it.
+
+## How the two read paths fit together
+
+This is the thing to understand before changing anything about storage.
+
+`<name>` is the collection: an ordinary PostgreSQL view over `_base` and `_adds`.
+Writes go here, point lookups go here - 0.2 ms against 38 ms off object storage -
+and it is what a client connected with a plain connection string sees.
+
+`<name>_columnar` is the same rows read from Parquet by DuckDB. Aggregates go
+here.
+
+They are deliberately not one view. pg_duckdb takes a whole query or none of it,
+and DuckDB cannot use PostgreSQL's indexes, so a view unioning the two sends
+every query through DuckDB and turns a 0.1 ms lookup into 55 ms - a 550x
+regression on the most common operation in the product. Two names, each good at
+what it is for.
 
 ## Deliberately parked
 
