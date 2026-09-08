@@ -71,6 +71,14 @@ const PGVECTOR_LINUX_VERSIONS: &[ExtensionVersion] = &[
 /// to speak anything but PostgreSQL. There is no Windows build: DuckDB is
 /// vendored and built from source, and that build has never been part of this
 /// pipeline.
+///
+/// Unlike the PostGIS archives, the published pg_duckdb ones are not compiled
+/// here. The modules come from the pg_duckdb project's own release images and
+/// are repackaged the same way everything else is - dependencies bundled beside
+/// the module with an $ORIGIN RUNPATH, so it loads on a machine with nothing
+/// installed. `build-systems/pg_duckdb` in the extensions repo builds it from
+/// source and is the way to reproduce or replace them; it wants more memory
+/// than the machine these were cut on could spare.
 const PG_DUCKDB_LINUX_VERSIONS: &[ExtensionVersion] = &[ExtensionVersion {
     version: "1.1.1",
     min_pg: 14,
@@ -194,6 +202,26 @@ const DEFAULT_ASSET_BASE_URL: &str =
 /// Add an entry per uploaded asset. A download whose name is not listed is
 /// refused; the error reports the digest it computed, which is the value to pin.
 const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
+    (
+        "pg_duckdb-1.1.1-linux-amd64-pg14.tar.gz",
+        "ec566c90a5aa5b8b1ef3c63021e9e15d236c0a675adad668044098d614043ee5",
+    ),
+    (
+        "pg_duckdb-1.1.1-linux-amd64-pg15.tar.gz",
+        "b3b46f5cbe00cac403276f7ec8973c0ed488d2c03283421a9f15b76934df523f",
+    ),
+    (
+        "pg_duckdb-1.1.1-linux-amd64-pg16.tar.gz",
+        "389e8ecbb88b9486e48f268486c415e35e6545c33e8450b6cf62310d061fd1fc",
+    ),
+    (
+        "pg_duckdb-1.1.1-linux-amd64-pg17.tar.gz",
+        "e86d267c34c69b8e09fbd9ee142480e43996df2c0b4bfa62030a2c074b2a9c00",
+    ),
+    (
+        "pg_duckdb-1.1.1-linux-amd64-pg18.tar.gz",
+        "4f3a6f7a34ae847175c0923456f49c9078145f0ebb63a1e66e9af3ec817d0216",
+    ),
     (
         "pghttp-1.3.1-linux-amd64-pg12.tar.gz",
         "e945e39fd132a621a8bac0053d13a19db46dca386efe9edf066387d0fa4e599a",

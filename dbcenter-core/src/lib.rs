@@ -825,7 +825,10 @@ impl DBCenter {
         let mut process = self.process.lock().map_err(|_| DBCenterError::LockError)?;
 
         tracing::info!("Restarting PostgreSQL at {:?}", self.path);
-        process.shutdown(&self.config)?;
+        // stop, not shutdown: shutdown deletes the data directory when the
+        // database is not being persisted, which is the wrong thing to do to a
+        // database that is about to be started again.
+        process.stop(&self.config)?;
 
         // Reconnecting before the old postmaster has released the socket gets a
         // connection to a server that is on its way out.

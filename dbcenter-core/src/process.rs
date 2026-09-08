@@ -203,7 +203,27 @@ impl PostgresProcess {
         }
     }
 
+    /// Stop the server and, if the database is not being persisted, delete it.
     pub fn shutdown(&self, config: &DBCenterConfig) -> Result<()> {
+        self.stop(config)?;
+
+        // Cleanup if not persisting
+        if !config.persist && !config.daemon_mode {
+            // Wait for file handles to be released before attempting cleanup
+            self.wait_for_directory_cleanup(&config.data_dir)?;
+        }
+        Ok(())
+    }
+
+    /// Stop the server and leave the data directory alone.
+    ///
+    /// Split out from `shutdown` for restarts. Deleting the data directory is
+    /// what `persist = false` means at the end of a database's life, and doing
+    /// it in the middle of a restart destroyed the database that was about to
+    /// be started again - which is every non-persistent database that installs
+    /// pg_duckdb, since that install has to restart to pick up
+    /// shared_preload_libraries.
+    pub fn stop(&self, config: &DBCenterConfig) -> Result<()> {
         // If daemon_mode is enabled, don't shutdown the process
         if config.daemon_mode {
             tracing::info!("Daemon mode enabled - PostgreSQL will continue running");
@@ -306,12 +326,6 @@ impl PostgresProcess {
         if postmaster_pid.exists() {
             let _ = fs::remove_file(&postmaster_pid);
             tracing::info!("Removed postmaster.pid");
-        }
-
-        // Cleanup if not persisting
-        if !config.persist {
-            // Wait for file handles to be released before attempting cleanup
-            self.wait_for_directory_cleanup(&config.data_dir)?;
         }
 
         Ok(())
