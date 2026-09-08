@@ -30,7 +30,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use uuid::Uuid;
 
-// Global instance registry for singleton pattern
+// Every live instance, so force_shutdown can find one by path. Construction
+// does not consult this: a second DBCenter on a path that is already open is
+// refused rather than shared, because the Python wrapper spawns a watcher that
+// owns the teardown and two of them would race.
 static INSTANCES: Lazy<Mutex<HashMap<PathBuf, Arc<DBCenter>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -573,14 +576,28 @@ impl DBCenter {
 
     /// List all collections (tables)
     pub fn list_collections(&self) -> Result<Vec<String>> {
-        let sql = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename";
+        // In delta mode a collection is a view over <name>_base, _adds and
+        // _dels, so listing tables alone listed the machinery and left out
+        // every collection it belongs to. The suffixes below are DBCenter's
+        // own: _conflicts holds versions a pull discarded, _columnar is the
+        // Parquet view.
+        const INTERNAL: [&str; 5] = ["_base", "_adds", "_dels", "_conflicts", "_columnar"];
+
+        let sql = "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' \
+                   UNION \
+                   SELECT viewname AS name FROM pg_views WHERE schemaname = 'public' \
+                   ORDER BY name";
         let mut client = self.get_client();
 
         let rows = client
             .query(sql, &[])
             .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
 
-        Ok(rows.iter().map(|row| row.get(0)).collect())
+        Ok(rows
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .filter(|name| !INTERNAL.iter().any(|suffix| name.ends_with(suffix)))
+            .collect())
     }
 
     /// Drop a collection (table)

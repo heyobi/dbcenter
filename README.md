@@ -6,7 +6,7 @@
 
 - 🚀 **Embedded PostgreSQL** - No external dependencies, runs locally
 - 🔥 **MongoDB-style API** - Familiar NoSQL interface with PostgreSQL power
-- 🌍 **Multi-language support** - C, Python, Go bindings
+- 🌍 **Python bindings**, with C, Go, Java, Node and R as experimental extras
 - 📊 **PostGIS** - Full geospatial database support
 - ⚡ **High Performance** - Rust's zero-cost abstractions
 - 🔒 **Memory Safe** - No segfaults, no data races
@@ -14,7 +14,10 @@
 
 ## Language Bindings
 
-### Python
+**Python is the supported binding.** It is the one with a test suite
+(`python_tests/`, run on every push), the one published to PyPI, and the one
+every feature lands in first.
+
 ```python
 from dbcenter import DBCenter
 
@@ -23,7 +26,12 @@ db.users.insert_one({"name": "Ali", "age": 25})
 users = db.users.find({"age": {"$gt": 18}})
 ```
 
-### C
+The C, Go, Java, Node and R bindings are **experimental**. They are thin
+wrappers over the same `dbcenter-ffi` surface and CI keeps them compiling, but
+Go has one test file and the others have none, so nothing is known about them
+beyond that they build. Use them if you are willing to find the bugs; do not
+build something you have to keep running on top of one.
+
 ```c
 #include "dbcenter.h"
 
@@ -31,7 +39,6 @@ DBCenter* db = dbcenter_new("./data", true);
 dbcenter_insert_one(db, "users", "{\"name\":\"Ali\",\"age\":25}");
 ```
 
-### Go
 ```go
 import "github.com/heyobi/dbcenter-go"
 
@@ -41,6 +48,11 @@ db.Collection("users").InsertOne(map[string]interface{}{
     "age": 25,
 })
 ```
+
+Everything, in every language, is also reachable the ordinary way: DBCenter
+serves the PostgreSQL wire protocol, so psql, DBeaver, pgAdmin and every driver
+in every language connect to it with no binding at all. That path is exercised
+by the Rust tests and by `docker-compose.yml`.
 
 ## Architecture
 
@@ -342,6 +354,23 @@ when several nodes share a bucket.
 Conflict resolution is last-write-wins on `updated_at`, so two nodes editing the
 same row concurrently keep the later edit and lose the earlier one. That is fine
 for append-heavy and partitioned workloads and wrong for a shared counter.
+
+Two things stop that from being silent. The version that loses is written to
+`<collection>_conflicts` rather than dropped, so it can be found afterwards:
+
+```sql
+SELECT id, seen_at, incoming_won, incoming, existing FROM orders_conflicts;
+```
+
+Nothing is written unless the two versions actually differ, so re-applying a
+file - which happens routinely - leaves no rows behind. And a tie is broken on a
+hash of the row rather than on which node got there first: two edits landing in
+the same clock tick used to leave each node keeping its own version, and the two
+stayed different for good. They now converge on the same one.
+
+What this is not is a merge. Two nodes incrementing the same counter still end
+at one increment, not two; `<collection>_conflicts` tells you it happened, and
+what the other value was.
 
 Compaction takes the storage lock, so with several nodes running exactly one
 does the work and the others move on. Without it every push leaves another

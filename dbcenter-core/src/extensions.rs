@@ -624,27 +624,27 @@ const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
     ),
     (
         "postgis-3.5.0-linux-amd64-pg12.tar.gz",
-        "1179c7636bf3b44e90fad65a6ad98a0aee32ad2ef52e33e092bd6a050a803083",
+        "46082019a48a8b4b7394fcf55cf97700b3dada934fa94e9c1910ceaac2de0fd8",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg13.tar.gz",
-        "be92e6bdd3e46e5106934abbe5ef4e8afbb1341d0c0631aa1d1542e142486f84",
+        "9746960447db9d7a9d8a16fa022d8fcb0e72cdf8e752266cd8a934fd8f94eba3",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg14.tar.gz",
-        "91307002492744021cb664df7d15513b02419085b6d756f14a0bac23a6f19c78",
+        "b0162952ac02f3a2a2b1c19fa8f9787ddd1e00dcd84fd32563afce13997e1629",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg15.tar.gz",
-        "0e1adf5d6f71b197a3971a344d92fe90040e5b362bfc8d4731307502142e6a44",
+        "de0aea04de64b0d7cef89ebfe6cb5a81a123be5b7ccaa1a08cd595f57884ce79",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg16.tar.gz",
-        "7d43f7ebd5a5ffd37efdb0033b3e27a9a95e6faeac2652f5c4a202edbc6285cf",
+        "86a4cf9d2c1300e559f94095675ca16d772de33dc70af9b5c03fe93eb298c90f",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg17.tar.gz",
-        "1af27887886d327c564c274b75f39f2abe97188d9a25b78957db9dee596a07ac",
+        "33b7727923db74e4ac58c8b4e9e40f1ba2850a20cb50daa7dddb7b1ac3a2fefb",
     ),
     (
         "postgis-3.5.0-windows-amd64-pg16.zip",
@@ -656,7 +656,7 @@ const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
     ),
     (
         "postgis-3.6.1-linux-amd64-pg18.tar.gz",
-        "873c873ab40a5ed6f153e0cebe89530ef64ef20b347f618aa46c1616808b05f3",
+        "5ec944b274747262827aabcfdb8909468e28aea696719c1bd7e179c753edfc5e",
     ),
     (
         "postgis-3.6.1-windows-amd64-pg13.zip",
@@ -950,11 +950,23 @@ fn verify_against(path: &Path, file_name: &str, checksums: &[(&str, &str)]) -> R
 fn fetch_extension_asset(cache_dir: &Path, file_name: &str, description: &str) -> Result<PathBuf> {
     fs::create_dir_all(cache_dir)?;
     let path = cache_dir.join(file_name);
+    let url = format!("{}/{}", asset_base_url().trim_end_matches('/'), file_name);
 
     if path.exists() {
         tracing::info!("Using cached {}", description);
+        // A republished bundle keeps its name, so the cached copy no longer
+        // matches the pinned digest. Verification deletes it; without this the
+        // install would fail for good on every machine that had ever installed
+        // the old one. Fetch the new bytes and check those instead.
+        if verify_asset(&path, file_name).is_err() {
+            tracing::info!(
+                "Cached {} no longer matches its pinned digest; downloading it again",
+                file_name
+            );
+            let _ = fs::remove_file(&path);
+            download_with_progress(&url, &path, description)?;
+        }
     } else {
-        let url = format!("{}/{}", asset_base_url().trim_end_matches('/'), file_name);
         download_with_progress(&url, &path, description)?;
     }
 
@@ -1144,6 +1156,7 @@ pub(crate) fn stage_pg_duckdb(config: &crate::config::DBCenterConfig) -> Result<
             &format!("pg_duckdb {} for PostgreSQL {}", ver_str, target_pg),
         )?;
         extract_postgis_tarball(&tar_path, &pg_root)?;
+        prune_relocated_libraries(&module_dir_of(&pg_root));
         record_unpacked(&pg_root, &file_name);
     }
 
@@ -1337,8 +1350,24 @@ fn install_extension_windows(
 ///
 /// A marker file rather than a check for the module, because the version
 /// matters: an archive for a different version has to replace what is there.
+/// Has this exact archive already been extracted into this PostgreSQL?
+///
+/// The marker holds the digest the archive was pinned at, not just its name. A
+/// republished bundle keeps its file name - PostGIS's libraries moving into
+/// `postgis-libs/` is one - and a marker that only recorded the name would
+/// leave the old layout in place forever.
 pub fn already_unpacked(pg_root: &Path, archive: &str) -> bool {
-    marker_path(pg_root, archive).exists()
+    match fs::read_to_string(marker_path(pg_root, archive)) {
+        Ok(recorded) => recorded.trim() == pinned_digest(archive).unwrap_or(archive),
+        Err(_) => false,
+    }
+}
+
+fn pinned_digest(archive: &str) -> Option<&'static str> {
+    EXTENSION_CHECKSUMS
+        .iter()
+        .find(|(name, _)| *name == archive)
+        .map(|(_, digest)| *digest)
 }
 
 fn marker_path(pg_root: &Path, archive: &str) -> PathBuf {
@@ -1353,7 +1382,7 @@ pub fn record_unpacked(pg_root: &Path, archive: &str) {
     // Best effort: failing to write the marker costs an unnecessary unpack next
     // time, which is the situation this is trying to improve, not a correctness
     // problem worth failing an install over.
-    if let Err(e) = fs::write(&marker, archive) {
+    if let Err(e) = fs::write(&marker, pinned_digest(archive).unwrap_or(archive)) {
         tracing::debug!("Could not record {} as unpacked: {}", archive, e);
     }
 }
@@ -1390,6 +1419,7 @@ fn install_extension_unix(
     )?;
 
     extract_postgis_tarball(&tar_path, &pg_root)?;
+    prune_relocated_libraries(&module_dir_of(&pg_root));
     record_unpacked(&pg_root, &file_name);
 
     Ok(())
@@ -1642,6 +1672,7 @@ fn install_postgis_unix(db: &DBCenter, requested_version: Option<&str>) -> Resul
     // Extract
     let pg_root = get_postgres_root(db)?;
     extract_postgis_tarball(&tar_path, &pg_root)?;
+    prune_relocated_libraries(&module_dir_of(&pg_root));
 
     Ok(())
 }
@@ -1844,6 +1875,54 @@ fn extract_postgis_bundle(zip_path: &Path, pg_root: &Path) -> Result<()> {
 }
 
 /// Extract PostGIS tarball (Unix)
+/// Where an installed extension's `.so` files land.
+fn module_dir_of(pg_root: &Path) -> PathBuf {
+    let nested = pg_root.join("lib").join("postgresql");
+    if nested.is_dir() {
+        nested
+    } else {
+        pg_root.join("lib")
+    }
+}
+
+/// Delete copies of a bundle's libraries left behind in the shared module
+/// directory by an older layout.
+///
+/// Bundles used to unpack their dependencies straight into PostgreSQL's module
+/// directory, which every extension shares, so two of them shipping the same
+/// soname overwrote each other. They now keep their libraries in
+/// `<name>-libs/`, and the stale copies next door are dead weight - and the
+/// next collision waiting to happen. A file is only removed when the bundle
+/// that put it there has just written the same name into its own directory.
+fn prune_relocated_libraries(module_dir: &Path) {
+    let Ok(entries) = fs::read_dir(module_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir()
+            || !path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with("-libs"))
+        {
+            continue;
+        }
+        let Ok(relocated) = fs::read_dir(&path) else {
+            continue;
+        };
+        for library in relocated.flatten() {
+            let stale = module_dir.join(library.file_name());
+            if stale.is_file() {
+                match fs::remove_file(&stale) {
+                    Ok(()) => tracing::info!("Removed stale {:?} left by an older bundle", stale),
+                    Err(e) => tracing::debug!("Could not remove {:?}: {}", stale, e),
+                }
+            }
+        }
+    }
+}
+
 fn extract_postgis_tarball(tar_path: &Path, pg_root: &Path) -> Result<()> {
     use flate2::read::GzDecoder;
     use tar::Archive;

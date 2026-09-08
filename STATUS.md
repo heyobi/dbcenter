@@ -53,12 +53,21 @@ which is what the version table picks by default for every major - all carry the
 43 to 45 libraries they link against. Only an explicitly requested older version
 (3.1.11, say) still ships the module alone and needs GEOS and PROJ on the host.
 
-**PostGIS still unpacks its libraries into the shared module directory.**
-pg_duckdb was moved into a `<name>-libs/` directory of its own after installing
-both broke one of them; PostGIS was left on the old scheme because it is now the
-only bundle that ships libraries at all, so there is nothing left to collide
-with. That makes it a landmine rather than a bug: the next bundle that carries a
-library will collide with PostGIS the way pg_duckdb did.
+**PostGIS's libraries now live in `postgis-libs/`, like pg_duckdb's.** The seven
+bundles that carry libraries - 3.5.0 for PostgreSQL 12 to 17, 3.6.1 for 18 - were
+repacked with their 43 dependencies in a directory of their own and RUNPATH
+`$ORIGIN/postgis-libs`, and re-pinned. Nothing shares the module directory any
+more, so the next bundle that ships a library has nothing to collide with.
+
+Two things had to change for a republished bundle to take effect at all, and
+both were found by publishing this one. The download cache keyed on file name,
+so a machine that had ever installed the old archive kept serving it from disk
+and failed verification for good; a cached file that no longer matches its
+pinned digest is now fetched again. And the "already unpacked" marker recorded
+the archive's name, so the new layout would never have been extracted over the
+old one; it records the digest. Installing over an old install also deletes the
+copies the previous layout left behind, checked on PostgreSQL 17 and 18 with
+both extensions in both orders.
 
 **`vector-0.8.1-windows-amd64-pg15` is quarantined.** It shipped an import library
 instead of a DLL. Windows PostgreSQL 15 resolves to pgvector 0.8.0 instead.
@@ -84,30 +93,55 @@ columns by position. All three are fixed, and
 Worth knowing why it went unnoticed for so long: the cluster tests wrote through
 psql directly into `data`, which is the one path that worked.
 
-**`scan_smart` is the slow hand-rolled version of what pg_duckdb now does.** It
-reads Parquet over range requests and only does equality on `id`, and is
-reachable only from Python's `smart_query(table, id)`. The columnar view does
-arbitrary SQL over the same files, faster. Either point it at the view or drop
-it. `CountingStorage` and `tests/lazy_read.rs` are how the byte counts are
-measured, and are worth keeping either way.
+**`scan_smart` stays, as the lookup that needs no extension.** It reads Parquet
+over range requests and only does equality on `id`, which the columnar view beats
+on both counts - but the view needs pg_duckdb, which is published for Linux on
+PostgreSQL 14 to 18 and adds 120 MB of resident set. `scan_smart` is pure Rust
+and works on every platform DBCenter runs on, so it is the fallback rather than a
+duplicate. It is not going to grow: anything past a point lookup belongs in the
+view.
 
-**Conflict resolution is last-write-wins on `updated_at`.** Two nodes editing one
-row concurrently: the later edit wins and the earlier is lost. Fine for
-append-heavy and partitioned work, wrong for a shared counter. `DBCENTER_PULL` is
-off by default for this reason.
+Writing its tests turned up that the footer cache it advertised never worked. It
+saved only when a read ended at the end of the file and was longer than eight
+bytes, and Parquet's metadata block ends eight bytes before the end, so the file
+was never written and every lookup re-read the footer. The cache now records the
+byte range it holds.
 
-**The bindings other than Python are barely exercised.** Go has one test file;
-Java, Node and R have none. CI only runs `cargo test` for `dbcenter-core` and
-`dbcenter-serve`. They compile, and that is all anyone knows about them.
+**Conflict resolution is still last-write-wins, but it no longer loses quietly
+and no longer diverges.** Two nodes editing one row: the later edit wins and the
+earlier one is written to `<collection>_conflicts` with both versions and which
+one was kept, so it can be found afterwards. Nothing is recorded unless the two
+versions actually differ, so re-applying a file leaves no rows behind.
 
-**The test suite was the reason most of this survived.** The Python suite has 27
-assertions against 83 prints, and never calls fuzzy_search, delete_many,
-update_many, find, create_index or lazy at all. It checks that things do not
-crash. Every bug found in this work was either in a function it never called or
-on a path no test provokes: an unrecognised operator, a type with no mapping, a
-machine without GIS libraries, a document written through the API rather than as
-JSONB. When adding a feature here, add the test that would fail without it, and
-one that provokes the wrong input.
+The tie was the real bug. The comparison was `EXCLUDED.updated_at > base.updated_at`,
+so on equal timestamps each node kept whatever it already had and the two stayed
+different for good - a wrong answer, not a lost update. Ties are now broken on a
+hash of the row (minus `created_at`, which is this node's clock), so every node
+picks the same version. `tests/conflicts.rs` pins all three cases.
+
+This is resolution, not merging. Two nodes incrementing a shared counter still
+end at one increment. `DBCENTER_PULL` stays off by default.
+
+**Everything except Python is marked experimental.** Go has one test file; Java,
+Node and R have none. They are thin wrappers over `dbcenter-ffi` and CI keeps
+them compiling, which is all anyone knows about them, and each one now says so in
+its own README. Python is the supported binding: it has the test suite, it is
+what is on PyPI, and features land there first. Anyone who needs another language
+today should connect over the PostgreSQL wire protocol with an ordinary driver -
+that path is tested.
+
+**The Python suite asserts things now.** It was 27 assertions against 83 prints
+in one file, with five more files that only checked that nothing raised. It is
+now 70 tests across `test_collection.py`, `test_sync.py` and `test_columnar.py`,
+plus the original `test_final.py`, and CI runs them on every push. Writing them
+found four bugs in an afternoon - `db.port` raising on every default instance,
+`$set` unable to introduce a field that `insert_one` would have added,
+`create_index(field, "gin")` failing outright, and the dead footer cache - which
+is the argument for them. Rust is at 48 tests across eleven files.
+
+The pattern in every bug found this month: it was on a path no test called, or in
+a call whose result nothing checked. So assert the value, not that the call
+returned, and give each new feature a test that provokes the wrong input.
 
 **Credentials are still in git history.** `client_secret.json` and
 `token_cache.json` were removed from the tree but remain in earlier commits. The
@@ -117,22 +151,21 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 
 ## Next, in order
 
-1. **Give the Python suite assertions.** `python_tests/test_final.py` has 27
-   assertions against 83 prints; the other five files have none at all and only
-   check that nothing raises. The release smoke test in `release.yml` is now the
-   strongest Python-level gate there is, which is the wrong way round.
-2. **`scan_smart`: point it at the columnar view, or delete it.** It is a slower,
-   less capable version of something that now exists.
-3. **Test a binding other than Python, or say plainly that they are
-   unsupported.** Go has one test file, Java and Node have none, and CI builds
-   but does not test them.
-4. Move PostGIS's bundled libraries into `postgis-libs/` before some third
-   bundle collides with them the way pg_duckdb did.
-5. Build pg_duckdb from source rather than repackaging upstream's binary.
+1. **Publish the repacked PostGIS bundles.** The seven archives are built,
+   verified against both extensions on PostgreSQL 17 and 18, and pinned in
+   `extensions.rs`, but the upload to the `extensions-v1` release has not been
+   made. Until it is, the pinned digests do not match what is published and
+   PostGIS will not install from the public release. This is the one thing here
+   that is half-done rather than not started.
+2. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
+   Marked experimental is honest; it is not a resting place.
+3. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
    compile than this machine has spare.
-6. Decide what "lazy sync" should mean, and either make the restore path lazy or
+4. Decide what "lazy sync" should mean, and either make the restore path lazy or
    stop claiming it.
+5. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
+   PostgreSQL 15 silently gets pgvector 0.8.0 instead.
 
 ## How the two read paths fit together
 

@@ -92,6 +92,15 @@ class DeltaLayer(DBTestCase):
         self.sync.sync_table(self.table, 1000)
         self.assertEqual([d["ref"] for d in self.orders.find()], ["A-2"])
 
+    def test_list_collections_names_the_collection_not_its_machinery(self):
+        # A collection in delta mode is a view over three tables. Listing only
+        # tables listed the three and not the collection.
+        self.orders.insert_one({"ref": "A-1"})
+        listed = self.db.list_collections()
+        self.assertIn(self.table, listed)
+        for suffix in ("base", "adds", "dels"):
+            self.assertNotIn(f"{self.table}_{suffix}", listed)
+
     def test_a_vacuum_replaces_the_deltas_with_one_base_object(self):
         self.orders.insert_many([{"ref": f"A-{i}"} for i in range(10)])
         self.sync.sync_table(self.table, 1000)

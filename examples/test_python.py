@@ -12,13 +12,20 @@ print("DBCenter Rust Edition - Test Suite")
 print("="*70 + "\n")
 
 # ============================================================================
-# TEST 1: Singleton Pattern
+# TEST 1: Opening the database
 # ============================================================================
-print("--- TEST 1: Veritabanı Başlatma & Singleton Pattern ---")
+print("--- TEST 1: Veritabanı Başlatma ---")
 db = DBCenter(path="./testdata_rust", persist=True)
-db2 = DBCenter(path="./testdata_rust", persist=True)
-print(f"db ve db2 aynı mı? {db is db2}")
-print("✓ Singleton Pattern çalışıyor\n")
+
+# One process holds one handle on a database. A second DBCenter on the same
+# path is refused, and the error says to call force_shutdown first - it used to
+# claim to be a singleton and hand back the same object, which it never did.
+try:
+    DBCenter(path="./testdata_rust", persist=True)
+    print("! ikinci açılış reddedilmeliydi")
+except Exception as e:
+    print(f"✓ Aynı yol ikinci kez açılmıyor: {e}")
+print()
 
 # ============================================================================
 # TEST 2: MongoDB-Style Insert & Find

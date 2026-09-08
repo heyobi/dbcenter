@@ -835,12 +835,46 @@ impl SyncEngine {
     }
 
     /// Task 3.3 & 5.1: Conflict Resolution (Parquet Download) & Lazy Sync
+    /// Where a pull records the version it discarded.
+    ///
+    /// Two nodes editing one row is resolved last-write-wins, which means one of
+    /// the two edits is not in the database afterwards. That is a reasonable
+    /// default and a bad thing to do quietly, so the losing version is kept
+    /// here with the one that won:
+    ///
+    /// ```sql
+    /// SELECT id, seen_at, incoming_won, incoming, existing FROM orders_conflicts;
+    /// ```
+    ///
+    /// Nothing is written unless the two versions actually differ, so a file
+    /// applied twice - which happens routinely - leaves no rows behind.
+    fn ensure_conflict_table(&self, table_name: &str) -> Result<()> {
+        let sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{}_conflicts" (
+                   conflict_id BIGSERIAL PRIMARY KEY,
+                   id UUID NOT NULL,
+                   seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                   incoming_won BOOLEAN NOT NULL,
+                   incoming JSONB NOT NULL,
+                   existing JSONB NOT NULL
+               )"#,
+            table_name
+        );
+        let mut client = self.db.get_client();
+        client.batch_execute(&sql).map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
+        Ok(())
+    }
+
     pub fn pull_and_apply(&self, table_name: &str, mode: SyncMode) -> Result<()> {
         // Ensure table structure exists before trying to insert to _base
         use crate::delta_manager::DeltaManager;
         DeltaManager::ensure_delta_tables(&self.db, table_name).map_err(|e| {
             crate::error::DBCenterError::QueryError(format!("Failed to ensure tables: {}", e))
         })?;
+
+        self.ensure_conflict_table(table_name)?;
 
         let files = self.storage.list(table_name)?;
 
@@ -921,7 +955,7 @@ impl SyncEngine {
                     ];
                     let mut values = vec![
                         "$1::uuid".to_string(),
-                        "$2".to_string(),
+                        "$2::jsonb".to_string(),
                         "$3::text::timestamptz".to_string(),
                     ];
                     let mut assignments = vec![
@@ -942,20 +976,64 @@ impl SyncEngine {
                         assignments.push(format!("{q} = EXCLUDED.{q}", q = quoted));
                     }
 
-                    // LWW: Update only if incoming (EXCLUDED) is newer than existing
-                    // We cast $3 to text first, then timestamptz, to accept String input from Rust.
+                    // Last write wins, with two things the plain version got
+                    // wrong.
+                    //
+                    // The comparison was `EXCLUDED.updated_at > base.updated_at`,
+                    // so on equal timestamps each node kept whichever row it
+                    // already had - two nodes that edited a row in the same
+                    // clock tick ended up holding different data and stayed
+                    // that way. The tie is now broken on a hash of the row,
+                    // which every node computes the same way, so they converge
+                    // on the same version instead of diverging. `created_at` is
+                    // left out of the hash: the row being inserted takes the
+                    // column default, so it holds this node's clock rather than
+                    // anything the two nodes agree on.
+                    //
+                    // And the version that loses is written to
+                    // `<table>_conflicts` rather than dropped. Last-write-wins
+                    // is still the resolution - this only makes what it
+                    // discarded something you can go and look at. `before` is
+                    // read in the same statement, so it holds the row as it was
+                    // before the upsert touched it.
+                    //
+                    // $3 is cast to text first, then timestamptz, to accept a
+                    // String from Rust.
+                    let incoming_columns = columns.join(", ");
+                    let conflict_table = format!("{}_conflicts", table_name);
                     let upsert_base = format!(
                         r#"
-                        INSERT INTO "{}" ({})
-                        VALUES ({})
-                        ON CONFLICT (id) DO UPDATE SET {}
-                        WHERE EXCLUDED.updated_at > "{}".updated_at
+                        WITH incoming AS (
+                            SELECT {select_list}
+                        ),
+                        before AS (
+                            SELECT * FROM "{base}" WHERE id = $1::uuid
+                        ),
+                        applied AS (
+                            INSERT INTO "{base}" ({cols})
+                            SELECT {cols} FROM incoming
+                            ON CONFLICT (id) DO UPDATE SET {assignments}
+                            WHERE (EXCLUDED.updated_at,
+                                   md5((to_jsonb(EXCLUDED) - 'created_at')::text))
+                                > ("{base}".updated_at,
+                                   md5((to_jsonb("{base}") - 'created_at')::text))
+                            RETURNING id
+                        )
+                        INSERT INTO "{conflicts}" (id, incoming_won, incoming, existing)
+                        SELECT i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(i), to_jsonb(b)
+                        FROM before b, incoming i
+                        WHERE NOT (to_jsonb(b) @> to_jsonb(i))
                         "#,
-                        base_table,
-                        columns.join(", "),
-                        values.join(", "),
-                        assignments.join(", "),
-                        base_table
+                        select_list = columns
+                            .iter()
+                            .zip(values.iter())
+                            .map(|(c, v)| format!("{} AS {}", v, c))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        base = base_table,
+                        cols = incoming_columns,
+                        assignments = assignments.join(", "),
+                        conflicts = conflict_table,
                     );
 
                     let id_uuid = uuid::Uuid::parse_str(&id_str).map_err(|e| {

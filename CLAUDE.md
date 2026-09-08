@@ -85,6 +85,21 @@ names reach the query builder from user data.
 **An unrecognised query operator is an error, not a dropped condition.** Dropping
 it turned `delete_many({"age": {"$typo": 1}})` into `DELETE FROM t`.
 
+**Republishing an extension archive under the same name needs two things to
+notice.** The download cache and the "already unpacked" marker both keyed on the
+file name, so a machine that had installed the old bytes would fail verification
+for good and would never extract the new layout. Both key on the pinned digest
+now - if you add another cache along this path, do the same.
+
+**Anything in a conflict tie-break has to be identical on every node.**
+`created_at` is not: the row an upsert tries to insert takes the column default,
+which is the local clock. Including it made both nodes accept the other's row,
+which is the same divergence in the opposite direction.
+
+**A Python `Collection` reads any unknown attribute as a column.** `coll.name`
+does not give you the collection's name, it gives you the values of a field
+called "name". Tests keep the name in a variable.
+
 ## Working on it
 
 Rust is at `~/.cargo/bin` (rustup). Always:

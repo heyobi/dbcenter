@@ -1,5 +1,11 @@
 # DBCenter Go Bindings
 
+> **Experimental.** CI keeps this compiling and nothing more. There is one test file, `dbcenter_test.go`, and it is not run by CI. The
+> supported binding is Python (`dbcenter-python`), which has a test suite and is
+> published to PyPI. If you need this language in production today, connect to
+> DBCenter over the PostgreSQL wire protocol with your language's ordinary
+> driver instead - that path is tested.
+
 Go bindings for the DBCenter Rust library.
 
 ## Installation
