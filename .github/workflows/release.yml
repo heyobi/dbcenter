@@ -72,11 +72,16 @@ jobs:
       - name: Install from the wheel
         run: pip install --no-index --find-links dist dbcenter
 
+      # PostgreSQL refuses to run as root and the container job is root, so the
+      # database has to be started as somebody else. Users hit this too, in any
+      # image that runs as root.
       - name: Start a database and use it
         run: |
-          cd /tmp   # not the repo: a directory named dbcenter-watcher used to
-                    # be mistaken for the watcher binary
-          python - <<'PY'
+          useradd -m tester
+          mkdir -p /tmp/smoke && chown -R tester /tmp/smoke
+          # Written to a file and run from /tmp, not the checkout: a directory
+          # named dbcenter-watcher used to be mistaken for the watcher binary.
+          cat > /tmp/smoke.py <<'PY'
           import dbcenter
           db = dbcenter.DBCenter(path="/tmp/smoke", persist=False)
           c = db.collection("cities")
@@ -122,6 +127,8 @@ jobs:
           db.shutdown()
           print("wheel works")
           PY
+          chown tester /tmp/smoke.py
+          su tester -c "cd /tmp && python /tmp/smoke.py"
 
   publish:
     name: Publish

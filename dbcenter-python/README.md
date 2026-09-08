@@ -53,6 +53,10 @@ The PostgreSQL distribution is downloaded to `~/.dbcenter` on first use, about
 60MB, and reused after that. Extension archives are verified against digests
 pinned in the source, so a substituted one is refused.
 
+PostgreSQL refuses to run as root, so neither can this. In a container that runs
+as root - which most base images do - create a user first and start the database
+as them; the error says so if you forget.
+
 Extensions are built per PostgreSQL major version. Asking for one with no
 published build is an error naming the versions that exist, rather than a
 download that fails later.
