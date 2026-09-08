@@ -107,19 +107,20 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 
 ## Next, in order
 
-1. **Publish the pg_duckdb archive.** The extension is what makes the columnar
-   view work, and nothing has been released yet: `install_extension("pg_duckdb")`
-   fetches `pg_duckdb-1.1.1-linux-amd64-pg<major>.tar.gz` from the
-   `extensions-v1` release, which does not have it. The build system is
-   `build-systems/pg_duckdb` in the extensions repo; it needs its checksum added
-   to `EXTENSION_CHECKSUMS` once built. Everything downstream of it has been
-   validated against a repackaged upstream build, so this is packaging, not
-   design.
-2. **Call `ensure_columnar_view` from somewhere a user reaches.** It is a
-   `SyncEngine` method and no binding exposes it, which is exactly the position
-   `scan_smart` has been stuck in.
-3. **Republish to PyPI** with the columnar sync, since 0.2.0 predates it.
-4. Rebuild the pg12-pg17 Linux PostGIS archives with bundled dependencies.
+1. **Republish to PyPI.** 0.2.0 predates all of the columnar work, including
+   two data-loss fixes: a synced row arrived in `_base` with no document at all,
+   and an updated row disappeared from the collection after a sync. Anyone on
+   0.2.0 who syncs is losing data.
+2. **Decide whether the columnar view should be automatic.** It exists, it is
+   refreshed when the files change, and both `install_extension("pg_duckdb")`
+   and `ensure_columnar_view` are reachable from Python - but a user still has
+   to ask for both. Doing it on their behalf means installing a 50 MB extension
+   and restarting their database, which is not something to do without being
+   asked.
+3. Rebuild the pg12-pg17 Linux PostGIS archives with bundled dependencies.
+4. Build pg_duckdb from source rather than repackaging upstream's binary.
+   `build-systems/pg_duckdb` is written and correct; DuckDB simply wants more
+   memory to compile than this machine has spare.
 5. Decide what "lazy sync" should mean, and either make the restore path lazy or
    stop claiming it.
 
