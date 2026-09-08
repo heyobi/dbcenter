@@ -1,7 +1,7 @@
 use crate::error::Result;
-use std::path::PathBuf;
-use std::fs;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 
 /// Lock file structure for concurrency control
 #[derive(Serialize, Deserialize, Debug)]
@@ -20,7 +20,7 @@ pub trait StorageAdapter {
     fn size(&self, key: &str) -> Result<u64>;
     fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>>;
     fn delete(&self, key: &str) -> Result<()>;
-    
+
     // Phase 4: Locking
     fn lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool>;
     fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool>;
@@ -77,7 +77,8 @@ impl StorageAdapter for LocalStorageAdapter {
 
     fn size(&self, key: &str) -> Result<u64> {
         let path = self.root_path.join(key);
-        let metadata = std::fs::metadata(path).map_err(|e| crate::error::DBCenterError::StorageError(e.to_string()))?;
+        let metadata = std::fs::metadata(path)
+            .map_err(|e| crate::error::DBCenterError::StorageError(e.to_string()))?;
         Ok(metadata.len())
     }
 
@@ -85,9 +86,11 @@ impl StorageAdapter for LocalStorageAdapter {
         use std::io::{Read, Seek};
         let path = self.root_path.join(key);
         let mut file = fs::File::open(&path).map_err(crate::error::DBCenterError::IoError)?;
-        file.seek(std::io::SeekFrom::Start(start)).map_err(crate::error::DBCenterError::IoError)?;
+        file.seek(std::io::SeekFrom::Start(start))
+            .map_err(crate::error::DBCenterError::IoError)?;
         let mut buffer = vec![0u8; length as usize];
-        file.read_exact(&mut buffer).map_err(crate::error::DBCenterError::IoError)?;
+        file.read_exact(&mut buffer)
+            .map_err(crate::error::DBCenterError::IoError)?;
         Ok(buffer)
     }
 
@@ -113,7 +116,8 @@ impl StorageAdapter for LocalStorageAdapter {
             expires_at: now + ttl_ms,
             worker_id: worker_id.to_string(),
         };
-        let json_content = serde_json::to_string(&new_lock).map_err(crate::error::DBCenterError::SerializationError)?;
+        let json_content = serde_json::to_string(&new_lock)
+            .map_err(crate::error::DBCenterError::SerializationError)?;
 
         // 2. Ensure parent structure
         if let Some(parent) = path.parent() {
@@ -129,7 +133,7 @@ impl StorageAdapter for LocalStorageAdapter {
         match open_result {
             Ok(_) => {
                 // created successfully, now write content
-                // Note: file is open, but create_new doesn't write content. 
+                // Note: file is open, but create_new doesn't write content.
                 // We should technically use the file handle, but fs::write is easier and robust enough here since we own it.
                 // Or better: write to the handle.
                 fs::write(&path, json_content).map_err(crate::error::DBCenterError::IoError)?;
@@ -140,60 +144,76 @@ impl StorageAdapter for LocalStorageAdapter {
                 // File exists. Check validity/expiry.
                 match fs::read_to_string(&path) {
                     Ok(content) => {
-                         match serde_json::from_str::<LockFile>(&content) {
+                        match serde_json::from_str::<LockFile>(&content) {
                             Ok(existing_lock) => {
                                 if existing_lock.expires_at > now {
                                     // Valid lock exists.
                                     // logging::debug!("Lock collision: {} held by {} until {}", key, existing_lock.worker_id, existing_lock.expires_at);
-                                    return Ok(false);
+                                    Ok(false)
                                 } else {
                                     // Expired. Recover.
-                                    tracing::warn!("Recovering stale lock: {} (expired at {})", key, existing_lock.expires_at);
+                                    tracing::warn!(
+                                        "Recovering stale lock: {} (expired at {})",
+                                        key,
+                                        existing_lock.expires_at
+                                    );
                                     // Overwrite
-                                    fs::write(&path, json_content).map_err(crate::error::DBCenterError::IoError)?;
-                                    return Ok(true);
+                                    fs::write(&path, json_content)
+                                        .map_err(crate::error::DBCenterError::IoError)?;
+                                    Ok(true)
                                 }
-                            },
+                            }
                             Err(e) => {
                                 // Corrupt JSON. Recover/Overwrite.
-                                tracing::error!("Lock file {} corrupted (json error: {}). Overwriting.", key, e);
-                                fs::write(&path, json_content).map_err(crate::error::DBCenterError::IoError)?;
-                                return Ok(true);
+                                tracing::error!(
+                                    "Lock file {} corrupted (json error: {}). Overwriting.",
+                                    key,
+                                    e
+                                );
+                                fs::write(&path, json_content)
+                                    .map_err(crate::error::DBCenterError::IoError)?;
+                                Ok(true)
                             }
-                         }
-                    },
+                        }
+                    }
                     Err(read_err) => {
-                        // Could not read (maybe partial write or permission?). 
-                        // If we can't read it to verify, we assume it's valid to be safe? 
-                        // Or we assume it's broken? 
-                        // "Dumb Storage" philosophy: If we can't verify it, we back off? 
+                        // Could not read (maybe partial write or permission?).
+                        // If we can't read it to verify, we assume it's valid to be safe?
+                        // Or we assume it's broken?
+                        // "Dumb Storage" philosophy: If we can't verify it, we back off?
                         // But if it's a transient IO error, backing off is good.
                         tracing::error!("Failed to read existing lock file {}: {}", key, read_err);
-                        return Ok(false); 
+                        Ok(false)
                     }
                 }
-            },
+            }
             Err(e) => {
-                 // Other IO error
-                 tracing::error!("IO Error trying to create lock {}: {}", key, e);
-                 Err(crate::error::DBCenterError::IoError(e))
+                // Other IO error
+                tracing::error!("IO Error trying to create lock {}: {}", key, e);
+                Err(crate::error::DBCenterError::IoError(e))
             }
         }
     }
 
     fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool> {
         let path = self.root_path.join(key);
-        if !path.exists() { return Ok(false); }
+        if !path.exists() {
+            return Ok(false);
+        }
 
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(lock) = serde_json::from_str::<LockFile>(&content) {
                 if lock.worker_id == worker_id {
-                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
                     let new_lock = LockFile {
                         expires_at: now + ttl_ms,
                         worker_id: worker_id.to_string(),
                     };
-                    let json = serde_json::to_string(&new_lock).map_err(crate::error::DBCenterError::SerializationError)?;
+                    let json = serde_json::to_string(&new_lock)
+                        .map_err(crate::error::DBCenterError::SerializationError)?;
                     fs::write(&path, json).map_err(crate::error::DBCenterError::IoError)?;
                     return Ok(true);
                 }
@@ -204,14 +224,16 @@ impl StorageAdapter for LocalStorageAdapter {
 
     fn unlock(&self, key: &str, worker_id: &str) -> Result<()> {
         let path = self.root_path.join(key);
-        if !path.exists() { return Ok(()); }
+        if !path.exists() {
+            return Ok(());
+        }
 
         // Only delete if we own it
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(lock) = serde_json::from_str::<LockFile>(&content) {
-                 if lock.worker_id == worker_id {
-                     fs::remove_file(&path).map_err(crate::error::DBCenterError::IoError)?;
-                 }
+                if lock.worker_id == worker_id {
+                    fs::remove_file(&path).map_err(crate::error::DBCenterError::IoError)?;
+                }
             }
         }
         Ok(())

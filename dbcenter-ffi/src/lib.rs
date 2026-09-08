@@ -1,13 +1,13 @@
 use dbcenter_core::DBCenter;
 use libc::{c_char, c_void};
+use serde_json;
 use std::ffi::{CStr, CString};
-use std::sync::Arc;
-use std::ptr;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::ptr;
+use std::sync::Arc;
 use std::sync::OnceLock;
-use std::fs;
-use serde_json;
 
 #[cfg(target_os = "windows")]
 const WATCHER_BASENAME: &str = "dbcenter-watcher.exe";
@@ -80,9 +80,9 @@ fn resolve_watcher_path() -> Result<std::path::PathBuf, String> {
     // 1. Check environment variable first
     if let Ok(path) = std::env::var("DBCENTER_WATCHER_PATH") {
         let pb = std::path::PathBuf::from(&path);
-        if pb.exists() { 
+        if pb.exists() {
             eprintln!("[DBCenter-FFI] Found watcher via env var: {:?}", pb);
-            return Ok(pb); 
+            return Ok(pb);
         }
     }
 
@@ -91,7 +91,10 @@ fn resolve_watcher_path() -> Result<std::path::PathBuf, String> {
         if let Some(parent) = current_exe.parent() {
             let candidate = parent.join(WATCHER_BASENAME);
             if candidate.exists() {
-                eprintln!("[DBCenter-FFI] Found watcher next to executable: {:?}", candidate);
+                eprintln!(
+                    "[DBCenter-FFI] Found watcher next to executable: {:?}",
+                    candidate
+                );
                 return Ok(candidate);
             }
         }
@@ -115,29 +118,30 @@ fn spawn_watcher(
     persist: bool,
     service: bool,
     instance_id: &str,
-    postgres_pid: Option<u32>
+    postgres_pid: Option<u32>,
 ) -> Result<std::process::Child, String> {
-    
     let watcher_path = resolve_watcher_path()?;
-    
+
     let mut cmd = std::process::Command::new(&watcher_path);
     cmd.stdin(std::process::Stdio::piped())
-       .stdout(std::process::Stdio::null());
-       
+        .stdout(std::process::Stdio::null());
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         // CREATE_NO_WINDOW
         cmd.creation_flags(0x08000000);
-        cmd.stderr(std::process::Stdio::inherit()); 
+        cmd.stderr(std::process::Stdio::inherit());
     }
     #[cfg(not(windows))]
     {
         cmd.stderr(std::process::Stdio::null()); // Silence stderr too unless debug
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn watcher at {:?}: {}", watcher_path, e))?;
-    
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn watcher at {:?}: {}", watcher_path, e))?;
+
     let config_json = serde_json::json!({
         "data_dir": data_dir,
         "persist": persist,
@@ -145,41 +149,35 @@ fn spawn_watcher(
         "postgres_pid": postgres_pid,
         "instance_id": instance_id,
     });
-    
+
     if let Some(mut stdin) = child.stdin.take() {
         writeln!(stdin, "{}", config_json.to_string()).map_err(|e| e.to_string())?;
         stdin.flush().map_err(|e| e.to_string())?;
         // Restore stdin to keep pipe open
-        child.stdin = Some(stdin); 
+        child.stdin = Some(stdin);
     }
-    
+
     Ok(child)
 }
 
 /// Create a new DBCenter instance.
-/// 
+///
 /// # Arguments
 /// * `path` - Path to database directory (nullable for default)
 /// * `persist` - 1 for persistent, 0 for volatile
-/// 
+///
 /// # Returns
 /// CDBCenterResult with ptr to CDBCenter instance or error message.
 #[no_mangle]
-pub extern "C" fn dbcenter_new(
-    path: *const c_char,
-    persist: u8,
-) -> CDBCenterResult {
+pub extern "C" fn dbcenter_new(path: *const c_char, persist: u8) -> CDBCenterResult {
     let path_str = unsafe { c_str_to_opt_string(path) };
     let is_persist = persist != 0;
     let is_service = false; // FFI currently only supports standard mode
 
     let result = DBCenter::new(
-            path_str,
-            is_persist,
-            is_service, 
-            None, None, None, None, // other options
-            false // multi_user_sync_mode
-        );
+        path_str, is_persist, is_service, None, None, None, None,  // other options
+        false, // multi_user_sync_mode
+    );
 
     match result {
         Ok(db) => {
@@ -189,13 +187,16 @@ pub extern "C" fn dbcenter_new(
                 is_persist,
                 is_service,
                 db.instance_id(),
-                db.postgres_pid()
+                db.postgres_pid(),
             ) {
                 Ok(child) => Some(child),
                 Err(e) => {
-                     // Log error but continue? Or fail?
-                     // Let's fail safety first
-                     return CDBCenterResult { ptr: ptr::null_mut(), error: CString::new(e).unwrap().into_raw() };
+                    // Log error but continue? Or fail?
+                    // Let's fail safety first
+                    return CDBCenterResult {
+                        ptr: ptr::null_mut(),
+                        error: CString::new(e).unwrap().into_raw(),
+                    };
                 }
             };
 
@@ -208,12 +209,10 @@ pub extern "C" fn dbcenter_new(
                 error: ptr::null_mut(),
             }
         }
-        Err(e) => {
-             CDBCenterResult {
-                ptr: ptr::null_mut(),
-                error: CString::new(e.to_string()).unwrap().into_raw(),
-            }
-        }
+        Err(e) => CDBCenterResult {
+            ptr: ptr::null_mut(),
+            error: CString::new(e.to_string()).unwrap().into_raw(),
+        },
     }
 }
 
@@ -244,15 +243,15 @@ pub extern "C" fn dbcenter_shutdown(ptr: *mut CDBCenter) -> *mut c_char {
     if ptr.is_null() {
         return CString::new("Null pointer").unwrap().into_raw();
     }
-    
+
     let db = unsafe { &mut (*ptr) };
-    
+
     // Explicit shutdown: notify watcher "SUCCESS" to stop it gracefully without wiping if persist=true?
     // Actually, watcher logic: if stdin closes (EOF) or reads "SUCCESS", it cleans up.
     // If we call inner.shutdown(), we do cleanup ourselves.
     // We should coordinate with watcher.
     // If we want to manually shutdown, we should tell watcher to exit.
-    
+
     // Send "SUCCESS" to watcher
     if let Some(mut child) = db.watcher.take() {
         if let Some(mut stdin) = child.stdin.take() {
@@ -262,10 +261,10 @@ pub extern "C" fn dbcenter_shutdown(ptr: *mut CDBCenter) -> *mut c_char {
         }
         let _ = child.wait();
     }
-    
+
     match db.inner.shutdown() {
         Ok(_) => ptr::null_mut(),
-        Err(e) => CString::new(e.to_string()).unwrap().into_raw()
+        Err(e) => CString::new(e.to_string()).unwrap().into_raw(),
     }
 }
 
@@ -273,12 +272,12 @@ pub extern "C" fn dbcenter_shutdown(ptr: *mut CDBCenter) -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn dbcenter_install_extension(
     ptr: *mut CDBCenter,
-    name: *const c_char
+    name: *const c_char,
 ) -> *mut c_char {
     if ptr.is_null() {
         return CString::new("Null pointer").unwrap().into_raw();
     }
-    
+
     let db = unsafe { &(*ptr) };
     let name_str = match unsafe { c_str_to_str(name) } {
         Ok(s) => s,
@@ -287,13 +286,13 @@ pub extern "C" fn dbcenter_install_extension(
 
     match db.inner.install_extension(name_str) {
         Ok(_) => ptr::null_mut(),
-        Err(e) => CString::new(e.to_string()).unwrap().into_raw()
+        Err(e) => CString::new(e.to_string()).unwrap().into_raw(),
     }
 }
 
 // Opaque VectorStore pointer
 pub struct CVectorStore {
-    // VectorStore holds a reference to DBCenter. 
+    // VectorStore holds a reference to DBCenter.
     // This is tricky in C because of lifetimes.
     // For FFI, we often treat VectorStore as "owning" or check validity at runtime,
     // or simply unsafe semantics that C user must keep DB alive.
@@ -302,31 +301,31 @@ pub struct CVectorStore {
     // we change VectorStore to use Arc<DBCenter> internally in Core (refactor) OR
     // we use unsafe transmute to extend lifetime, putting onus on C user.
     // safest: store Arc<DBCenter> and params, creates VectorStore ephemeral? No, heavyweight.
-    
-    // Actually, Core `VectorStore` holds `&'a DBCenter`. 
+
+    // Actually, Core `VectorStore` holds `&'a DBCenter`.
     // For FFI, we can box `VectorStore<'static>` by cheating lifetimes if we ensure
     // DB outlives Store.
-    // A simpler way for FFI wrapper: CDBCenter owns the DB. CVectorStore can hold a 
+    // A simpler way for FFI wrapper: CDBCenter owns the DB. CVectorStore can hold a
     // raw pointer to CDBCenter and we ensure via documentation.
     store: dbcenter_core::vector_store::VectorStore<'static>,
     // We keep a strong reference to parent to prevent deallocation while store exists?
-    _parent: Arc<DBCenter>, 
+    _parent: Arc<DBCenter>,
     dimension: usize,
 }
 
 #[repr(C)]
 pub struct CVectorStoreResult {
-    ptr: *mut c_void,   
-    error: *mut c_char, 
+    ptr: *mut c_void,
+    error: *mut c_char,
 }
 
 #[repr(C)]
 pub struct CQueryResult {
-    ids: *mut *mut c_char,       // Array of strings
+    ids: *mut *mut c_char, // Array of strings
     num_results: usize,
-    distances: *mut f64,         // Array of doubles
+    distances: *mut f64, // Array of doubles
     // skipping metadata for basic C API for now or returning complex JSON string
-    metadatas_json: *mut *mut c_char, 
+    metadatas_json: *mut *mut c_char,
     error: *mut c_char,
 }
 
@@ -335,16 +334,24 @@ pub struct CQueryResult {
 pub extern "C" fn dbcenter_get_vector_store(
     ptr: *mut CDBCenter,
     name: *const c_char,
-    dimension: usize
+    dimension: usize,
 ) -> CVectorStoreResult {
     if ptr.is_null() {
-         return CVectorStoreResult { ptr: ptr::null_mut(), error: CString::new("Null pointer").unwrap().into_raw() };
+        return CVectorStoreResult {
+            ptr: ptr::null_mut(),
+            error: CString::new("Null pointer").unwrap().into_raw(),
+        };
     }
-    
+
     let db = unsafe { &(*ptr) };
     let name_str = match unsafe { c_str_to_str(name) } {
         Ok(s) => s,
-        Err(e) => return CVectorStoreResult { ptr: ptr::null_mut(), error: CString::new(e).unwrap().into_raw() },
+        Err(e) => {
+            return CVectorStoreResult {
+                ptr: ptr::null_mut(),
+                error: CString::new(e).unwrap().into_raw(),
+            }
+        }
     };
 
     // We must extend the lifetime. This IS unsafe. The C user must not free CDBCenter
@@ -358,9 +365,15 @@ pub extern "C" fn dbcenter_get_vector_store(
                 _parent: db.inner.clone(), // Keep DB alive at least
                 dimension,
             });
-            CVectorStoreResult { ptr: Box::into_raw(container) as *mut c_void, error: ptr::null_mut() }
+            CVectorStoreResult {
+                ptr: Box::into_raw(container) as *mut c_void,
+                error: ptr::null_mut(),
+            }
         }
-        Err(e) => CVectorStoreResult { ptr: ptr::null_mut(), error: CString::new(e.to_string()).unwrap().into_raw() }
+        Err(e) => CVectorStoreResult {
+            ptr: ptr::null_mut(),
+            error: CString::new(e.to_string()).unwrap().into_raw(),
+        },
     }
 }
 
@@ -368,7 +381,9 @@ pub extern "C" fn dbcenter_get_vector_store(
 #[no_mangle]
 pub extern "C" fn dbcenter_vector_store_free(ptr: *mut CVectorStore) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
@@ -381,11 +396,13 @@ pub extern "C" fn dbcenter_vector_store_add(
     ptr: *mut CVectorStore,
     ids: *const *const c_char,
     embeddings: *const f32, // Flat array
-    count: usize
+    count: usize,
 ) -> *mut c_char {
-    if ptr.is_null() { return CString::new("Null pointer").unwrap().into_raw(); }
+    if ptr.is_null() {
+        return CString::new("Null pointer").unwrap().into_raw();
+    }
     let container = unsafe { &(*ptr) };
-    
+
     // Convert IDs
     let mut id_vec = Vec::with_capacity(count);
     for i in 0..count {
@@ -397,13 +414,13 @@ pub extern "C" fn dbcenter_vector_store_add(
     }
 
     // Convert Embeddings (copy from flat array)
-    let dim = container.dimension; // Need to expose dimension in core or save it? 
-    // Core VectorStore doesn't expose dimension as pub field? checking outline... 
-    // It is not pub. We passed it in, we should save it in CVectorStore wrapper struct.
-    // Wait, let's peek standard implementation - usually dimension is immutable.
-    // We can assume the passed dimension in creation matches? 
-    // Actually, we can read the raw pointer with stride.
-    
+    let dim = container.dimension; // Need to expose dimension in core or save it?
+                                   // Core VectorStore doesn't expose dimension as pub field? checking outline...
+                                   // It is not pub. We passed it in, we should save it in CVectorStore wrapper struct.
+                                   // Wait, let's peek standard implementation - usually dimension is immutable.
+                                   // We can assume the passed dimension in creation matches?
+                                   // Actually, we can read the raw pointer with stride.
+
     let mut embed_vec = Vec::with_capacity(count);
     for i in 0..count {
         let start = i * dim;
@@ -416,9 +433,9 @@ pub extern "C" fn dbcenter_vector_store_add(
     // Let's verify if DBCenter functions are async.
     // Looking at lib.rs: `pub fn collection` returns Collection. `VectorStore::new` is Sync.
     // Core uses `tokio-postgres` which IS async, effectively hidden behind `block_on` in Core methods?
-    // Wait, Core `VectorStore::add` gets a client. `get_client` returns `MutexGuard<Client>`. 
+    // Wait, Core `VectorStore::add` gets a client. `get_client` returns `MutexGuard<Client>`.
     // Are the calls on Client async? `client.query`... in tokio-postgres, it is async.
-    // But `postgres` crate is synchronous wrapper? 
+    // But `postgres` crate is synchronous wrapper?
     // The dependencies list "tokio-postgres" AND "postgres".
     // If Core uses `postgres` (sync) crate, then no runtime needed.
     // If Core uses `tokio-postgres`, we need runtime.
@@ -429,39 +446,39 @@ pub extern "C" fn dbcenter_vector_store_add(
     // If Core methods are sync wrappers around async (using internal runtime? no, usually bad practice).
     // Or if Core exposes ASYNC methods.
     // Let's re-verify Core API for async-ness.
-    
+
     // Assuming sync for now or we wrap in runtime entry.
-    // Wait, `dbcenter_new` creates a runtime. But it drops it? 
+    // Wait, `dbcenter_new` creates a runtime. But it drops it?
     // No, `CDBCenter` stores the `Runtime`. So we can use it!
-    
+
     // We need access to the runtime used by the DB.
     // CVectorStore should access `container._parent` but that's just the DB Arc.
-    // We need the runtime from CDBCenter? 
-    // Or does DBCenter manage its own threadpool? 
+    // We need the runtime from CDBCenter?
+    // Or does DBCenter manage its own threadpool?
     // The FFI `CDBCenter` struct holds the `Runtime`.
     // But `CVectorStore` holds the `VectorStore` struct.
     // `VectorStore` holds `&DBCenter`.
-    
+
     // Problem: `CVectorStore` doesn't have access to the `Runtime` stored in `CDBCenter`.
     // We should pass the runtime ref to CVectorStore or make Runtime global/static?
     // Making runtime static is easiest for FFI.
-    
+
     // For this step, I'll attempt to call `add`. If it's async, I need `block_on`.
     // If I don't have the runtime handle, I can't `block_on`.
     // I will modify `dbcenter_new` to use a helper or global runtime if needed?
     // Or I'll wrap `store.add()` in a temporary `Runtime::new().unwrap().block_on()`?
     // Creating runtimes per call is expensive but safe for FFI simple calls.
     // Or, since `CDBCenter` holds runtime, maybe standard calls go through CDBCenter?
-    
+
     // Assuming `vector_store.add` is synchronous (blocking) based on signature `-> Result<()>`.
     // If it were async it would be `async fn` or return `Future`.
     // The outline showed `pub fn add(...) -> Result<()>`.
     // This implies it IS blocking (synchronous).
     // So I can just call it!
-    
+
     match container.store.add(&id_vec, &embed_vec, None) {
         Ok(_) => ptr::null_mut(),
-        Err(e) => CString::new(e.to_string()).unwrap().into_raw()
+        Err(e) => CString::new(e.to_string()).unwrap().into_raw(),
     }
 }
 
@@ -471,18 +488,21 @@ pub extern "C" fn dbcenter_vector_store_add(
 pub extern "C" fn dbcenter_vector_store_query(
     ptr: *mut CVectorStore,
     query_embeddings: *const f32, // Flat array
-    n_results: i64
+    n_results: i64,
 ) -> CQueryResult {
     if ptr.is_null() {
         return CQueryResult {
-             ids: ptr::null_mut(), num_results: 0, distances: ptr::null_mut(), metadatas_json: ptr::null_mut(),
-             error: CString::new("Null pointer").unwrap().into_raw() 
+            ids: ptr::null_mut(),
+            num_results: 0,
+            distances: ptr::null_mut(),
+            metadatas_json: ptr::null_mut(),
+            error: CString::new("Null pointer").unwrap().into_raw(),
         };
     }
-    
+
     let container = unsafe { &(*ptr) };
     let dim = container.dimension;
-    
+
     // Support 1 query vector for simplicity in C API v1
     let slice = unsafe { std::slice::from_raw_parts(query_embeddings, dim) };
     let query_vecs = vec![slice.to_vec()];
@@ -490,7 +510,7 @@ pub extern "C" fn dbcenter_vector_store_query(
     match container.store.query(&query_vecs, n_results, None) {
         Ok(results) => {
             let count = results.len();
-            
+
             // Allocate C arrays (pointers to strings, doubles, etc.)
             let mut ids_ptrs = Vec::with_capacity(count);
             let mut dists = Vec::with_capacity(count);
@@ -499,17 +519,17 @@ pub extern "C" fn dbcenter_vector_store_query(
             for res in results {
                 let id_str = res["id"].as_str().unwrap_or("").to_string();
                 let dist = res["distance"].as_f64().unwrap_or(0.0);
-                let meta = res["metadata"].to_string(); 
+                let meta = res["metadata"].to_string();
 
                 ids_ptrs.push(CString::new(id_str).unwrap().into_raw());
                 dists.push(dist);
                 meta_ptrs.push(CString::new(meta).unwrap().into_raw());
             }
-            
+
             // Leak vectors to C
             let ids_array = ids_ptrs.into_boxed_slice();
             let ids_final = ids_array.as_ptr() as *mut *mut c_char;
-            std::mem::forget(ids_array); 
+            std::mem::forget(ids_array);
 
             let dists_array = dists.into_boxed_slice();
             let dists_final = dists_array.as_ptr() as *mut f64;
@@ -524,15 +544,16 @@ pub extern "C" fn dbcenter_vector_store_query(
                 num_results: count,
                 distances: dists_final,
                 metadatas_json: meta_final,
-                error: ptr::null_mut()
+                error: ptr::null_mut(),
             }
         }
-        Err(e) => {
-             CQueryResult {
-                ids: ptr::null_mut(), num_results: 0, distances: ptr::null_mut(), metadatas_json: ptr::null_mut(),
-                error: CString::new(e.to_string()).unwrap().into_raw()
-            }
-        }
+        Err(e) => CQueryResult {
+            ids: ptr::null_mut(),
+            num_results: 0,
+            distances: ptr::null_mut(),
+            metadatas_json: ptr::null_mut(),
+            error: CString::new(e.to_string()).unwrap().into_raw(),
+        },
     }
 }
 
@@ -540,9 +561,11 @@ pub extern "C" fn dbcenter_vector_store_query(
 #[no_mangle]
 pub extern "C" fn dbcenter_free_query_result(res: CQueryResult) {
     if !res.error.is_null() {
-        unsafe { let _ = CString::from_raw(res.error); }
+        unsafe {
+            let _ = CString::from_raw(res.error);
+        }
     }
-    
+
     if res.num_results > 0 {
         unsafe {
             if !res.ids.is_null() {
@@ -550,17 +573,17 @@ pub extern "C" fn dbcenter_free_query_result(res: CQueryResult) {
                 for &mut s in slice {
                     let _ = CString::from_raw(s);
                 }
-                let _ = Box::from_raw(res.ids); 
+                let _ = Box::from_raw(res.ids);
             }
-            
+
             if !res.metadatas_json.is_null() {
                 let slice = std::slice::from_raw_parts_mut(res.metadatas_json, res.num_results);
                 for &mut s in slice {
                     let _ = CString::from_raw(s);
                 }
-                 let _ = Box::from_raw(res.metadatas_json);
+                let _ = Box::from_raw(res.metadatas_json);
             }
-            
+
             if !res.distances.is_null() {
                 let _ = Box::from_raw(res.distances);
             }
@@ -590,49 +613,58 @@ pub struct CCollection {
 
 #[repr(C)]
 pub struct CCollectionResult {
-    ptr: *mut c_void,   
-    error: *mut c_char, 
+    ptr: *mut c_void,
+    error: *mut c_char,
 }
 
 /// Get a Collection instance.
 #[no_mangle]
 pub extern "C" fn dbcenter_get_collection(
     ptr: *mut CDBCenter,
-    name: *const c_char
+    name: *const c_char,
 ) -> CCollectionResult {
     if ptr.is_null() {
-         return CCollectionResult { ptr: ptr::null_mut(), error: CString::new("Null pointer").unwrap().into_raw() };
+        return CCollectionResult {
+            ptr: ptr::null_mut(),
+            error: CString::new("Null pointer").unwrap().into_raw(),
+        };
     }
-    
+
     let db = unsafe { &(*ptr) };
     let name_str = match unsafe { c_str_to_str(name) } {
         Ok(s) => s,
-        Err(e) => return CCollectionResult { ptr: ptr::null_mut(), error: CString::new(e).unwrap().into_raw() },
+        Err(e) => {
+            return CCollectionResult {
+                ptr: ptr::null_mut(),
+                error: CString::new(e).unwrap().into_raw(),
+            }
+        }
     };
 
     // We must extend the lifetime. This IS unsafe. The C user must not free CDBCenter
     // while using CCollection unless we keep a ref. We keep a ref in _parent.
     let db_ref: &'static DBCenter = unsafe { std::mem::transmute(db.inner.as_ref()) };
-    
+
     let collection = db_ref.collection(name_str);
-    
+
     let container = Box::new(CCollection {
         inner: collection,
         _parent: db.inner.clone(),
     });
 
-    CCollectionResult { 
-        ptr: Box::into_raw(container) as *mut c_void, 
-        error: ptr::null_mut() 
+    CCollectionResult {
+        ptr: Box::into_raw(container) as *mut c_void,
+        error: ptr::null_mut(),
     }
 }
-
 
 /// Free Collection
 #[no_mangle]
 pub extern "C" fn dbcenter_collection_free(ptr: *mut CCollection) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
@@ -640,11 +672,13 @@ pub extern "C" fn dbcenter_collection_free(ptr: *mut CCollection) {
 #[no_mangle]
 pub extern "C" fn dbcenter_collection_insert_one(
     ptr: *mut CCollection,
-    json_doc: *const c_char
+    json_doc: *const c_char,
 ) -> *mut c_char {
-    if ptr.is_null() { return CString::new("Null pointer").unwrap().into_raw(); }
+    if ptr.is_null() {
+        return CString::new("Null pointer").unwrap().into_raw();
+    }
     let coll = unsafe { &(*ptr) };
-    
+
     let json_str = match unsafe { c_str_to_str(json_doc) } {
         Ok(s) => s,
         Err(e) => return CString::new(e).unwrap().into_raw(),
@@ -652,12 +686,16 @@ pub extern "C" fn dbcenter_collection_insert_one(
 
     let value: serde_json::Value = match serde_json::from_str(json_str) {
         Ok(v) => v,
-        Err(e) => return CString::new(format!("Invalid JSON: {}", e)).unwrap().into_raw(),
+        Err(e) => {
+            return CString::new(format!("Invalid JSON: {}", e))
+                .unwrap()
+                .into_raw()
+        }
     };
 
     match coll.inner.insert_one(&value) {
         Ok(_) => ptr::null_mut(), // Success, returns ID usually but for simplicity C API returns NULL on success
-        Err(e) => CString::new(e.to_string()).unwrap().into_raw()
+        Err(e) => CString::new(e.to_string()).unwrap().into_raw(),
     }
 }
 #[repr(C)]
@@ -668,34 +706,44 @@ pub struct CJsonResult {
 
 /// Execute a raw SQL query and return results as JSON.
 #[no_mangle]
-pub extern "C" fn dbcenter_sql_query(
-    ptr: *mut CDBCenter,
-    sql: *const c_char,
-) -> CJsonResult {
+pub extern "C" fn dbcenter_sql_query(ptr: *mut CDBCenter, sql: *const c_char) -> CJsonResult {
     if ptr.is_null() {
-         return CJsonResult { json: ptr::null_mut(), error: CString::new("Null pointer").unwrap().into_raw() };
+        return CJsonResult {
+            json: ptr::null_mut(),
+            error: CString::new("Null pointer").unwrap().into_raw(),
+        };
     }
-    
+
     let db = unsafe { &(*ptr) };
     let sql_str = match unsafe { c_str_to_str(sql) } {
         Ok(s) => s,
-        Err(e) => return CJsonResult { json: ptr::null_mut(), error: CString::new(e).unwrap().into_raw() },
+        Err(e) => {
+            return CJsonResult {
+                json: ptr::null_mut(),
+                error: CString::new(e).unwrap().into_raw(),
+            }
+        }
     };
 
     match db.inner.query(sql_str, &[]) {
         Ok(rows) => {
-             // rows is Vec<serde_json::Value>
-             match serde_json::to_string(&rows) {
-                 Ok(json_str) => CJsonResult { 
-                    json: CString::new(json_str).unwrap().into_raw(), 
-                    error: ptr::null_mut() 
-                 },
-                 Err(e) => CJsonResult { 
-                    json: ptr::null_mut(), 
-                    error: CString::new(format!("Serialization error: {}", e)).unwrap().into_raw() 
-                 }
-             }
+            // rows is Vec<serde_json::Value>
+            match serde_json::to_string(&rows) {
+                Ok(json_str) => CJsonResult {
+                    json: CString::new(json_str).unwrap().into_raw(),
+                    error: ptr::null_mut(),
+                },
+                Err(e) => CJsonResult {
+                    json: ptr::null_mut(),
+                    error: CString::new(format!("Serialization error: {}", e))
+                        .unwrap()
+                        .into_raw(),
+                },
+            }
+        }
+        Err(e) => CJsonResult {
+            json: ptr::null_mut(),
+            error: CString::new(e.to_string()).unwrap().into_raw(),
         },
-        Err(e) => CJsonResult { json: ptr::null_mut(), error: CString::new(e.to_string()).unwrap().into_raw() },
     }
 }

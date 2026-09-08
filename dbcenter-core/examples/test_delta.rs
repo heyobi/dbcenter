@@ -9,8 +9,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let test_dir = "./delta_test_db";
     // Ensure standard cleanup
-    let _ = DBCenter::force_shutdown(test_dir); 
-    
+    let _ = DBCenter::force_shutdown(test_dir);
+
     if std::path::Path::new(test_dir).exists() {
         // Retry loop for windows file locking
         for _ in 0..5 {
@@ -34,18 +34,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 2. Create a collection "products"
     // This should trigger DeltaManager to create products_base, products_adds, products_dels
     let collection = db.collection("products");
-    
-    // We insert a document to ensure the table creation logic has definitely run 
+
+    // We insert a document to ensure the table creation logic has definitely run
     // (though new() calls ensure_table, so it should be there)
-    
+
     // 3. Verify Physical Tables Existence
     let tables = db.list_collections()?;
     println!("Physical tables found: {:?}", tables);
-    
-    assert!(tables.contains(&"products_base".to_string()), "products_base missing");
-    assert!(tables.contains(&"products_adds".to_string()), "products_adds missing");
-    assert!(tables.contains(&"products_dels".to_string()), "products_dels missing");
-    
+
+    assert!(
+        tables.contains(&"products_base".to_string()),
+        "products_base missing"
+    );
+    assert!(
+        tables.contains(&"products_adds".to_string()),
+        "products_adds missing"
+    );
+    assert!(
+        tables.contains(&"products_dels".to_string()),
+        "products_dels missing"
+    );
+
     // "products" should NOT be in tables list because list_collections only shows pg_tables (physicals)
     // but we can query it to prove it exists as a View.
 
@@ -66,14 +75,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let items = collection.find(None)?;
     println!("Items in View: {:?}", items);
     assert_eq!(items.len(), 2);
-    
+
     // Verify physical placement
     // Data should be in products_adds
     // Use raw query to avoid triggering 'ensure_table' -> 'ensure_delta_tables' on the adds table itself
     let sql_adds = "SELECT data FROM products_adds";
     let adds_rows = db.query(sql_adds, &[])?;
     println!("Rows in x_adds: {:?}", adds_rows);
-    
+
     // Check if any row has name=Laptop. Note: db.query returns rows where columns are fields.
     // 'data' column is a JSONB value.
     let has_laptop = adds_rows.iter().any(|row| {
@@ -101,11 +110,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Verify Physicals for Update
     // Laptop was in x_adds. Replacing it in x_adds.
     // Trigger logic: DELETE from x_adds WHERE id=OLD.id; INSERT INTO x_dels ...; INSERT INTO x_adds ...
-    // So x_dels should contain the ID of the Laptop. (Because we hide the "old" version which was in adds? 
+    // So x_dels should contain the ID of the Laptop. (Because we hide the "old" version which was in adds?
     // Actually, if it was in adds, it wasn't in base. But the trigger is generic. It hides whatever ID provided.)
     // So `dels_coll.find` will fail because it does `SELECT id, data ...`.
     // We must use raw SQL to check `products_dels`.
-    
+
     let dels_res = db.query("SELECT id FROM products_dels", &[])?;
     println!("Content of x_dels: {:?}", dels_res);
     // id1 should be in dels (because update trigger adds it there)
@@ -121,7 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let items_final = collection.find(None)?;
     assert_eq!(items_final.len(), 1); // Only Laptop remains
     assert!(items_final.iter().any(|i| i["name"] == "Laptop"));
-    
+
     // Verify x_dels
     let dels_res_2 = db.query("SELECT id FROM products_dels", &[])?;
     println!("Content of x_dels after delete: {:?}", dels_res_2);
@@ -133,6 +142,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Clean up
     db.shutdown()?;
-    
+
     Ok(())
 }

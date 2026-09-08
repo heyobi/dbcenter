@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # The embedded PostgreSQL distribution is downloaded from Maven Central on
+      # first use and cached under ~/.dbcenter, so cache it alongside cargo.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.dbcenter
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      # Every crate in the workspace must keep compiling. The Java and Node
+      # bindings drifted out of sync with DBCenter::new once already because
+      # nothing built them.
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy -p dbcenter-core -p dbcenter-serve -- -D warnings
+
+      # Integration tests boot a real embedded PostgreSQL, so keep them serial.
+      - name: Test
+        run: cargo test -p dbcenter-core -p dbcenter-serve -- --test-threads=1
+
+      # The S3 adapter's tests skip themselves without an endpoint, which would
+      # quietly mean they never run. Give them one.
+      - name: Object storage
+        if: runner.os == 'Linux'
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=dbcenter -e MINIO_ROOT_PASSWORD=dbcenter123 \
+            minio/minio:latest server /data
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && break
+            sleep 2
+          done
+          docker exec minio mc alias set local http://127.0.0.1:9000 dbcenter dbcenter123
+          docker exec minio mc mb local/dbcenter-test
+
+      - name: Test object storage
+        if: runner.os == 'Linux'
+        env:
+          DBCENTER_S3_TEST_ENDPOINT: http://127.0.0.1:9000
+          DBCENTER_S3_TEST_BUCKET: dbcenter-test
+          DBCENTER_S3_TEST_KEY: dbcenter
+          DBCENTER_S3_TEST_SECRET: dbcenter123
+        run: cargo test -p dbcenter-core --test s3_storage
+
+      - name: Container image
+        if: runner.os == 'Linux'
+        run: docker build -t dbcenter:ci .

@@ -34,6 +34,10 @@ chrono.workspace = true
 lru = "0.12"
 sys-info = "0.9"
 urlencoding = "2"
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+quick-xml.workspace = true
 
 [lib]
 name = "dbcenter_core"

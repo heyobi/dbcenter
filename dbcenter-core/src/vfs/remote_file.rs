@@ -1,11 +1,11 @@
 use crate::storage::StorageAdapter;
 use bytes::Bytes;
+use lru::LruCache;
 use parquet::file::reader::{ChunkReader, Length};
 use std::io::Read;
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
-use lru::LruCache;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// RemoteFile that implements ChunkReader with LRU Caching and Metadata Persistence.
 pub struct RemoteFile {
@@ -39,23 +39,21 @@ impl RemoteFile {
         if let Some(path) = &self.metadata_cache_path {
             // Heuristic: If we are reading the END of the file, it's likely metadata.
             // Parquet footer is at the end.
-            if start + length as u64 == self.length {
-                if path.exists() {
-                     // Check file size match? Or just try read.
-                     // The .meta file should contain the Footer bytes.
-                     // But we don't know if .meta is exactly 'length' bytes or full footer.
-                     // For simplicity: If .meta exists, read it ALL and see if it covers the request?
-                     // Or just read EXACTLY what is requested from .meta if feasible.
-                     
-                     // Implementation: .meta stores the LAST N bytes of the file.
-                     // If existing .meta size >= length, we can serve it.
-                     if let Ok(meta_bytes) = std::fs::read(path) {
-                         if meta_bytes.len() >= length {
-                             // Get the last 'length' bytes
-                             let offset = meta_bytes.len() - length;
-                             return Some(meta_bytes[offset..].to_vec());
-                         }
-                     }
+            if start + length as u64 == self.length && path.exists() {
+                // Check file size match? Or just try read.
+                // The .meta file should contain the Footer bytes.
+                // But we don't know if .meta is exactly 'length' bytes or full footer.
+                // For simplicity: If .meta exists, read it ALL and see if it covers the request?
+                // Or just read EXACTLY what is requested from .meta if feasible.
+
+                // Implementation: .meta stores the LAST N bytes of the file.
+                // If existing .meta size >= length, we can serve it.
+                if let Ok(meta_bytes) = std::fs::read(path) {
+                    if meta_bytes.len() >= length {
+                        // Get the last 'length' bytes
+                        let offset = meta_bytes.len() - length;
+                        return Some(meta_bytes[offset..].to_vec());
+                    }
                 }
             }
         }
@@ -69,11 +67,11 @@ impl RemoteFile {
                 // Only save if it looks like a substantial footer (e.g. > 4 bytes)
                 if data.len() > 8 {
                     // Overwrite .meta
-                     if let Err(e) = std::fs::write(path, data) {
-                         tracing::warn!("Failed to save metadata cache: {}", e);
-                     } else {
-                         tracing::debug!("Saved metadata cache to {:?}", path);
-                     }
+                    if let Err(e) = std::fs::write(path, data) {
+                        tracing::warn!("Failed to save metadata cache: {}", e);
+                    } else {
+                        tracing::debug!("Saved metadata cache to {:?}", path);
+                    }
                 }
             }
         }
@@ -93,11 +91,14 @@ impl ChunkReader for RemoteFile {
         let bytes = self.get_bytes(start, self.length.saturating_sub(start) as usize)?;
         Ok(Box::new(std::io::Cursor::new(bytes)))
     }
-    
+
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
         // 1. Check Metadata Cache (Disk)
         if let Some(data) = self.try_read_local_metadata(start, length) {
-            tracing::debug!("RemoteFile: Served {} bytes from disk metadata cache", length);
+            tracing::debug!(
+                "RemoteFile: Served {} bytes from disk metadata cache",
+                length
+            );
             return Ok(Bytes::from(data));
         }
 
@@ -116,20 +117,24 @@ impl ChunkReader for RemoteFile {
         }
 
         // 3. Download
-        tracing::debug!("RemoteFile: Downloading {} bytes from offset {}", length, start);
+        tracing::debug!(
+            "RemoteFile: Downloading {} bytes from offset {}",
+            length,
+            start
+        );
         let data = self
             .storage
             .download_range(&self.key, start, length as u64)
             .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))?;
-            
+
         // 4. Update Caches
         // Save to Metadata Cache if applicable
         self.save_to_local_metadata(&data, start);
-        
+
         // Save to LRU
         {
-             let mut cache = self.cache.lock().unwrap();
-             cache.put(start, data.clone());
+            let mut cache = self.cache.lock().unwrap();
+            cache.put(start, data.clone());
         }
 
         Ok(Bytes::from(data))

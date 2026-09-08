@@ -226,7 +226,6 @@ pub fn resolve_artifact_version(
     existing_major: Option<u32>,
 ) -> Result<(String, Option<String>)> {
     let platform = current_platform()?;
-    let available = available_versions(platform);
 
     let default_major = DEFAULT_POSTGRES_VERSION
         .split('.')
@@ -289,6 +288,25 @@ pub fn resolve_artifact_version(
         }
     };
 
+    // Prefer a distribution that is already unpacked. Asking Maven Central what
+    // exists costs a network round trip on every single startup, which makes a
+    // container that could otherwise start offline depend on the internet, and
+    // it invites a silently different minor version after a restart. Only go
+    // out to the network when nothing local can satisfy the request.
+    let installed = installed_versions();
+    let local_choice = match exact_candidate.as_deref() {
+        Some(candidate) if installed.iter().any(|v| v == candidate) => Some(candidate.to_string()),
+        Some(_) => None,
+        None => best_version_for_major(&installed, effective_major),
+    };
+
+    if let Some(version) = local_choice {
+        tracing::debug!("Using already installed PostgreSQL {}", version);
+        return Ok((version, warning));
+    }
+
+    let available = available_versions(platform);
+
     let mut chosen = if let Some(candidate) = exact_candidate {
         match &available {
             Some(list) if list.iter().any(|v| v == &candidate) => candidate,
@@ -339,6 +357,36 @@ pub fn detect_existing_major_version(path: &Path) -> Option<u32> {
     parse_major(contents.trim())
 }
 
+/// PostgreSQL distributions already unpacked under `~/.dbcenter`.
+///
+/// A directory only counts once it holds a usable `postgres` binary, so a
+/// half-finished download is not mistaken for an install.
+fn installed_versions() -> Vec<String> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let root = home.join(".dbcenter");
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+
+    let binary_name = if cfg!(windows) {
+        "postgres.exe"
+    } else {
+        "postgres"
+    };
+
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let version = name.strip_prefix("postgres-")?.to_string();
+            find_binary_in_dir(&entry.path(), binary_name)?;
+            Some(version)
+        })
+        .collect()
+}
+
 fn available_versions(platform: &str) -> Option<Vec<String>> {
     if let Ok(cache) = version_cache().lock() {
         if let Some(cached) = cache.get(platform) {
@@ -369,7 +417,7 @@ fn parse_major(input: &str) -> Option<u32> {
 }
 
 fn version_tuple(value: &str) -> (u32, u32, u32, u32) {
-    let mut parts = value.split(|c| c == '.' || c == '_');
+    let mut parts = value.split(['.', '_']);
     let major = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let minor = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let patch = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);

@@ -1,0 +1,57 @@
+# DBCenter on Fly.io.
+#
+# The machine is disposable and the bucket is the durable copy, which is what
+# lets this scale to zero: with no connections Fly stops the machine and the
+# bill goes to nothing, and the next client to connect starts it again.
+#
+# Before deploying:
+#   fly apps create <name>
+#   fly storage create                 # provisions Tigris and sets the AWS_* secrets
+#   fly secrets set DBCENTER_PASSWORD=<password>
+#   fly volumes create dbcenter_data --size 10   # optional, see [[mounts]]
+#   fly deploy
+
+app = "dbcenter"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DBCENTER_DATA_DIR = "/data/db"
+  DBCENTER_LISTEN = "*"           # both address families; Fly's network is IPv6
+  DBCENTER_PORT = "5432"
+  DBCENTER_STORAGE = "s3"         # AWS_* come from `fly storage create`
+  DBCENTER_SYNC_INTERVAL_SECS = "30"
+  RUST_LOG = "info"
+
+# The embedded PostgreSQL speaks the wire protocol itself, so psql, DBeaver and
+# any ordinary driver connect straight to it. No proxy of our own is needed;
+# Fly's is what wakes the machine on the first connection.
+[[services]]
+  internal_port = 5432
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 5432
+
+  # Long enough that a cold start - process launch, then restoring from the
+  # bucket - is not mistaken for a machine that failed to come up.
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "60s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# A warm cache, not the source of truth. It keeps the initialised PostgreSQL
+# cluster across a stop/start so a wake does not pay for initdb again. Losing
+# it costs time, not data: the bucket still has everything.
+[[mounts]]
+  source = "dbcenter_data"
+  destination = "/data"

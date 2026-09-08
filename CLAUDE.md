@@ -1,0 +1,90 @@
+# DBCenter
+
+PostgreSQL embedded in a process. A Rust wrapper starts a real `postgres` binary
+against a data directory, exposes a MongoDB-shaped API over it, and can sync the
+result to object storage. It is an integration layer, not a database: storage,
+planning and transactions are all PostgreSQL's.
+
+Read `STATUS.md` first. It says what is done, what is broken, and what is next.
+
+## Layout
+
+| | |
+|---|---|
+| `dbcenter-core` | the engine: process lifecycle, collections, delta sync, storage adapters |
+| `dbcenter-ffi` | C ABI |
+| `dbcenter-python` | PyO3 bindings, the binding that matters |
+| `dbcenter-go` / `-java` / `-node` / `-r` | thin, barely exercised; treat as experimental |
+| `dbcenter-watcher` | sidecar that shuts PostgreSQL down when the parent dies |
+| `dbcenter-serve` | the engine as a container workload, with object storage behind it |
+
+## Things that will bite you
+
+**Two physical layouts, and code has to know which.** A plain collection is
+relational: each document field becomes its own column, added by `ALTER TABLE` on
+insert. Delta-sync and geo collections instead keep the body in a `data` JSONB
+column. Anything writing SQL against a collection must resolve which it is -
+`Collection::field_as_text` does this. Assuming one layout is how `fuzzy_search`
+and `create_index` came to be broken for every ordinary collection.
+
+**In delta mode a collection is a view**, over `<name>_base`, `<name>_adds` and
+`<name>_dels`, with INSTEAD OF triggers. `list_collections` reads `pg_tables`,
+which does not include views, so the collection name never appears in it. Derive
+names from the `_adds` tables instead. This is why the sync loop once found
+nothing to push and the bucket silently stayed empty.
+
+**Extensions are per-PostgreSQL-major and there is no fallback.** PostgreSQL
+stamps every loadable module with the major version it was built against and
+refuses to load one that disagrees. Asking for a version with no published build
+is an error, deliberately, not a download of the nearest older build.
+
+**Extension archives are verified against digests pinned in
+`EXTENSION_CHECKSUMS`.** They are unpacked into the PostgreSQL installation and
+loaded into the server process, so a substituted one is arbitrary code execution.
+An unpinned or mismatched asset is refused. Publishing a new build means
+uploading it to the `extensions-v1` release on
+[dbcenter-extensions](https://github.com/heyobi/dbcenter-extensions) *and* pinning
+its SHA-256 here; `every_offered_version_has_a_published_asset` fails otherwise.
+
+**Linux PostGIS bundles its own GEOS and PROJ**, with an `$ORIGIN` RUNPATH. Without
+that it does not load on a machine that has no GIS libraries installed - which is
+most machines. Test extension work in a container with nothing installed, never
+only on this box.
+
+**Never interpolate an identifier into SQL.** Use `query::quote_ident`. Field
+names reach the query builder from user data.
+
+**An unrecognised query operator is an error, not a dropped condition.** Dropping
+it turned `delete_many({"age": {"$typo": 1}})` into `DELETE FROM t`.
+
+## Working on it
+
+Rust is at `~/.cargo/bin` (rustup). Always:
+
+    cargo fmt --all
+    cargo clippy -p dbcenter-core -p dbcenter-serve --all-targets -- -D warnings
+    cargo test --workspace -- --test-threads=1
+
+`--test-threads=1` matters: the integration tests each boot a real PostgreSQL.
+`scripts/verify.sh` runs all of it, including bringing up MinIO for the S3 tests.
+
+**This machine has 11 GB and 4 cores.** The release profile uses fat LTO and one
+codegen unit, which gets killed by the OOM reaper - `dbcenter-python` especially.
+Use a debug build to verify, or set `CARGO_PROFILE_RELEASE_LTO=thin` and
+`CARGO_BUILD_JOBS=2` as the Dockerfile does. Long builds and container work in
+parallel will get background tasks killed; run them one at a time.
+
+Python bindings, for testing a change end to end:
+
+    VIRTUAL_ENV=<venv> maturin develop        # debug; --release will OOM
+    PATH=$PWD/target/debug:$PATH python ...   # the watcher binary must be findable
+
+## Traps in the environment, not the code
+
+- `pkill -f <pattern>` matches the shell running it. Use `ps -eo pid,args | grep '[p]attern'`.
+- A Unix socket path cannot exceed 107 bytes. The engine falls back to a short
+  temp directory now, but deep paths are still worth avoiding for scratch data.
+- The S3 tests skip themselves without `DBCENTER_S3_TEST_ENDPOINT`, so a green run
+  does not mean they ran. `scripts/s3-test-env.sh` points them at a local MinIO.
+- MinIO keeps its data across `compose down`, so give each cluster-test run its own
+  key prefix or it restores the previous run's rows and proves nothing.

@@ -30,3 +30,30 @@ testdata_go/
 # Logs
 *.log
 server.log
+
+# Google Drive OAuth credentials - never commit these
+client_secret.json
+token_cache.json
+*_client_secret.json
+credentials.json
+service_account*.json
+
+# Build/debug scratch output that kept landing in commits
+build_log.txt
+build_log_error.txt
+pip_log.txt
+check_err.txt
+error.txt
+error_*.txt
+test_error.txt
+debug_output.txt
+server_log_debug.txt
+
+# More stray logs and prebuilt artifacts
+full_log*.txt
+verify_log*.txt
+test_final_*.txt
+dist_debug/
+*.dll.a
+repro_db/
+test_lazy_db/

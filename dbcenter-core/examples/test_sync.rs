@@ -1,6 +1,6 @@
-use dbcenter_core::DBCenter;
 use dbcenter_core::storage::LocalStorageAdapter;
 use dbcenter_core::sync_engine::SyncEngine;
+use dbcenter_core::DBCenter;
 use serde_json::json;
 use std::error::Error;
 use std::path::PathBuf;
@@ -35,14 +35,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("DB initialized.");
 
     // 2. Setup Storage & Sync Engine
-    let storage = Arc::new(Box::new(LocalStorageAdapter::new(PathBuf::from(storage_path))) as Box<dyn dbcenter_core::storage::StorageAdapter + Send + Sync>);
+    let storage = Arc::new(
+        Box::new(LocalStorageAdapter::new(PathBuf::from(storage_path)))
+            as Box<dyn dbcenter_core::storage::StorageAdapter + Send + Sync>,
+    );
     let sync_engine = SyncEngine::new(db.clone(), storage.clone());
 
     // 3. Create Collection & Insert 500 items
     let collection = db.collection("items");
     println!("Inserting 500 items...");
-    
-    // We insert 500 items. 
+
+    // We insert 500 items.
     // This will go into `items_adds`.
     let mut docs = Vec::new();
     for i in 0..500 {
@@ -69,7 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // This implies we sync 498 items.
     // My SyncEngine::sync_table takes a limit.
     // Let's sync 498 items.
-    
+
     println!("Syncing 498 items...");
     let synced_count = sync_engine.sync_table("items", 498)?;
     println!("Synced {} items.", synced_count);

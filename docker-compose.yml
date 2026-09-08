@@ -1,0 +1,66 @@
+# Local stand-in for the Fly.io setup: MinIO plays Tigris, and two DBCenter
+# nodes share one bucket. Enough to check that state really does live in object
+# storage rather than on a node's disk.
+#
+#   docker compose up -d --build
+#   ./scripts/cluster-test.sh
+
+services:
+  storage:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: dbcenter
+      MINIO_ROOT_PASSWORD: dbcenter123
+    ports:
+      - "19000:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  # Creates the bucket, then exits.
+  storage-init:
+    image: minio/minio:latest
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "mc alias set s3 http://storage:9000 dbcenter dbcenter123 &&
+             mc mb --ignore-existing s3/dbcenter &&
+             echo bucket ready"
+
+  node-a: &node
+    build: .
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    environment: &node-env
+      DBCENTER_STORAGE: s3
+      DBCENTER_BUCKET: dbcenter
+      # Overridable so a test run starts from an empty namespace instead of
+      # restoring the previous run's rows.
+      DBCENTER_PREFIX: ${DBCENTER_PREFIX:-cluster}
+      AWS_ENDPOINT_URL_S3: http://storage:9000
+      AWS_ACCESS_KEY_ID: dbcenter
+      AWS_SECRET_ACCESS_KEY: dbcenter123
+      AWS_REGION: us-east-1
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      DBCENTER_PASSWORD: dbcenter123
+      DBCENTER_SYNC_INTERVAL_SECS: "20"
+      DBCENTER_PULL: "true"
+      DBCENTER_COMPACT_INTERVAL_SECS: "0"
+      DBCENTER_NODE_ID: node-a
+      DBCENTER_COLLECTIONS: users
+      RUST_LOG: info
+    ports:
+      - "15432:5432"
+
+  node-b:
+    <<: *node
+    environment:
+      <<: *node-env
+      DBCENTER_NODE_ID: node-b
+    ports:
+      - "15433:5432"

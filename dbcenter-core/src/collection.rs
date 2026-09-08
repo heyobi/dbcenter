@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::query::QueryBuilder;
+use crate::query::{quote_ident, QueryBuilder};
 use crate::DBCenter;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -11,6 +11,11 @@ pub struct Collection<'a> {
 }
 
 impl<'a> Collection<'a> {
+    /// The collection's table name, safely quoted for interpolation into SQL.
+    fn table(&self) -> String {
+        quote_ident(&self.name)
+    }
+
     pub fn new(db: &'a DBCenter, name: &str) -> Self {
         let collection = Self {
             db,
@@ -34,13 +39,13 @@ impl<'a> Collection<'a> {
 
         let sql = format!(
             r#"
-            CREATE TABLE IF NOT EXISTS "{}" (
+            CREATE TABLE IF NOT EXISTS {} (
                 id SERIAL PRIMARY KEY,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             "#,
-            self.name
+            self.table()
         );
 
         let mut client = self.db.get_client();
@@ -67,12 +72,10 @@ impl<'a> Collection<'a> {
         // We need to sync schema for ALL target tables
         for table in target_tables {
             // 1. Get existing columns for this table
-            let sql_cols = format!(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = '{}'",
-                table
-            );
+            let sql_cols =
+                "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
             let rows = client
-                .query(&sql_cols, &[])
+                .query(sql_cols, &[&table])
                 .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
             let existing_cols: std::collections::HashSet<String> =
                 rows.iter().map(|r| r.get(0)).collect();
@@ -83,8 +86,10 @@ impl<'a> Collection<'a> {
                 if key == "_id" || key == "id" || key == "created_at" || key == "updated_at" {
                     continue;
                 }
-                // Also skip data column if it exists (legacy/delta jsonb)
-                if key == "data" {
+                // In delta mode the row body lives in a reserved `data` JSONB column,
+                // so a user field of that name would collide. In relational mode a
+                // field named "data" is an ordinary column like any other.
+                if delta_mode && key == "data" {
                     continue;
                 }
 
@@ -102,12 +107,20 @@ impl<'a> Collection<'a> {
                         JsonValue::Array(_) | JsonValue::Object(_) => "JSONB",
                         JsonValue::Null => "TEXT", // Default to text for nulls
                     };
-                    alter_stmts.push(format!("ADD COLUMN IF NOT EXISTS \"{}\" {}", key, col_type));
+                    alter_stmts.push(format!(
+                        "ADD COLUMN IF NOT EXISTS {} {}",
+                        quote_ident(key),
+                        col_type
+                    ));
                 }
             }
 
             if !alter_stmts.is_empty() {
-                let sql_alter = format!("ALTER TABLE \"{}\" {}", table, alter_stmts.join(", "));
+                let sql_alter = format!(
+                    "ALTER TABLE {} {}",
+                    quote_ident(&table),
+                    alter_stmts.join(", ")
+                );
                 tracing::info!("Evolving schema for {}: {}", table, sql_alter);
                 client.batch_execute(&sql_alter).map_err(|e| {
                     crate::error::DBCenterError::QueryError(format!(
@@ -160,13 +173,13 @@ impl<'a> Collection<'a> {
             if k == "_id" || k == "id" {
                 continue;
             } // Auto-generated ID
-            cols.push(format!("\"{}\"", k));
+            cols.push(quote_ident(&k));
             vals.push(QueryBuilder::json_to_sql_literal(&v));
         }
 
         let sql = format!(
-            r#"INSERT INTO "{}" ({}) VALUES ({}) RETURNING id::text"#,
-            self.name,
+            r#"INSERT INTO {} ({}) VALUES ({}) RETURNING id::text"#,
+            self.table(),
             cols.join(", "),
             vals.join(", ")
         );
@@ -213,8 +226,9 @@ impl<'a> Collection<'a> {
         // We must ensure every row provides a value for every column in 'all_keys' (or DEFAULT/NULL).
         // To optimize, we'll sort columns.
 
-        let sorted_cols: Vec<String> = all_keys.into_iter().collect();
-        let cols_sql: Vec<String> = sorted_cols.iter().map(|c| format!("\"{}\"", c)).collect();
+        let mut sorted_cols: Vec<String> = all_keys.into_iter().collect();
+        sorted_cols.sort();
+        let cols_sql: Vec<String> = sorted_cols.iter().map(|c| quote_ident(c)).collect();
         let col_names_sql = cols_sql.join(", ");
 
         let mut all_ids = Vec::new();
@@ -227,7 +241,11 @@ impl<'a> Collection<'a> {
         for chunk in documents.chunks(500) {
             let mut values_list = Vec::new();
             for doc in chunk {
-                let obj = doc.as_object().unwrap(); // Safe assuming validate input upstream
+                let obj = doc.as_object().ok_or_else(|| {
+                    crate::error::DBCenterError::ValidationError(
+                        "Every document must be a JSON object".to_string(),
+                    )
+                })?;
                 let mut row_vals = Vec::new();
                 for col in &sorted_cols {
                     let val = obj.get(col).unwrap_or(&JsonValue::Null);
@@ -237,8 +255,8 @@ impl<'a> Collection<'a> {
             }
 
             let sql = format!(
-                r#"INSERT INTO "{}" ({}) VALUES {} RETURNING id::text"#,
-                self.name,
+                r#"INSERT INTO {} ({}) VALUES {} RETURNING id::text"#,
+                self.table(),
                 col_names_sql,
                 values_list.join(", ")
             );
@@ -265,11 +283,12 @@ impl<'a> Collection<'a> {
 
         // We need JSON rows back. Postgres can convert ROW to JSON.
         let sql = if where_clause.is_empty() {
-            format!(r#"SELECT to_jsonb(t) FROM "{}" t"#, self.name)
+            format!(r#"SELECT to_jsonb(t) FROM {} t"#, self.table())
         } else {
             format!(
-                r#"SELECT to_jsonb(t) FROM "{}" t WHERE {}"#,
-                self.name, where_clause
+                r#"SELECT to_jsonb(t) FROM {} t WHERE {}"#,
+                self.table(),
+                where_clause
             )
         };
 
@@ -314,11 +333,12 @@ impl<'a> Collection<'a> {
         };
 
         let sql = if where_clause.is_empty() {
-            format!(r#"SELECT COUNT(*) FROM "{}""#, self.name)
+            format!(r#"SELECT COUNT(*) FROM {}"#, self.table())
         } else {
             format!(
-                r#"SELECT COUNT(*) FROM "{}" WHERE {}"#,
-                self.name, where_clause
+                r#"SELECT COUNT(*) FROM {} WHERE {}"#,
+                self.table(),
+                where_clause
             )
         };
 
@@ -346,11 +366,12 @@ impl<'a> Collection<'a> {
         let (where_clause, _) = QueryBuilder::build_where(query)?;
 
         let select_sql = if where_clause.is_empty() {
-            format!(r#"SELECT id::text FROM "{}" LIMIT 1"#, self.name)
+            format!(r#"SELECT id::text FROM {} LIMIT 1"#, self.table())
         } else {
             format!(
-                r#"SELECT id::text FROM "{}" WHERE {} LIMIT 1"#,
-                self.name, where_clause
+                r#"SELECT id::text FROM {} WHERE {} LIMIT 1"#,
+                self.table(),
+                where_clause
             )
         };
 
@@ -370,11 +391,13 @@ impl<'a> Collection<'a> {
 
         let update_sql = format!(
             r#"
-            UPDATE "{}" 
+            UPDATE {}
             SET {}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = '{}'
+            WHERE id::text = {}
             "#,
-            self.name, update_clause, id_str
+            self.table(),
+            update_clause,
+            QueryBuilder::json_to_sql_literal(&JsonValue::String(id_str))
         );
 
         let affected = client.execute(&update_sql, &[]).map_err(|e| {
@@ -393,10 +416,22 @@ impl<'a> Collection<'a> {
         let (where_clause, _) = QueryBuilder::build_where(query)?;
         let (update_clause, _) = QueryBuilder::build_relational_update(update)?;
 
-        let sql = format!(
-            r#"UPDATE "{}" SET {}, updated_at = CURRENT_TIMESTAMP WHERE {}"#,
-            self.name, update_clause, where_clause
-        );
+        // An empty query means "every row". Interpolating it after WHERE would
+        // produce `... WHERE ` and a syntax error, so omit the clause entirely.
+        let sql = if where_clause.is_empty() {
+            format!(
+                r#"UPDATE {} SET {}, updated_at = CURRENT_TIMESTAMP"#,
+                self.table(),
+                update_clause
+            )
+        } else {
+            format!(
+                r#"UPDATE {} SET {}, updated_at = CURRENT_TIMESTAMP WHERE {}"#,
+                self.table(),
+                update_clause,
+                where_clause
+            )
+        };
 
         let mut client = self.db.get_client();
         let affected = client.execute(&sql, &[]).map_err(|e| {
@@ -412,11 +447,12 @@ impl<'a> Collection<'a> {
         let (where_clause, _) = QueryBuilder::build_where(query)?;
 
         let select_sql = if where_clause.is_empty() {
-            format!(r#"SELECT id::text FROM "{}" LIMIT 1"#, self.name)
+            format!(r#"SELECT id::text FROM {} LIMIT 1"#, self.table())
         } else {
             format!(
-                r#"SELECT id::text FROM "{}" WHERE {} LIMIT 1"#,
-                self.name, where_clause
+                r#"SELECT id::text FROM {} WHERE {} LIMIT 1"#,
+                self.table(),
+                where_clause
             )
         };
 
@@ -432,7 +468,11 @@ impl<'a> Collection<'a> {
         let id_str: String = rows[0].get(0);
 
         // 2. Perform Delete by ID
-        let sql = format!(r#"DELETE FROM "{}" WHERE id = '{}'"#, self.name, id_str);
+        let sql = format!(
+            r#"DELETE FROM {} WHERE id::text = {}"#,
+            self.table(),
+            QueryBuilder::json_to_sql_literal(&JsonValue::String(id_str))
+        );
 
         let affected = client.execute(&sql, &[]).map_err(|e| {
             crate::error::DBCenterError::QueryError(format!("Delete failed: {}", e))
@@ -450,9 +490,9 @@ impl<'a> Collection<'a> {
         };
 
         let sql = if where_clause.is_empty() {
-            format!(r#"DELETE FROM "{}""#, self.name)
+            format!(r#"DELETE FROM {}"#, self.table())
         } else {
-            format!(r#"DELETE FROM "{}" WHERE {}"#, self.name, where_clause)
+            format!(r#"DELETE FROM {} WHERE {}"#, self.table(), where_clause)
         };
 
         let mut client = self.db.get_client();
@@ -463,12 +503,62 @@ impl<'a> Collection<'a> {
         Ok(affected)
     }
 
+    /// Does this collection's table have the given column?
+    ///
+    /// Two physical layouts are in play. A plain collection is relational: every
+    /// document field becomes its own column. Delta-sync and geo collections keep
+    /// the document body in a reserved `data` JSONB column. Index and similarity
+    /// expressions have to address whichever layout the table actually has.
+    fn has_column(&self, column: &str) -> Result<bool> {
+        let mut client = self.db.get_client();
+        let row = client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM information_schema.columns
+                     WHERE table_name = $1 AND column_name = $2
+                 )",
+                &[&self.name, &column],
+            )
+            .map_err(|e| {
+                crate::error::DBCenterError::QueryError(format!("Column lookup failed: {}", e))
+            })?;
+        Ok(row.get(0))
+    }
+
+    /// SQL expression that yields `field` as text under either layout.
+    fn field_as_text(&self, field: &str) -> Result<String> {
+        if self.has_column("data")? {
+            Ok(format!(
+                "data->>{}",
+                QueryBuilder::json_to_sql_literal(&JsonValue::String(field.to_string()))
+            ))
+        } else {
+            Ok(format!("{}::text", quote_ident(field)))
+        }
+    }
+
     /// Create index on a field
     pub fn create_index(&self, field: &str, index_type: &str) -> Result<()> {
-        let idx_name = format!("idx_{}_{}_{}", self.name, field, index_type);
+        // Index method names are keywords, not identifiers - allow only known ones
+        // rather than interpolating whatever the caller passed.
+        const METHODS: [&str; 6] = ["btree", "hash", "gist", "spgist", "gin", "brin"];
+        let method = index_type.to_ascii_lowercase();
+        if !METHODS.contains(&method.as_str()) {
+            return Err(crate::error::DBCenterError::InvalidQuery(format!(
+                "Unknown index type '{}'. Supported: {}",
+                index_type,
+                METHODS.join(", ")
+            )));
+        }
+
+        let expr = self.field_as_text(field)?;
+        let idx_name = format!("idx_{}_{}_{}", self.name, field, method);
         let sql = format!(
-            r#"CREATE INDEX IF NOT EXISTS {} ON "{}" USING {} ((data->>'{}'))"#,
-            idx_name, self.name, index_type, field
+            r#"CREATE INDEX IF NOT EXISTS {} ON {} USING {} (({}))"#,
+            quote_ident(&idx_name),
+            self.table(),
+            method,
+            expr
         );
 
         let mut client = self.db.get_client();
@@ -479,6 +569,7 @@ impl<'a> Collection<'a> {
         tracing::info!("Created index: {}", idx_name);
         Ok(())
     }
+
     /// Fuzzy search using pg_trgm
     pub fn fuzzy_search(
         &self,
@@ -492,11 +583,28 @@ impl<'a> Collection<'a> {
             tracing::warn!("pg_trgm install warning: {}", e);
         }
 
-        let mut client = self.db.get_client();
         let search_mode = mode.unwrap_or("substring");
+        if search_mode != "exact" && search_mode != "substring" {
+            return Err(crate::error::DBCenterError::InvalidQuery(format!(
+                "Unknown fuzzy search mode '{}'. Supported: exact, substring",
+                search_mode
+            )));
+        }
+
+        // Resolve the field expression before taking the client lock - has_column
+        // acquires the same mutex.
+        let expr = self.field_as_text(field)?;
+
+        let mut client = self.db.get_client();
 
         // set threshold
         let th = threshold.unwrap_or(0.3);
+        if !(0.0..=1.0).contains(&th) {
+            return Err(crate::error::DBCenterError::InvalidQuery(format!(
+                "Similarity threshold must be between 0.0 and 1.0, got {}",
+                th
+            )));
+        }
         // set BOTH just in case
         if let Err(e) = client.batch_execute(&format!(
             "SET pg_trgm.similarity_threshold = {}; SET pg_trgm.word_similarity_threshold = {};",
@@ -508,8 +616,10 @@ impl<'a> Collection<'a> {
         // Create index if not exists (critical for performance)
         let idx_name = format!("idx_{}_{}_trgm", self.name, field);
         let sql_idx = format!(
-            r#"CREATE INDEX IF NOT EXISTS "{}" ON "{}" USING GIN ((data->>'{}') gin_trgm_ops)"#,
-            idx_name, self.name, field
+            r#"CREATE INDEX IF NOT EXISTS {} ON {} USING GIN (({}) gin_trgm_ops)"#,
+            quote_ident(&idx_name),
+            self.table(),
+            expr
         );
         if let Err(e) = client.batch_execute(&sql_idx) {
             tracing::warn!(
@@ -518,31 +628,29 @@ impl<'a> Collection<'a> {
             );
         }
 
-        let sql_query = if search_mode == "exact" {
-            // WHOLE STRING similarity (%)
-            format!(
-                r#"
-                SELECT data, similarity($1, data->>'{}') as score
-                FROM "{}"
-                WHERE $1 % (data->>'{}')
-                ORDER BY score DESC
-                LIMIT 100
-                "#,
-                field, self.name, field
-            )
+        // `similarity` compares whole strings, `word_similarity` finds the best
+        // matching substring. Return the whole row so the caller gets the same
+        // shape find() gives them, under either physical layout.
+        let sim_fn = if search_mode == "exact" {
+            "similarity"
         } else {
-            // SUBSTRING similarity (<%), default
-            format!(
-                r#"
-                SELECT data, word_similarity($1, data->>'{}') as score
-                FROM "{}"
-                WHERE $1 <% (data->>'{}')
-                ORDER BY score DESC
-                LIMIT 100
-                "#,
-                field, self.name, field
-            )
+            "word_similarity"
         };
+        let match_op = if search_mode == "exact" { "%" } else { "<%" };
+
+        let sql_query = format!(
+            r#"
+            SELECT to_jsonb(t), {sim_fn}($1::text, {expr}) AS score
+            FROM {table} t
+            WHERE $1::text {match_op} ({expr})
+            ORDER BY score DESC
+            LIMIT 100
+            "#,
+            sim_fn = sim_fn,
+            expr = expr,
+            table = self.table(),
+            match_op = match_op
+        );
 
         let rows = client.query(&sql_query, &[&query]).map_err(|e| {
             crate::error::DBCenterError::QueryError(format!(
@@ -557,6 +665,9 @@ impl<'a> Collection<'a> {
             let score: f32 = row.get(1);
 
             if let JsonValue::Object(ref mut map) = data {
+                if let Some(id_val) = map.get("id").cloned() {
+                    map.insert("_id".to_string(), id_val);
+                }
                 map.insert("similarity".to_string(), serde_json::Value::from(score));
             }
             results.push(data);
