@@ -394,7 +394,13 @@ impl SyncEngine {
             let props = WriterProperties::builder()
                 .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Chunk)
                 .set_bloom_filter_enabled(true)
-                .set_max_row_group_size(100 * 1024 * 1024) // 100MB
+                // Rows, not bytes. This was 100 * 1024 * 1024, which reads as
+                // "100MB" but means 104 million rows - so every realistic file
+                // was a single row group, there was nothing for the reader to
+                // skip, and a lookup pulled the whole object down. Rows are
+                // written in id order, so smaller groups give the statistics
+                // something to prune on.
+                .set_max_row_group_size(20_000)
                 .build();
 
             let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
@@ -502,9 +508,13 @@ impl SyncEngine {
                 continue;
             }
 
-            // Task 3.4 VFS Demonstration
-            let full_data = self.storage.download(&file)?;
-            let file_len = full_data.len() as u64;
+            // Ask storage how big the object is. Downloading the whole thing to
+            // call .len() on it defeats the reader that is about to fetch only
+            // the ranges it needs - and then fetches them a second time.
+            let file_len = self.storage.size(&file)?;
+            if file_len == 0 {
+                continue;
+            }
 
             let remote_reader =
                 RemoteParquetReader::new(self.storage.clone(), file.clone(), file_len);

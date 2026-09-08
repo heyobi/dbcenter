@@ -2,8 +2,8 @@
 
 Last updated 8 September 2026.
 
-Merged to `main` on 8 September 2026.
-`main`. Each commit says what was wrong and how it was checked.
+Merged to `main` on 8 September 2026. Each commit says what was wrong and how
+it was checked.
 
 ## What was broken and now is not
 
@@ -58,12 +58,14 @@ in the extensions repo is the recipe; the others need the same treatment.
 **`vector-0.8.1-windows-amd64-pg15` is quarantined.** It shipped an import library
 instead of a DLL. Windows PostgreSQL 15 resolves to pgvector 0.8.0 instead.
 
-**Restoring from object storage downloads everything.** `pull_and_apply` fetches
-every Parquet object in full - and fetches each one twice, once whole just to
-learn its length and then again in ranges. Cold start therefore grows with the
-data, which contradicts the "query 300 GB without downloading it" claim. The
-smart reader that would make that true (`scan_smart`, row-group pruning) is
-reachable only from Python's `smart_query(table, id)`, a single-key lookup.
+**Reading remotely still costs more than it should.** A single-id lookup now reads
+31% of a 15MB table instead of 100%, and the fraction falls as the table grows
+because a row group holds a fixed number of rows. Two things would take it
+further: reading only the `id` column to locate a match before fetching the row,
+and covering the delta objects rather than only the newest base snapshot.
+`scan_smart` is also reachable only from Python's `smart_query(table, id)` and
+only does equality on `id`, so the mechanism works but almost nothing can reach
+it. `CountingStorage` and `tests/lazy_read.rs` are how any of this is measured.
 
 **Conflict resolution is last-write-wins on `updated_at`.** Two nodes editing one
 row concurrently: the later edit wins and the earlier is lost. Fine for

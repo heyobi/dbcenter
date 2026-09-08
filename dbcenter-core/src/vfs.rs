@@ -38,18 +38,14 @@ impl ChunkReader for RemoteParquetReader {
     type T = Box<dyn Read + Send>;
 
     fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
-        let length = self.length.saturating_sub(start) as usize;
-        tracing::debug!(
-            "RemoteParquetReader: reading {} bytes from offset {}",
-            length,
-            start
-        );
-        let data = self
-            .storage
-            .download_range(&self.key, start, length as u64)
-            .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))?;
-
-        Ok(Box::new(std::io::Cursor::new(data)))
+        // Lazily, a block at a time. Fetching from the offset to the end of the
+        // file means a caller after one page pays for the whole object.
+        Ok(Box::new(crate::vfs::remote_file::StreamingRange::new(
+            self.storage.clone(),
+            self.key.clone(),
+            start,
+            self.length,
+        )))
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {

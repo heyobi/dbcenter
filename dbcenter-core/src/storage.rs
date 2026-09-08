@@ -2,6 +2,8 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Lock file structure for concurrency control
 #[derive(Serialize, Deserialize, Debug)]
@@ -26,6 +28,94 @@ pub trait StorageAdapter {
     fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool>;
     fn unlock(&self, key: &str, worker_id: &str) -> Result<()>;
     fn rename(&self, src: &str, dest: &str) -> Result<()>;
+}
+
+/// Wraps another adapter and counts the bytes it actually pulls down.
+///
+/// The point of reading Parquet over a range-capable store is that a query
+/// touches a fraction of the file. That is a claim about bytes, so it needs to
+/// be measured rather than asserted: `CountingStorage` is what lets a test say
+/// "this query read 40 KB of a 12 MB object" instead of "it seemed fast".
+pub struct CountingStorage {
+    inner: Arc<Box<dyn StorageAdapter + Send + Sync>>,
+    downloaded: Arc<AtomicU64>,
+    requests: Arc<AtomicU64>,
+}
+
+impl CountingStorage {
+    pub fn new(inner: Arc<Box<dyn StorageAdapter + Send + Sync>>) -> Self {
+        Self {
+            inner,
+            downloaded: Arc::new(AtomicU64::new(0)),
+            requests: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Bytes pulled down so far, across whole and ranged reads.
+    pub fn bytes_downloaded(&self) -> u64 {
+        self.downloaded.load(Ordering::Relaxed)
+    }
+
+    /// How many read requests were issued. A high count with few bytes means
+    /// the reader is chatty, which costs latency even when it costs no traffic.
+    pub fn read_requests(&self) -> u64 {
+        self.requests.load(Ordering::Relaxed)
+    }
+
+    pub fn reset(&self) {
+        self.downloaded.store(0, Ordering::Relaxed);
+        self.requests.store(0, Ordering::Relaxed);
+    }
+}
+
+impl StorageAdapter for CountingStorage {
+    fn upload(&self, key: &str, data: &[u8]) -> Result<()> {
+        self.inner.upload(key, data)
+    }
+
+    fn download(&self, key: &str) -> Result<Vec<u8>> {
+        let data = self.inner.download(key)?;
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.downloaded
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        Ok(data)
+    }
+
+    fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.list(prefix)
+    }
+
+    fn size(&self, key: &str) -> Result<u64> {
+        self.inner.size(key)
+    }
+
+    fn download_range(&self, key: &str, start: u64, length: u64) -> Result<Vec<u8>> {
+        let data = self.inner.download_range(key, start, length)?;
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.downloaded
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        Ok(data)
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        self.inner.delete(key)
+    }
+
+    fn lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool> {
+        self.inner.lock(key, ttl_ms, worker_id)
+    }
+
+    fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool> {
+        self.inner.refresh_lock(key, ttl_ms, worker_id)
+    }
+
+    fn unlock(&self, key: &str, worker_id: &str) -> Result<()> {
+        self.inner.unlock(key, worker_id)
+    }
+
+    fn rename(&self, src: &str, dest: &str) -> Result<()> {
+        self.inner.rename(src, dest)
+    }
 }
 
 /// Local Filesystem Implementation of StorageAdapter
