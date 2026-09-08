@@ -35,7 +35,20 @@ pub fn format_postgres_error(error: &postgres::Error) -> String {
 
         formatted
     } else {
-        error.to_string()
+        // Client-side failures wrap their cause and print only the outer layer,
+        // so a parameter that could not be encoded arrives as "error serializing
+        // parameter 0" with no word of why. Walk the chain and say.
+        let mut formatted = error.to_string();
+        let mut source = std::error::Error::source(error);
+        while let Some(cause) = source {
+            let text = cause.to_string();
+            if !formatted.contains(&text) {
+                formatted.push_str(": ");
+                formatted.push_str(&text);
+            }
+            source = cause.source();
+        }
+        formatted
     }
 }
 

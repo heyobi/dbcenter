@@ -1,0 +1,134 @@
+name: Release to PyPI
+
+# Publishing is deliberately manual and gated on the version. A PyPI version
+# number can never be reused, so an accidental push is not recoverable - only
+# yankable.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload to PyPI (otherwise wheels are built and kept as artifacts)"
+        type: boolean
+        default: false
+
+jobs:
+  wheels:
+    name: ${{ matrix.platform }} ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  platform: linux,   target: x86_64  }
+          - { os: ubuntu-latest,  platform: linux,   target: aarch64 }
+          - { os: macos-14,       platform: macos,   target: aarch64 }
+          - { os: macos-13,       platform: macos,   target: x86_64  }
+          - { os: windows-latest, platform: windows, target: x64     }
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # abi3-py38, so one wheel per platform covers every Python from 3.8.
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path dbcenter-python/Cargo.toml
+          manylinux: auto
+          # build.rs compiles the watcher for the same target and embeds it, so
+          # cross builds need the target's toolchain inside the container too.
+          docker-options: -e CARGO_BUILD_JOBS=2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform }}-${{ matrix.target }}
+          path: dist
+
+  # A wheel that imports is not the same as a wheel that works. This installs it
+  # the way a user would, in a container with nothing else, and starts a database.
+  smoke-test:
+    name: Install and use the wheel
+    needs: wheels
+    runs-on: ubuntu-latest
+    container: python:3.12-slim
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+
+      - name: Install from the wheel
+        run: pip install --no-index --find-links dist dbcenter
+
+      - name: Start a database and use it
+        run: |
+          cd /tmp   # not the repo: a directory named dbcenter-watcher used to
+                    # be mistaken for the watcher binary
+          python - <<'PY'
+          import dbcenter
+          db = dbcenter.DBCenter(path="/tmp/smoke", persist=False)
+          c = db.collection("cities")
+          c.insert_many([{"name": "Istanbul"}, {"name": "Ankara"}])
+          assert c.count() == 2, c.count()
+
+          # pg_trgm has to load, which it could not do on Linux at all until the
+          # dynamic_library_path separator was fixed.
+          hits = c.fuzzy_search("Istanbu", "name")
+          assert hits and hits[0]["name"] == "Istanbul", hits
+
+          # Parameters have to arrive as the type PostgreSQL inferred. A float
+          # written into a numeric field is not an error you want to find later.
+          for value, expected in [(19.99, 19.99), (-0.0001, -0.0001),
+                                  (1234567.89, 1234567.89), (42, 42.0)]:
+              got = db.query("SELECT $1::numeric AS n", [value])[0]["n"]
+              assert got == expected, f"{value!r} came back as {got!r}"
+          assert db.query("SELECT $1::int AS i", [7])[0]["i"] == 7
+          assert db.query("SELECT $1::smallint AS i", [7])[0]["i"] == 7
+          assert db.query("SELECT $1::bigint AS i", [2**40])[0]["i"] == 2**40
+          assert db.query("SELECT $1::text AS t", ["merhaba"])[0]["t"] == "merhaba"
+          assert db.query("SELECT $1::numeric AS n", [None])[0]["n"] is None
+
+          # And a value that does not fit is refused, with a reason.
+          try:
+              db.query("SELECT $1::smallint AS i", [999999])
+              raise SystemExit("an out-of-range value must be rejected")
+          except Exception as e:
+              assert "does not fit" in str(e), e
+
+          # Types that used to come back as null.
+          assert db.query("SELECT ARRAY[1,2,3] AS v")[0]["v"] == [1, 2, 3]
+          assert db.query(r"SELECT '\x0102'::bytea AS v")[0]["v"] == r"\x0102"
+
+          # An unrecognised operator must not quietly match everything.
+          try:
+              c.delete_many({"name": {"$typo": "x"}})
+              raise SystemExit("an unknown operator must be rejected")
+          except Exception as e:
+              assert "Unsupported query operator" in str(e), e
+          assert c.count() == 2, "the rows must still be there"
+
+          db.shutdown()
+          print("wheel works")
+          PY
+
+  publish:
+    name: Publish
+    needs: smoke-test
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - run: ls -la dist
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/*
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

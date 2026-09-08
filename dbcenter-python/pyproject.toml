@@ -4,15 +4,31 @@ build-backend = "maturin"
 
 [project]
 name = "dbcenter"
-version = "0.1.0"
-description = "Embedded PostgreSQL with MongoDB-style API - Rust Edition"
-authors = [{name = "DB Architect", email = "arch@db.center"}]
+version = "0.2.0"
+description = "Embedded PostgreSQL with a MongoDB-style API, PostGIS and pgvector included"
+readme = "README.md"
 requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "İbrahim Polat", email = "ipolat2001@gmail.com" }]
+keywords = ["postgresql", "postgres", "embedded", "database", "postgis", "pgvector", "gis", "vector"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Scientific/Engineering :: GIS",
 ]
+
+[project.urls]
+Homepage = "https://db.center"
+Source = "https://github.com/heyobi/dbcenter"
+"Extension builds" = "https://github.com/heyobi/dbcenter-extensions"
 
 [project.optional-dependencies]
 dev = ["pytest", "pandas"]

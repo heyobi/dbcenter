@@ -1410,24 +1410,158 @@ impl SqlParam {
     }
 }
 
+/// Encode a decimal string in PostgreSQL's binary NUMERIC format.
+///
+/// The inverse of the decoder in dbcenter-core: `ndigits`, `weight`, `sign`,
+/// `dscale`, then base-10000 groups. Needed because rust-postgres maps NUMERIC
+/// only when built against a decimal crate, and `postgres` 0.19 has no such
+/// feature - so `SELECT $1::numeric` with a Python number had nothing to encode
+/// it with.
+fn encode_numeric(text: &str, out: &mut BytesMut) -> Result<(), String> {
+    let text = text.trim();
+    let (negative, body) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+
+    let (int_part, frac_part) = match body.split_once('.') {
+        Some((i, f)) => (i, f),
+        None => (body, ""),
+    };
+    if int_part.is_empty() && frac_part.is_empty() {
+        return Err(format!("'{}' is not a number", text));
+    }
+    if !int_part
+        .bytes()
+        .chain(frac_part.bytes())
+        .all(|b| b.is_ascii_digit())
+    {
+        return Err(format!("'{}' is not a plain decimal", text));
+    }
+
+    let dscale = frac_part.len();
+
+    // Group into base-10000 digits: the integer part padded on the left to a
+    // multiple of four, the fraction padded on the right.
+    let int_pad = (4 - int_part.len() % 4) % 4;
+    let padded_int = format!("{}{}", "0".repeat(int_pad), int_part);
+    let frac_pad = (4 - frac_part.len() % 4) % 4;
+    let padded_frac = format!("{}{}", frac_part, "0".repeat(frac_pad));
+
+    let mut digits: Vec<i16> = Vec::new();
+    for chunk in padded_int.as_bytes().chunks(4) {
+        digits.push(std::str::from_utf8(chunk).unwrap().parse().unwrap());
+    }
+    let int_groups = digits.len() as i32;
+    for chunk in padded_frac.as_bytes().chunks(4) {
+        digits.push(std::str::from_utf8(chunk).unwrap().parse().unwrap());
+    }
+
+    // weight counts groups before the point, less one. Leading zero groups are
+    // dropped and weight follows them down.
+    let mut weight = int_groups - 1;
+    while digits.first() == Some(&0) && weight >= 0 {
+        digits.remove(0);
+        weight -= 1;
+    }
+    while digits.last() == Some(&0) {
+        digits.pop();
+    }
+    if digits.is_empty() {
+        weight = 0;
+    }
+
+    out.extend_from_slice(&(digits.len() as i16).to_be_bytes());
+    out.extend_from_slice(&(weight as i16).to_be_bytes());
+    out.extend_from_slice(&(if negative { 0x4000u16 } else { 0x0000u16 }).to_be_bytes());
+    out.extend_from_slice(&(dscale as i16).to_be_bytes());
+    for d in digits {
+        out.extend_from_slice(&d.to_be_bytes());
+    }
+    Ok(())
+}
+
+/// Send an integer as a narrower PostgreSQL type, or refuse if it does not fit.
+fn narrow<T>(
+    value: i64,
+    ty: &PgType,
+    out: &mut BytesMut,
+) -> std::result::Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
+where
+    T: TryFrom<i64> + ToSql,
+{
+    match T::try_from(value) {
+        Ok(v) => v.to_sql_checked(ty, out),
+        Err(_) => Err(format!("{} does not fit in a {}", value, ty.name()).into()),
+    }
+}
+
 impl ToSql for SqlParam {
     fn to_sql(
         &self,
         ty: &PgType,
         out: &mut BytesMut,
     ) -> std::result::Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        // NUMERIC first: PostgreSQL infers it for `$1::numeric`, and writing an
+        // eight-byte float into that field produced "invalid sign in external
+        // numeric value" - or, worse, could have produced a plausible wrong
+        // number.
+        if *ty == PgType::NUMERIC {
+            let text = match self {
+                SqlParam::Null => return Ok(IsNull::Yes),
+                SqlParam::Int(v) => v.to_string(),
+                SqlParam::Float(v) => {
+                    if !v.is_finite() {
+                        return Err(format!("{} cannot be stored as numeric", v).into());
+                    }
+                    format!("{}", v)
+                }
+                SqlParam::Text(v) => v.clone(),
+                other => {
+                    return Err(format!("{:?} cannot be bound to a numeric column", other).into())
+                }
+            };
+            encode_numeric(&text, out)
+                .map_err(|e| -> Box<dyn std::error::Error + Sync + Send> { e.into() })?;
+            return Ok(IsNull::No);
+        }
+
+        // Python has one integer type and one float type; PostgreSQL has several
+        // widths, and rust-postgres will not encode an i64 into an int4 field.
+        // Narrow where the value fits and say so plainly where it does not,
+        // rather than letting `$1::int` fail with "error serializing parameter".
         match self {
             SqlParam::Null => Ok(IsNull::Yes),
-            SqlParam::Bool(v) => v.to_sql(ty, out),
-            SqlParam::Int(v) => v.to_sql(ty, out),
-            SqlParam::Float(v) => v.to_sql(ty, out),
-            SqlParam::Text(v) => v.to_sql(ty, out),
-            SqlParam::Json(v) => v.to_sql(ty, out),
+            SqlParam::Bool(v) => v.to_sql_checked(ty, out),
+
+            SqlParam::Int(v) => match *ty {
+                PgType::INT2 => narrow::<i16>(*v, ty, out),
+                PgType::INT4 => narrow::<i32>(*v, ty, out),
+                PgType::FLOAT4 => (*v as f32).to_sql_checked(ty, out),
+                PgType::FLOAT8 => (*v as f64).to_sql_checked(ty, out),
+                _ => v.to_sql_checked(ty, out),
+            },
+
+            SqlParam::Float(v) => match *ty {
+                PgType::FLOAT4 => (*v as f32).to_sql_checked(ty, out),
+                PgType::INT2 | PgType::INT4 | PgType::INT8 => Err(format!(
+                    "{} is a float and the column is {}; round it first",
+                    v,
+                    ty.name()
+                )
+                .into()),
+                _ => v.to_sql_checked(ty, out),
+            },
+
+            SqlParam::Text(v) => v.to_sql_checked(ty, out),
+            SqlParam::Json(v) => v.to_sql_checked(ty, out),
         }
     }
 
-    // The value's own type decides what it can be sent as, so accept whatever
-    // PostgreSQL inferred for the placeholder and let to_sql do the encoding.
+    // Whether a value can be sent as this type is decided per value, in to_sql,
+    // where the value is in hand. Claiming to accept everything and then
+    // encoding regardless of the requested type is how a float ended up in a
+    // numeric field.
     fn accepts(_ty: &PgType) -> bool {
         true
     }
