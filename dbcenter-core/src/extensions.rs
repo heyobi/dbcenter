@@ -1283,6 +1283,37 @@ fn install_extension_windows(
     Ok(())
 }
 
+/// Has this exact archive already been unpacked into this PostgreSQL?
+///
+/// The extension files live in the PostgreSQL installation, which is shared by
+/// every database using that version, while "is it installed" was only ever
+/// asked of `pg_extension`, which is per-database. So a second database - or a
+/// fresh one on the same machine - unpacked fifty megabytes it already had.
+/// For pg_duckdb that was fifteen seconds of the sixteen an install took.
+///
+/// A marker file rather than a check for the module, because the version
+/// matters: an archive for a different version has to replace what is there.
+pub fn already_unpacked(pg_root: &Path, archive: &str) -> bool {
+    marker_path(pg_root, archive).exists()
+}
+
+fn marker_path(pg_root: &Path, archive: &str) -> PathBuf {
+    pg_root.join(".dbcenter-extensions").join(archive)
+}
+
+pub fn record_unpacked(pg_root: &Path, archive: &str) {
+    let marker = marker_path(pg_root, archive);
+    if let Some(parent) = marker.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    // Best effort: failing to write the marker costs an unnecessary unpack next
+    // time, which is the situation this is trying to improve, not a correctness
+    // problem worth failing an install over.
+    if let Err(e) = fs::write(&marker, archive) {
+        tracing::debug!("Could not record {} as unpacked: {}", archive, e);
+    }
+}
+
 fn install_extension_unix(
     db: &DBCenter,
     folder_name: &str,
@@ -1300,6 +1331,12 @@ fn install_extension_unix(
         file_prefix, ver_str, target_pg
     );
 
+    let pg_root = get_postgres_root(db)?;
+    if already_unpacked(&pg_root, &file_name) {
+        tracing::info!("{} is already unpacked into this PostgreSQL", file_name);
+        return Ok(());
+    }
+
     let base_dir = crate::binary::base_dir_for_version(db.postgres_version())?;
     let cache_dir = base_dir.join("cache").join("extensions");
     let tar_path = fetch_extension_asset(
@@ -1308,8 +1345,8 @@ fn install_extension_unix(
         &format!("{} {} for PostgreSQL {}", file_prefix, ver_str, target_pg),
     )?;
 
-    let pg_root = get_postgres_root(db)?;
     extract_postgis_tarball(&tar_path, &pg_root)?;
+    record_unpacked(&pg_root, &file_name);
 
     Ok(())
 }

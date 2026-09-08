@@ -288,3 +288,35 @@ fn a_custom_port_still_connects() {
     db.shutdown().unwrap();
     let _ = std::fs::remove_dir_all(&path);
 }
+
+#[test]
+fn an_extension_is_only_unpacked_once_per_postgresql() {
+    // The archive is unpacked into the PostgreSQL installation, which every
+    // database on that version shares, but "is it installed" was only asked of
+    // pg_extension, which is per-database. So each new database unpacked the
+    // whole archive again - fifteen of the sixteen seconds a pg_duckdb install
+    // took, for files that were already sitting there.
+    use dbcenter_core::extensions::{already_unpacked, record_unpacked};
+
+    let root = std::env::temp_dir().join("dbcenter_unpack_marker");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let archive = "pg_duckdb-1.1.1-linux-amd64-pg18.tar.gz";
+    assert!(
+        !already_unpacked(&root, archive),
+        "nothing has been unpacked yet"
+    );
+
+    record_unpacked(&root, archive);
+    assert!(already_unpacked(&root, archive), "and now it has");
+
+    // A different version has to be unpacked, not assumed present: the marker
+    // is per archive, so a version bump replaces what is there.
+    assert!(
+        !already_unpacked(&root, "pg_duckdb-9.9.9-linux-amd64-pg18.tar.gz"),
+        "a different version is not the same archive"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
