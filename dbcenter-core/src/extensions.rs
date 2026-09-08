@@ -616,7 +616,7 @@ const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
     ),
     (
         "postgis-3.6.1-linux-amd64-pg18.tar.gz",
-        "3dd6e919976051c4371b1f38b94991c3253e17ec2f7462751f232b7c1572d551",
+        "a23f85e06f1fbb319ec7a03959cee31fa1965cc6dc439520835b559001b86c02",
     ),
     (
         "postgis-3.6.1-windows-amd64-pg13.zip",
