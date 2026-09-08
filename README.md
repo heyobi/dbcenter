@@ -56,10 +56,15 @@ db.Collection("users").InsertOne(map[string]interface{}{
 PostGIS, pgvector and pgsql-http are not part of the PostgreSQL distribution, so
 they are downloaded on first use and unpacked into the local installation.
 
-They come from this repository's GitHub Releases. There used to be a CDN run by
+They come from [dbcenter-extensions](https://github.com/heyobi/dbcenter-extensions),
+a public repository holding nothing but the builds. There used to be a CDN run by
 the project, with a fixed `?token=admin-secret-key` compiled into every client -
 a shared secret in everyone's binary, guarding a service that had to stay up or
 the feature stopped existing. GitHub Releases needs no secret and no server.
+
+The assets are in a separate repository because this one is private, and GitHub
+serves release assets from a private repository only to authenticated callers -
+which a user's machine, downloading anonymously, is not.
 
 Because these archives are loaded into the database process, a substituted one
 is arbitrary code execution. Every download is checked against a SHA-256 pinned
@@ -79,10 +84,17 @@ account publishing it is compromised. An asset with no pinned digest is refused.
 2. Name it `<name>-<version>-<platform>-pg<major>.<tar.gz|zip>`, e.g.
    `vector-0.8.1-linux-amd64-pg18.tar.gz`. The name is the whole address -
    release assets are a flat namespace.
-3. Upload it to the `extensions-v1` release.
+3. Upload it to the `extensions-v1` release on `dbcenter-extensions`.
 4. Add its `sha256sum` to `EXTENSION_CHECKSUMS` and record the PostgreSQL major
    version range in the table for that extension. Skipping this leaves the asset
-   unusable, which is the intended failure direction.
+   unusable, which is the intended failure direction, and
+   `every_offered_version_has_a_published_asset` fails if a table offers a
+   version with no asset behind it.
+
+Check that an archive actually contains a loadable module - `.so` on Linux,
+`.dll` on Windows - before publishing it. One pgvector build shipped
+`lib/vector.lib`, an import library, and passed every archive-integrity check
+while being unusable: it installed cleanly and then failed at CREATE EXTENSION.
 
 A build for an older major version is not a fallback: PostgreSQL stamps every
 loadable module with the major version it was compiled against and refuses to
