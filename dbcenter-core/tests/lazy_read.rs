@@ -346,3 +346,32 @@ fn synced_parquet_has_a_column_per_field() {
     let found = collection.find(None).unwrap();
     assert_eq!(found.len(), 2, "{found:?}");
 }
+
+#[test]
+fn an_updated_row_survives_being_synced() {
+    // Updating a row goes through the view's INSTEAD OF trigger, which marks the
+    // id in _dels so the version still in _base is hidden, and puts the new
+    // version in _adds. Syncing then moves that new version into _base - and
+    // left the marker behind, so the view went on hiding a row that was now the
+    // current one. Update, sync, and the row was gone from the collection.
+    let (db, _counting, engine) = setup("updates");
+    let collection = db.collection("accounts");
+    collection
+        .insert_many(&[json!({"name": "ada", "balance": 100})])
+        .unwrap();
+    engine.sync_table("accounts", 10_000).unwrap();
+
+    db.query("UPDATE accounts SET balance = 250 WHERE name = 'ada'", &[])
+        .unwrap();
+    assert_eq!(collection.count(None).unwrap(), 1, "before the sync");
+
+    engine.sync_table("accounts", 10_000).unwrap();
+
+    assert_eq!(
+        collection.count(None).unwrap(),
+        1,
+        "the row is still there after syncing the update"
+    );
+    let rows = db.query("SELECT balance FROM accounts", &[]).unwrap();
+    assert_eq!(rows[0]["balance"], json!(250), "and it is the new value");
+}

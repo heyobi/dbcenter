@@ -506,6 +506,16 @@ impl SyncEngine {
         // PostgreSQL ran out of memory building it ("Failed on request of size
         // 40 in memory context MessageContext"). One statement per batch is
         // still far fewer than the two per row this replaced.
+        // Updating a row marks its id in _dels, because that is how the view
+        // hides the version still sitting in _base. Once the new version has
+        // been moved into _base the marker has to go with it, or the view goes
+        // on hiding a row that is now the current one - an update followed by a
+        // sync made the row disappear from the collection entirely.
+        //
+        // Only for the ids being moved. An id in _dels with nothing in _adds is
+        // a genuine deletion and must stay.
+        let clear_dels = format!(r#"DELETE FROM "{}_dels" WHERE id = ANY($1)"#, table_name);
+
         const MOVE_CHUNK: usize = 10_000;
         for chunk in ids.chunks(MOVE_CHUNK) {
             transaction.execute(&move_to_base, &[&chunk]).map_err(|e| {
@@ -514,11 +524,20 @@ impl SyncEngine {
                     crate::utils::format_postgres_error(&e)
                 ))
             })?;
+            transaction.execute(&clear_dels, &[&chunk]).map_err(|e| {
+                crate::error::DBCenterError::QueryError(format!(
+                    "Failed to clear delete markers for synced rows: {}",
+                    crate::utils::format_postgres_error(&e)
+                ))
+            })?;
         }
 
         transaction.commit().map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
+
+        // A new delta object changes which deduplication the view needs.
+        self.refresh_columnar_view(table_name);
 
         Ok(row_count)
     }
@@ -795,6 +814,10 @@ impl SyncEngine {
                 "Vacuum Complete. {} old files deleted.",
                 files_to_delete.len()
             );
+
+            // A compaction replaces the deltas with a single base, which is the
+            // largest change the view's definition can see.
+            self.refresh_columnar_view(table_name);
             Ok(())
         })();
 
@@ -966,6 +989,45 @@ impl SyncEngine {
         }
 
         Ok(())
+    }
+
+    /// Rebuild the columnar view, but only if there is already one to rebuild.
+    ///
+    /// The view has to be regenerated whenever the set of Parquet objects
+    /// changes, because which deduplication it needs depends on that set: one
+    /// built when there was a single delta does no deduplication, which stops
+    /// being true the moment a second delta arrives carrying an updated row.
+    /// A stale view is not a slow view, it is a wrong one.
+    ///
+    /// Silent when pg_duckdb is not installed or no view has been published:
+    /// this runs after every sync, and a database that never asked for the
+    /// columnar path should not pay for it or hear about it.
+    fn refresh_columnar_view(&self, table_name: &str) {
+        let view = format!("{}_columnar", table_name);
+        let exists = {
+            let mut client = self.db.get_client();
+            client
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_views WHERE viewname = $1)",
+                    &[&view],
+                )
+                .map(|row| row.get::<_, bool>(0))
+                .unwrap_or(false)
+        };
+        if !exists {
+            return;
+        }
+        if let Err(e) = self.ensure_columnar_view(table_name) {
+            // Worth saying out loud: the view is still there and still
+            // answering, with a definition that may no longer match what is in
+            // storage.
+            tracing::warn!(
+                "Could not refresh the columnar view for '{}', so it may be \
+                 reading the wrong set of files: {}",
+                table_name,
+                e
+            );
+        }
     }
 
     /// Publish a view that reads this table's Parquet directly, through DuckDB.

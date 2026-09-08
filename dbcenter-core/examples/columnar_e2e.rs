@@ -112,5 +112,37 @@ fn main() {
         a.len()
     );
 
+    // An update to an already-synced row is the case the view's deduplication
+    // exists for: the row goes back into _adds and the next sync writes it to a
+    // second delta, so the same id is now in two files. A view built when there
+    // was one file does no deduplication, and would count that row twice.
+    println!("\nupdating one row and syncing again...");
+    let id: String = db
+        .query("SELECT id::text AS id FROM readings LIMIT 1", &[])
+        .unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    db.query(
+        &format!("UPDATE readings SET sensor = 'sensor-updated' WHERE id = '{id}'::uuid"),
+        &[],
+    )
+    .unwrap();
+    engine.sync_table("readings", 1000).unwrap();
+
+    let count = |sql: &str| -> i64 { db.query(sql, &[]).unwrap()[0]["n"].as_i64().unwrap() };
+    let total_pg = count("SELECT count(*) AS n FROM readings");
+    let total_col = count("SELECT count(*) AS n FROM readings_columnar");
+    println!("  postgres {total_pg} rows, columnar {total_col} rows");
+    assert_eq!(
+        total_pg, total_col,
+        "the updated row is in two parquet files; the columnar view must not count it twice"
+    );
+
+    let updated =
+        count("SELECT count(*) AS n FROM readings_columnar WHERE sensor = 'sensor-updated'");
+    assert_eq!(updated, 1, "the columnar view should show the new value");
+    println!("  the update is visible and counted once");
+
     db.shutdown().unwrap();
 }
