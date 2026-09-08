@@ -16,6 +16,24 @@ impl<'a> Collection<'a> {
         quote_ident(&self.name)
     }
 
+    /// Where writes go.
+    ///
+    /// In delta mode the collection is a view with an INSTEAD OF trigger that
+    /// routes inserts into `<name>_adds`. Going through it costs a plpgsql call
+    /// per row - over half the time of a delta insert, measured - and lands in
+    /// exactly the same place. Writing straight to `_adds` skips that; the
+    /// trigger stays for anyone inserting into the view with their own SQL.
+    ///
+    /// The defaults the trigger fills in are column defaults on `_adds` too, so
+    /// the row comes out the same.
+    fn write_table(&self) -> String {
+        if self.db.config().multi_user_sync_mode {
+            quote_ident(&format!("{}_adds", self.name))
+        } else {
+            self.table()
+        }
+    }
+
     pub fn new(db: &'a DBCenter, name: &str) -> Self {
         let collection = Self {
             db,
@@ -71,6 +89,7 @@ impl<'a> Collection<'a> {
         };
 
         let mut client = self.db.get_client();
+        let mut schema_changed = false;
 
         // We need to sync schema for ALL target tables
         for table in target_tables {
@@ -149,19 +168,21 @@ impl<'a> Collection<'a> {
                     existing_cols.insert(key.clone());
                 }
                 self.db.remember_columns(&table, existing_cols);
+                schema_changed = true;
             }
         }
 
-        // Special handling for Delta Views:
-        // When we add columns to base/adds, the VIEW (SELECT * ...) might need recreating
-        // depending on Postgres version/behavior (early versions didn't auto-update views on SELECT *).
-        // Postgres views generally capture the * at creation time.
-        // So we MUST recreate the Delta View if we added columns.
-        // Drop client to release Mutex lock before calling ensure_delta_tables (which acquires lock)
+        // PostgreSQL freezes `SELECT *` when a view is created, so a column added
+        // to the delta tables is invisible through the view until it is rebuilt.
+        //
+        // Only when one actually was. This ran on every insert, and rebuilding
+        // means about a dozen DDL statements - three tables, two GIN indexes, the
+        // view and three trigger functions - each taking catalogue locks. On a
+        // collection with a two-million-row base it cost 3.3 of the 4.0 seconds a
+        // twenty-thousand-row insert took.
         drop(client);
 
-        if delta_mode {
-            // Simply call ensure_delta_tables again? It does CREATE OR REPLACE VIEW.
+        if delta_mode && schema_changed {
             crate::delta_manager::DeltaManager::ensure_delta_tables(self.db, &self.name)?;
         }
 
@@ -200,7 +221,7 @@ impl<'a> Collection<'a> {
 
         let sql = format!(
             r#"INSERT INTO {} ({}) VALUES ({}) RETURNING id::text"#,
-            self.table(),
+            self.write_table(),
             cols.join(", "),
             vals.join(", ")
         );
@@ -280,7 +301,7 @@ impl<'a> Collection<'a> {
 
             let sql = format!(
                 r#"INSERT INTO {} ({}) VALUES {} RETURNING id::text"#,
-                self.table(),
+                self.write_table(),
                 col_names_sql,
                 values_list.join(", ")
             );
