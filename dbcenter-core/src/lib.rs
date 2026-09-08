@@ -47,6 +47,29 @@ static INSTANCES: Lazy<Mutex<HashMap<PathBuf, Arc<DBCenter>>>> =
 /// waits. Nothing here depends on session state surviving between calls - the
 /// one `SET` in the codebase and every transaction are held on a single guard -
 /// so which connection a caller gets does not matter.
+/// How many connections the pool holds, and opening that many.
+fn open_pool_connections(conn_str: &str) -> Result<Vec<Client>> {
+    let pool_size = std::env::var("DBCENTER_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        })
+        .clamp(1, 32);
+
+    let mut clients = Vec::with_capacity(pool_size);
+    for _ in 0..pool_size {
+        clients.push(
+            Client::connect(conn_str, NoTls)
+                .map_err(|e| DBCenterError::ConnectionError(e.to_string()))?,
+        );
+    }
+    tracing::debug!("Opened {} connections", clients.len());
+    Ok(clients)
+}
+
 pub(crate) struct ClientPool {
     idle: Mutex<Vec<Client>>,
     available: Condvar,
@@ -58,6 +81,19 @@ impl ClientPool {
             idle: Mutex::new(clients),
             available: Condvar::new(),
         }
+    }
+
+    /// Throw away every pooled connection and put these in their place.
+    ///
+    /// Restarting the server leaves every connection in the pool pointing at a
+    /// process that no longer exists, and a pooled connection is only found to
+    /// be dead by the query that fails on it. Handing the pool a fresh set is
+    /// the only way a restart stays invisible to callers.
+    fn replace_all(&self, clients: Vec<Client>) {
+        let mut idle = self.idle.lock().unwrap_or_else(|e| e.into_inner());
+        idle.clear();
+        idle.extend(clients);
+        self.available.notify_all();
     }
 
     fn get(&self) -> PooledClient<'_> {
@@ -373,23 +409,7 @@ impl DBCenter {
         // queue behind one another; the engine happily serves more than one and
         // the library was the thing keeping it to a single core.
         let conn_str = pg_process.connection_string(&config);
-        let pool_size = std::env::var("DBCENTER_POOL_SIZE")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4)
-            })
-            .clamp(1, 32);
-
-        let mut clients = Vec::with_capacity(pool_size);
-        for _ in 0..pool_size {
-            clients.push(
-                Client::connect(&conn_str, NoTls)
-                    .map_err(|e| DBCenterError::ConnectionError(e.to_string()))?,
-            );
-        }
+        let clients = open_pool_connections(&conn_str)?;
         tracing::debug!("Opened {} connections", clients.len());
 
         let db_center = Arc::new(DBCenter {
@@ -789,6 +809,39 @@ impl DBCenter {
         if let Ok(mut cache) = self.schema_cache.lock() {
             cache.remove(table);
         }
+    }
+
+    /// Stop PostgreSQL and start it again with the configuration on disk.
+    ///
+    /// `shared_preload_libraries` is only read at startup, so an extension that
+    /// needs it - pg_duckdb is the one DBCenter installs - cannot be turned on
+    /// by any amount of reloading. Rather than hand the user a "now restart
+    /// your database" instruction for something they never started by hand,
+    /// the install does the restart itself.
+    ///
+    /// The port is preserved, so a client that was given a connection string
+    /// before the restart can use the same one after it.
+    pub fn restart(&self) -> Result<()> {
+        let mut process = self.process.lock().map_err(|_| DBCenterError::LockError)?;
+
+        tracing::info!("Restarting PostgreSQL at {:?}", self.path);
+        process.shutdown(&self.config)?;
+
+        // Reconnecting before the old postmaster has released the socket gets a
+        // connection to a server that is on its way out.
+        let restarted = process::PostgresProcess::start(&self.config)?;
+        let conn_str = restarted.connection_string(&self.config);
+        *process = restarted;
+        drop(process);
+
+        self.pool.replace_all(open_pool_connections(&conn_str)?);
+        self.schema_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
+        tracing::info!("PostgreSQL restarted");
+        Ok(())
     }
 
     pub(crate) fn get_client(&self) -> PooledClient<'_> {

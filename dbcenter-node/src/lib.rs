@@ -56,7 +56,7 @@ impl DBCenter {
         Ok(VectorStore {
             inner: store_static,
             _parent: self.inner.clone(),
-            dimension: dimension,
+            dimension,
         })
     }
 }

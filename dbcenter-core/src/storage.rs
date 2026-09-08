@@ -15,6 +15,45 @@ pub struct LockFile {
 /// Trait for "Dumb Storage Adapter"
 /// Supports uploading blobs (files) and listing/downloading.
 /// Now supports locking for concurrency control.
+/// What DuckDB needs to read this store itself.
+///
+/// The whole point of routing analytical reads through DuckDB is that the read
+/// happens where the data is, instead of being pulled through DBCenter and
+/// materialised into PostgreSQL first. So beyond bytes, an adapter has to be
+/// able to say two things: the name DuckDB knows an object by, and how to
+/// authenticate for it. An adapter that cannot - because it is backed by
+/// something DuckDB has no filesystem for - returns `None` and the caller falls
+/// back to reading through the adapter.
+#[derive(Debug, Clone)]
+pub struct DuckDbAccess {
+    /// Prefix an object key hangs off, with no trailing slash. Either an
+    /// `s3://bucket/prefix` URL or an absolute local directory.
+    pub base_url: String,
+    /// Absent for a local directory, which needs no credentials.
+    pub credentials: Option<S3Credentials>,
+}
+
+impl DuckDbAccess {
+    /// The URL DuckDB should be given for one object key.
+    pub fn url_for(&self, key: &str) -> String {
+        format!("{}/{}", self.base_url, key.trim_start_matches('/'))
+    }
+}
+
+/// S3 credentials in the shape DuckDB's secret manager takes them.
+#[derive(Debug, Clone)]
+pub struct S3Credentials {
+    pub key_id: String,
+    pub secret: String,
+    pub region: String,
+    pub endpoint: String,
+    pub session_token: Option<String>,
+    /// `path` for MinIO and anything else that wants `endpoint/bucket/key`;
+    /// `vhost` for the bucket-in-the-hostname form.
+    pub url_style: &'static str,
+    pub use_ssl: bool,
+}
+
 pub trait StorageAdapter {
     fn upload(&self, key: &str, data: &[u8]) -> Result<()>;
     fn download(&self, key: &str) -> Result<Vec<u8>>;
@@ -28,6 +67,14 @@ pub trait StorageAdapter {
     fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool>;
     fn unlock(&self, key: &str, worker_id: &str) -> Result<()>;
     fn rename(&self, src: &str, dest: &str) -> Result<()>;
+
+    /// How DuckDB can reach this store without going through the adapter.
+    ///
+    /// Defaults to `None`, which means "read it through me" - correct but slow,
+    /// and the reason it is worth overriding.
+    fn duckdb_access(&self) -> Option<DuckDbAccess> {
+        None
+    }
 }
 
 /// Wraps another adapter and counts the bytes it actually pulls down.
@@ -115,6 +162,14 @@ impl StorageAdapter for CountingStorage {
 
     fn rename(&self, src: &str, dest: &str) -> Result<()> {
         self.inner.rename(src, dest)
+    }
+
+    fn duckdb_access(&self) -> Option<DuckDbAccess> {
+        // Deliberately none. This wrapper exists to count the bytes a read
+        // pulls down, and a read DuckDB performs for itself goes nowhere near
+        // the counter - reporting an access here would silently turn the
+        // measurement into zero.
+        None
     }
 }
 
@@ -334,5 +389,17 @@ impl StorageAdapter for LocalStorageAdapter {
         let dest_path = self.root_path.join(dest);
         fs::rename(src_path, dest_path).map_err(crate::error::DBCenterError::IoError)?;
         Ok(())
+    }
+
+    fn duckdb_access(&self) -> Option<DuckDbAccess> {
+        // DuckDB opens local paths directly, so there is nothing to authenticate.
+        Some(DuckDbAccess {
+            base_url: self
+                .root_path
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string(),
+            credentials: None,
+        })
     }
 }

@@ -566,6 +566,36 @@ impl StorageAdapter for S3StorageAdapter {
         Self::check(response, &format!("Copy of '{}' to '{}'", src, dest))?;
         self.delete(src)
     }
+
+    fn duckdb_access(&self) -> Option<crate::storage::DuckDbAccess> {
+        let mut base = format!("s3://{}", self.config.bucket);
+        if !self.prefix.is_empty() {
+            base.push('/');
+            base.push_str(&self.prefix);
+        }
+        Some(crate::storage::DuckDbAccess {
+            base_url: base,
+            credentials: Some(crate::storage::S3Credentials {
+                key_id: self.config.access_key.clone(),
+                secret: self.config.secret_key.clone(),
+                region: self.config.region.clone(),
+                endpoint: self
+                    .config
+                    .endpoint
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .trim_end_matches('/')
+                    .to_string(),
+                session_token: self.config.session_token.clone(),
+                url_style: if self.config.path_style {
+                    "path"
+                } else {
+                    "vhost"
+                },
+                use_ssl: self.config.endpoint.starts_with("https://"),
+            }),
+        })
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,10 @@ use crate::error::Result;
 use crate::storage::StorageAdapter;
 use crate::vfs::RemoteParquetReader;
 use crate::DBCenter;
-use arrow::array::{Array, StringArray};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Float64Builder, Int64Array,
+    Int64Builder, StringArray, StringBuilder,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 // use bytes::Bytes;
@@ -14,6 +17,49 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 // use std::sync::atomic::{AtomicBool, Ordering};
 // use serde::ser::Error;
+
+/// One table column, and how it is written to Parquet.
+///
+/// Everything used to be flattened into a single `data` column holding the
+/// document as a JSON string, which left Parquet with nothing to be columnar
+/// about: a query that wanted one field still read every byte of every document
+/// and parsed JSON out of it. Measured over five million rows, that made reads
+/// off object storage 1.8x *slower* than the PostgreSQL they were meant to beat,
+/// at 2.1x the stored bytes. One column per field is what makes the format do
+/// its job - see docs/columnar-reads.md for the numbers.
+struct SyncColumn {
+    name: String,
+    arrow: DataType,
+    /// How the column is read out of PostgreSQL, already quoted.
+    select: String,
+}
+
+impl SyncColumn {
+    /// Map a PostgreSQL type to the Arrow type it is written as.
+    ///
+    /// Only the types the collection API actually produces are given a native
+    /// Arrow type: document fields become BIGINT, DOUBLE PRECISION, BOOLEAN,
+    /// TEXT or JSONB, depending on what the JSON value was. Everything else -
+    /// uuid, timestamps, numeric, arrays, and any type a user made by hand -
+    /// goes to text, which is lossless and still gets column pruning,
+    /// dictionary compression and row-group statistics. Timestamps in
+    /// particular lose nothing by it: ISO-8601 sorts in the same order as the
+    /// instant it names, so a range filter can still skip row groups unread.
+    fn plan(name: &str, udt: &str) -> Self {
+        let quoted = crate::query::quote_ident(name);
+        let (arrow, select) = match udt {
+            "int2" | "int4" | "int8" => (DataType::Int64, format!("{}::bigint", quoted)),
+            "float4" | "float8" => (DataType::Float64, format!("{}::double precision", quoted)),
+            "bool" => (DataType::Boolean, quoted.clone()),
+            _ => (DataType::Utf8, format!("{}::text", quoted)),
+        };
+        SyncColumn {
+            name: name.to_string(),
+            arrow,
+            select: format!("{} AS {}", select, quoted),
+        }
+    }
+}
 
 pub struct SyncEngine {
     db: Arc<DBCenter>,
@@ -29,42 +75,58 @@ pub enum SyncMode {
 
 /// Turn a Parquet row from a synced table into the document it came from.
 ///
-/// The synced schema is (id, data, created_at, updated_at) with everything cast
-/// to text, and `data` holds the document as JSON. This used to emit `col_0`,
-/// `data`, `col_2`, `col_3`, which no caller could do anything with.
+/// This reads the same shape [`arrow_row_to_document`] does - one column per
+/// document field - through the lower-level record API the smart reader uses.
+/// A `data` column holding a JSON object is expanded, which is how files
+/// written by earlier versions, and the geo layout, still read back.
 fn row_to_document(row: &parquet::record::Row) -> serde_json::Value {
+    use parquet::record::Field;
+    use serde_json::Value;
+
     let mut doc = serde_json::Map::new();
-    let mut fields = serde_json::Map::new();
+    let mut nested: Option<serde_json::Map<String, Value>> = None;
 
     for (name, value) in row.get_column_iter() {
-        let text = value.to_string();
-        let text = text.trim_matches('"');
-        match name.as_str() {
-            "data" => {
-                // Parquet's Display escapes the JSON it holds.
-                let unescaped = text.replace("\\\"", "\"");
-                if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&unescaped) {
-                    fields = map;
+        // Values carry their type here, so a bigint comes back a JSON number
+        // rather than a string of digits, which is what the document had.
+        let json = match value {
+            Field::Null => continue,
+            Field::Bool(b) => Value::from(*b),
+            Field::Byte(v) => Value::from(*v),
+            Field::Short(v) => Value::from(*v),
+            Field::Int(v) => Value::from(*v),
+            Field::Long(v) => Value::from(*v),
+            Field::UByte(v) => Value::from(*v),
+            Field::UShort(v) => Value::from(*v),
+            Field::UInt(v) => Value::from(*v),
+            Field::ULong(v) => Value::from(*v),
+            Field::Float(v) => Value::from(*v),
+            Field::Double(v) => Value::from(*v),
+            Field::Str(text) => Value::from(text.as_str()),
+            other => Value::from(other.to_string()),
+        };
+
+        if name == "data" {
+            if let Value::String(text) = &json {
+                if let Ok(Value::Object(map)) = serde_json::from_str(text) {
+                    nested = Some(map);
+                    continue;
                 }
             }
-            other => {
-                doc.insert(
-                    other.to_string(),
-                    serde_json::Value::String(text.to_string()),
-                );
-            }
+        }
+        doc.insert(name.to_string(), json);
+    }
+
+    if let Some(map) = nested {
+        for (k, v) in map {
+            doc.entry(k).or_insert(v);
         }
     }
 
-    // The document's own fields sit at the top level, the way find() returns
-    // them, with the row's id alongside.
-    for (k, v) in fields {
-        doc.insert(k, v);
-    }
     if let Some(id) = doc.get("id").cloned() {
         doc.insert("_id".to_string(), id);
     }
-    serde_json::Value::Object(doc)
+    Value::Object(doc)
 }
 
 /// Add a column for a restored document field if the table has not got one.
@@ -108,49 +170,163 @@ fn ensure_restored_column(
     Ok(true)
 }
 
+/// Turn one row of an Arrow batch into the document it came from.
+///
+/// Columns are read by name and Arrow type rather than by position. The old
+/// files had a fixed four-column shape, so position was enough; now that a file
+/// carries one column per document field, position means nothing and a file
+/// written before a field existed simply has fewer columns.
+///
+/// A `data` column holding a JSON object is expanded into the document, which
+/// is both how files written by earlier versions are read and how the geo and
+/// raw-JSONB layouts still store their contents.
+fn arrow_row_to_document(
+    batch: &RecordBatch,
+    i: usize,
+) -> (
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Value,
+) {
+    use serde_json::Value;
+    let mut doc = serde_json::Map::new();
+    let mut data = Value::Null;
+
+    for (idx, field) in batch.schema().fields().iter().enumerate() {
+        let column = batch.column(idx);
+        if column.is_null(i) {
+            continue;
+        }
+        let value = match field.data_type() {
+            DataType::Int64 => column
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| Value::from(a.value(i))),
+            DataType::Float64 => column
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .map(|a| Value::from(a.value(i))),
+            DataType::Boolean => column
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .map(|a| Value::from(a.value(i))),
+            _ => column
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .map(|a| Value::from(a.value(i))),
+        };
+        let Some(value) = value else { continue };
+
+        if field.name() == "data" {
+            // Kept as it was found rather than folded into the document. The
+            // geo layout genuinely stores its contents here, and a file written
+            // before this was columnar has the whole document here - both want
+            // `data` put back as `data`.
+            data = match &value {
+                Value::String(text) => serde_json::from_str(text).unwrap_or(value.clone()),
+                _ => value,
+            };
+            continue;
+        }
+        doc.insert(field.name().to_string(), value);
+    }
+
+    // A file from before the columnar change, or a geo row, carries the
+    // document inside `data`. Those fields are restored as columns too, so the
+    // collection API finds them where it puts them.
+    if let Value::Object(map) = &data {
+        for (k, v) in map {
+            doc.entry(k.clone()).or_insert(v.clone());
+        }
+    }
+
+    (doc, data)
+}
+
 impl SyncEngine {
     pub fn new(db: Arc<DBCenter>, storage: Arc<Box<dyn StorageAdapter + Send + Sync>>) -> Self {
         Self { db, storage }
     }
 
-    /// Helper to convert Postgres rows to Arrow RecordBatch
-    /// Assumes all columns are cast to TEXT in the query.
-    fn rows_to_record_batch(&self, rows: Vec<Row>) -> Result<RecordBatch> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Utf8, false),
-            Field::new("data", DataType::Utf8, true),
-            Field::new("created_at", DataType::Utf8, true),
-            Field::new("updated_at", DataType::Utf8, true),
-        ]));
+    /// The columns a table's rows are written as, in table order.
+    ///
+    /// Read from the catalog rather than assumed, because the collection API
+    /// adds a column the first time a document carries a new field - so the
+    /// shape of a table is whatever its documents have made it.
+    fn sync_columns(&self, table: &str) -> Result<Vec<SyncColumn>> {
+        let mut client = self.db.get_client();
+        let rows = client
+            .query(
+                "SELECT column_name, udt_name FROM information_schema.columns \
+                 WHERE table_name = $1 ORDER BY ordinal_position",
+                &[&table],
+            )
+            .map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
 
-        let mut ids = Vec::new();
-        let mut datas = Vec::new();
-        let mut created_ats = Vec::new();
-        let mut updated_ats = Vec::new();
+        let columns: Vec<SyncColumn> = rows
+            .iter()
+            .map(|r| {
+                let name: String = r.get("column_name");
+                let udt: String = r.get("udt_name");
+                SyncColumn::plan(&name, &udt)
+            })
+            .collect();
 
-        for row in rows {
-            // Since we cast to ::text in SQL, get("...") returns Option<String> or String
-            let id: String = row.get("id");
-            let data: Option<String> = row.get("data");
-            let created_at: Option<String> = row.get("created_at");
-            let updated_at: Option<String> = row.get("updated_at");
+        if columns.is_empty() {
+            return Err(crate::error::DBCenterError::QueryError(format!(
+                "Table '{}' has no columns to sync",
+                table
+            )));
+        }
+        Ok(columns)
+    }
 
-            ids.push(id);
-            datas.push(data);
-            created_ats.push(created_at);
-            updated_ats.push(updated_at);
+    /// Turn PostgreSQL rows into an Arrow batch with one column per table column.
+    fn rows_to_record_batch(&self, columns: &[SyncColumn], rows: Vec<Row>) -> Result<RecordBatch> {
+        let schema = Arc::new(Schema::new(
+            columns
+                .iter()
+                .map(|c| Field::new(&c.name, c.arrow.clone(), true))
+                .collect::<Vec<_>>(),
+        ));
+
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(columns.len());
+        for (idx, column) in columns.iter().enumerate() {
+            let array: ArrayRef = match column.arrow {
+                DataType::Int64 => {
+                    let mut b = Int64Builder::with_capacity(rows.len());
+                    for row in &rows {
+                        b.append_option(row.get::<_, Option<i64>>(idx));
+                    }
+                    Arc::new(b.finish())
+                }
+                DataType::Float64 => {
+                    let mut b = Float64Builder::with_capacity(rows.len());
+                    for row in &rows {
+                        b.append_option(row.get::<_, Option<f64>>(idx));
+                    }
+                    Arc::new(b.finish())
+                }
+                DataType::Boolean => {
+                    let mut b = BooleanBuilder::with_capacity(rows.len());
+                    for row in &rows {
+                        b.append_option(row.get::<_, Option<bool>>(idx));
+                    }
+                    Arc::new(b.finish())
+                }
+                _ => {
+                    let mut b = StringBuilder::new();
+                    for row in &rows {
+                        b.append_option(row.get::<_, Option<String>>(idx));
+                    }
+                    Arc::new(b.finish())
+                }
+            };
+            arrays.push(array);
         }
 
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(StringArray::from(ids)),
-                Arc::new(StringArray::from(datas)),
-                Arc::new(StringArray::from(created_ats)),
-                Arc::new(StringArray::from(updated_ats)),
-            ],
-        )
-        .map_err(|e| {
+        RecordBatch::try_new(schema, arrays).map_err(|e| {
             crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
                 e.to_string(),
             ))
@@ -176,26 +352,22 @@ impl SyncEngine {
             return Ok(0);
         }
 
-        // 2. Fetch rows
-        // We cast EVERYTHING to text to simplify Arrow generic handling and strictly control format
-        // The document lives in the row's own columns: inserts go through the
-        // relational path, which adds a column per field, and leaves the `data`
-        // JSONB column null. Reading only `data` therefore synced ids and
-        // timestamps and nothing else - every document written through the
-        // collection API was lost on the way to object storage.
+        // 2. Fetch rows, one Parquet column per table column.
         //
-        // Take the whole row as JSON instead, minus the bookkeeping columns, and
-        // merge in whatever `data` did hold, for rows written as JSONB directly.
+        // This used to collapse the whole document into a single JSON string,
+        // which is what a document store does and exactly what Parquet is not
+        // for. The columns are read from the catalog because the collection API
+        // grows them as documents introduce fields.
+        let columns = self.sync_columns(&adds_table)?;
         let sql_fetch = format!(
-            r#"SELECT id::text,
-                      ((to_jsonb(t) - 'id' - 'data' - 'created_at' - 'updated_at')
-                       || COALESCE(t.data, '{{}}'::jsonb))::text AS data,
-                      created_at::text,
-                      updated_at::text
-               FROM "{}" t
-               ORDER BY created_at ASC
-               LIMIT {}"#,
-            adds_table, limit
+            r#"SELECT {} FROM "{}" t ORDER BY created_at ASC LIMIT {}"#,
+            columns
+                .iter()
+                .map(|c| c.select.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            adds_table,
+            limit
         );
         let rows = {
             let mut client = self.db.get_client();
@@ -209,7 +381,7 @@ impl SyncEngine {
         }
 
         // 3. Convert to Arrow
-        let batch = self.rows_to_record_batch(rows.clone())?; // Clone needed because we iterate rows later
+        let batch = self.rows_to_record_batch(&columns, rows.clone())?; // Clone needed because we iterate rows later
 
         // 4. Write to Parquet (In-Memory)
         let mut buffer = Vec::new();
@@ -252,52 +424,66 @@ impl SyncEngine {
         );
 
         // 6. Compact / Cleanup (Move to Base)
+        //
+        // Every column, not just (id, data, created_at, updated_at). Listing
+        // four columns here dropped the document on the way from _adds to
+        // _base: the fields a document was inserted with live in the row's own
+        // columns, so a synced row arrived in _base with its id and timestamps
+        // and nothing else. The Parquet was written correctly and the local
+        // copy was emptied, which is the more dangerous direction of the two.
+        //
+        // Doing the move in SQL also means one statement instead of two per
+        // row, and no round trip through JSON to get there.
         let mut client = self.db.get_client();
         let mut transaction = client.transaction().map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
 
-        for row in &rows {
-            let id: String = row.get("id");
-            // data string is JSON string. We need JSONB value for query param?
-            // Or we can cast $2::jsonb in SQL.
-            let data_str: Option<String> = row.get("data");
-            let data_val = match data_str {
-                Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
-                None => serde_json::Value::Null,
-            };
-
-            let upsert_base = format!(
-                r#"
-                INSERT INTO "{}_base" (id, data, created_at, updated_at)
-                VALUES ($1::uuid, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (id) DO UPDATE SET 
-                    data = EXCLUDED.data, 
-                    updated_at = EXCLUDED.updated_at
-                "#,
-                table_name
-            );
-
-            let id_uuid = uuid::Uuid::parse_str(&id).unwrap();
-            transaction
-                .execute(&upsert_base, &[&id_uuid, &data_val])
-                .map_err(|e| {
+        let ids: Vec<uuid::Uuid> = rows
+            .iter()
+            .map(|row| {
+                let id: String = row.get("id");
+                uuid::Uuid::parse_str(&id).map_err(|e| {
                     crate::error::DBCenterError::QueryError(format!(
-                        "Failed to move to base: {}",
-                        e
+                        "Row in '{}' has an id that is not a uuid ({}): {}",
+                        adds_table, id, e
                     ))
-                })?;
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-            let delete_adds = format!("DELETE FROM \"{}_adds\" WHERE id = $1::uuid", table_name);
-            transaction
-                .execute(&delete_adds, &[&id_uuid])
-                .map_err(|e| {
-                    crate::error::DBCenterError::QueryError(format!(
-                        "Failed to delete from adds: {}",
-                        e
-                    ))
-                })?;
-        }
+        // _base and _adds are created together and altered together, so their
+        // column lists match and the names can be reused for both sides.
+        let names: Vec<String> = columns
+            .iter()
+            .map(|c| crate::query::quote_ident(&c.name))
+            .collect();
+        let assignments: Vec<String> = names
+            .iter()
+            .filter(|n| n.as_str() != "\"id\"")
+            .map(|n| format!("{n} = EXCLUDED.{n}"))
+            .collect();
+
+        let base_table = format!("{}_base", table_name);
+        let move_to_base = format!(
+            r#"WITH moved AS (
+                   DELETE FROM "{adds}" WHERE id = ANY($1) RETURNING *
+               )
+               INSERT INTO "{base}" ({cols})
+               SELECT {cols} FROM moved
+               ON CONFLICT (id) DO UPDATE SET {assign}"#,
+            adds = adds_table,
+            base = base_table,
+            cols = names.join(", "),
+            assign = assignments.join(", "),
+        );
+
+        transaction.execute(&move_to_base, &[&ids]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!(
+                "Failed to move synced rows to base: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
 
         transaction.commit().map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
@@ -459,9 +645,23 @@ impl SyncEngine {
             }
 
             // 5. Export _base (Postgres) to a new BASE Parquet file
+            // The same one-column-per-field shape the incremental path writes.
+            // Selecting only (id, data, created_at, updated_at) here had the
+            // second half of the bug that cost the delta files their contents:
+            // for a table written through the collection API the document lives
+            // in the row's own columns and `data` is null, so a compaction
+            // replaced every delta with a base file holding ids and timestamps
+            // and no document at all.
+            let base_table = format!("{}_base", table_name);
+            let base_columns = self.sync_columns(&base_table)?;
             let sql_base = format!(
-                "SELECT id::text, data::text, created_at::text, updated_at::text FROM \"{}_base\" ORDER BY created_at ASC", 
-                table_name
+                r#"SELECT {} FROM "{}" ORDER BY created_at ASC"#,
+                base_columns
+                    .iter()
+                    .map(|c| c.select.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                base_table
             );
             let rows = {
                 let mut client = self.db.get_client();
@@ -483,7 +683,7 @@ impl SyncEngine {
                 id_a.cmp(&id_b)
             });
 
-            let batch = self.rows_to_record_batch(sorted_rows)?;
+            let batch = self.rows_to_record_batch(&base_columns, sorted_rows)?;
 
             let mut buffer = Vec::new();
             // Task 5.2: Enable Statistics & Bloom Filters
@@ -640,54 +840,24 @@ impl SyncEngine {
                     ))
                 })?;
 
-                let ids = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                let datas = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                // col 2 is created_at, col 3 is updated_at
-                let updated_ats = batch
-                    .column(3)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-
                 for i in 0..batch.num_rows() {
-                    let id_str = ids.value(i);
-                    let data_str = if datas.is_null(i) {
-                        "{}"
-                    } else {
-                        datas.value(i)
-                    };
-                    // Parse/Validate format or fallback to now
-                    // We pass as String to avoid rust-postgres trait issues.
-                    // Ensure naive_utc to string is consistent.
-                    let updated_at_str = if updated_ats.is_null(i) {
-                        chrono::Utc::now().naive_utc().to_string()
-                    } else {
-                        updated_ats.value(i).to_string()
+                    let (mut fields, data_json) = arrow_row_to_document(&batch, i);
+
+                    let Some(serde_json::Value::String(id_str)) = fields.remove("id") else {
+                        // A row with no id cannot be upserted into _base, and
+                        // silently dropping it would be worse than saying so.
+                        return Err(crate::error::DBCenterError::QueryError(format!(
+                            "Parquet file '{}' has a row with no id column",
+                            file
+                        )));
                     };
 
-                    // Ensure it is not empty
-                    let updated_at_val = if updated_at_str.trim().is_empty() {
-                        chrono::Utc::now().naive_utc().to_string()
-                    } else {
-                        updated_at_str
+                    let updated_at_val = match fields.remove("updated_at") {
+                        Some(serde_json::Value::String(t)) if !t.trim().is_empty() => t,
+                        _ => chrono::Utc::now().naive_utc().to_string(),
                     };
+                    fields.remove("created_at");
 
-                    let data_json: serde_json::Value =
-                        serde_json::from_str(data_str).unwrap_or(serde_json::Value::Null);
-
-                    // Put the document back where the collection API expects it:
-                    // one column per field. Restoring only into `data` left the
-                    // fields nested under it, so a round trip through storage
-                    // came back in a shape find() does not produce.
-                    let fields = data_json.as_object().cloned().unwrap_or_default();
                     let base_table = format!("{}_base", table_name);
 
                     let mut columns = vec![
@@ -734,7 +904,12 @@ impl SyncEngine {
                         base_table
                     );
 
-                    let id_uuid = uuid::Uuid::parse_str(id_str).unwrap();
+                    let id_uuid = uuid::Uuid::parse_str(&id_str).map_err(|e| {
+                        crate::error::DBCenterError::QueryError(format!(
+                            "Parquet file '{}' has an id that is not a uuid ({}): {}",
+                            file, id_str, e
+                        ))
+                    })?;
                     transaction
                         .execute(&upsert_base, &[&id_uuid, &data_json, &updated_at_val])
                         .map_err(|e| {

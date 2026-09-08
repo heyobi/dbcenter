@@ -169,9 +169,13 @@ fn a_remote_lookup_sees_rows_written_since_the_last_compaction() {
         .unwrap();
     engine.sync_table("orders", 10_000).unwrap();
 
+    // The field is read from its own column, not out of `data`. A document
+    // inserted through the collection API lives in the row's columns; `data` is
+    // for the layouts that genuinely store JSON there, and duplicating the
+    // document into it is what made the Parquet twice the size it needed to be.
     let rows = db
         .query(
-            "SELECT id::text AS id, data->>'ref' AS r FROM orders_base ORDER BY created_at",
+            "SELECT id::text AS id, \"ref\" AS r FROM orders_base ORDER BY created_at",
             &[],
         )
         .unwrap();
@@ -280,4 +284,65 @@ fn a_document_survives_the_round_trip_through_storage() {
 
     target.shutdown().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn synced_parquet_has_a_column_per_field() {
+    // The whole document used to be serialised into a single `data` string,
+    // which left Parquet with nothing to be columnar about: a query that wanted
+    // one field still read every byte of every document and parsed JSON out of
+    // it. Measured over five million rows that made reads off object storage
+    // 1.8x slower than PostgreSQL at 2.1x the stored bytes - see
+    // docs/columnar-reads.md. This pins the shape that fixed it.
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+
+    let (db, _counting, engine) = setup("columnar");
+    let collection = db.collection("readings");
+    collection
+        .insert_many(&[
+            json!({"sensor": "a", "celsius": 21.5, "count": 3, "ok": true}),
+            json!({"sensor": "b", "celsius": 19.0, "count": 7, "ok": false}),
+        ])
+        .unwrap();
+    engine.sync_table("readings", 10_000).unwrap();
+
+    let dir = std::env::temp_dir().join("dbcenter_lazy_columnar/storage");
+    let file = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.to_string_lossy().ends_with(".parquet"))
+        .expect("a sync should have written a parquet file");
+
+    let reader = SerializedFileReader::new(std::fs::File::open(&file).unwrap()).unwrap();
+    let schema = reader.metadata().file_metadata().schema_descr();
+    let columns: Vec<(String, String)> = (0..schema.num_columns())
+        .map(|i| {
+            let c = schema.column(i);
+            (c.name().to_string(), format!("{:?}", c.physical_type()))
+        })
+        .collect();
+
+    for field in ["sensor", "celsius", "count", "ok"] {
+        assert!(
+            columns.iter().any(|(n, _)| n == field),
+            "'{field}' should be its own parquet column, not buried in a JSON string: {columns:?}"
+        );
+    }
+
+    // And with the type it had, so an aggregate does not have to parse strings.
+    let typed = |name: &str| {
+        columns
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.clone())
+            .unwrap()
+    };
+    assert_eq!(typed("celsius"), "DOUBLE", "a float field stays a float");
+    assert_eq!(typed("count"), "INT64", "an integer field stays an integer");
+    assert_eq!(typed("ok"), "BOOLEAN", "a boolean field stays a boolean");
+
+    // The round trip still produces the document that went in.
+    let found = collection.find(None).unwrap();
+    assert_eq!(found.len(), 2, "{found:?}");
 }

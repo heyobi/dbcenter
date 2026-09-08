@@ -65,6 +65,18 @@ const PGVECTOR_LINUX_VERSIONS: &[ExtensionVersion] = &[
     },
 ];
 
+/// pg_duckdb versions (Linux).
+///
+/// pg_duckdb is what keeps the columnar read advantage without asking the user
+/// to speak anything but PostgreSQL. There is no Windows build: DuckDB is
+/// vendored and built from source, and that build has never been part of this
+/// pipeline.
+const PG_DUCKDB_LINUX_VERSIONS: &[ExtensionVersion] = &[ExtensionVersion {
+    version: "1.1.1",
+    min_pg: 14,
+    max_pg: 18,
+}];
+
 /// pghttp versions (Windows)
 const PGHTTP_WINDOWS_VERSIONS: &[ExtensionVersion] = &[
     ExtensionVersion {
@@ -938,6 +950,7 @@ pub fn install_extension_with_version(
         "pgvector" => install_pgvector(db, version),
         "pghttp" | "pgsql_http" | "http" => install_pghttp(db, version),
         "pg_trgm" | "pgtrgm" => install_bundled_extension(db, "pg_trgm"),
+        "pg_duckdb" | "pgduckdb" | "duckdb" => install_pg_duckdb(db, version),
         "pg_cron" | "pgcron" => {
             tracing::warn!("pg_cron support coming soon");
             Err(DBCenterError::ExtensionError(
@@ -945,7 +958,7 @@ pub fn install_extension_with_version(
             ))
         }
         _ => Err(DBCenterError::ExtensionError(format!(
-            "Unknown extension: {}. Supported extensions: postgis, pgvector, pghttp, pg_trgm, pg_cron (coming soon)",
+            "Unknown extension: {}. Supported extensions: postgis, pgvector, pghttp, pg_trgm, pg_duckdb, pg_cron (coming soon)",
             name
         ))),
     }
@@ -1066,6 +1079,63 @@ fn install_pghttp(db: &DBCenter, requested_version: Option<&str>) -> Result<()> 
 }
 
 /// Generic installer for bundled extensions (like pg_trgm)
+/// Install pg_duckdb, which is the read path.
+///
+/// Everything else here is a library the server loads on demand. This one has
+/// to be in `shared_preload_libraries`, which PostgreSQL only reads at startup,
+/// so installing it means restarting the server. The alternative is telling the
+/// user to restart a database they never started by hand, so the install does
+/// it and the restart keeps the same port - the connection string a client was
+/// given before still works after.
+fn install_pg_duckdb(db: &DBCenter, requested_version: Option<&str>) -> Result<()> {
+    if cfg!(windows) {
+        return Err(DBCenterError::ExtensionError(
+            "pg_duckdb has no Windows build: it vendors DuckDB and compiles it \
+             from source, which this pipeline only does for Linux."
+                .to_string(),
+        ));
+    }
+
+    {
+        let mut client = db.get_client();
+        if let Ok(rows) = client.query(
+            "SELECT extname FROM pg_extension WHERE extname = 'pg_duckdb'",
+            &[],
+        ) {
+            if !rows.is_empty() {
+                tracing::info!("pg_duckdb already installed.");
+                return Ok(());
+            }
+        }
+    }
+
+    tracing::info!("Installing pg_duckdb extension...");
+    install_extension_unix(
+        db,
+        "pg_duckdb",
+        PG_DUCKDB_LINUX_VERSIONS,
+        requested_version,
+        "pg_duckdb",
+    )?;
+
+    // The module has to be resident before CREATE EXTENSION will accept it, and
+    // it can only become resident at startup.
+    if crate::process::add_shared_preload_library(&db.config().data_dir, "pg_duckdb")? {
+        tracing::info!("pg_duckdb added to shared_preload_libraries; restarting PostgreSQL");
+        db.restart()?;
+    }
+
+    let mut client = db.get_client();
+    client
+        .execute("CREATE EXTENSION IF NOT EXISTS pg_duckdb", &[])
+        .map_err(|e| {
+            DBCenterError::ExtensionError(format!("Failed to create extension pg_duckdb: {}", e))
+        })?;
+
+    tracing::info!("pg_duckdb activated");
+    Ok(())
+}
+
 fn install_bundled_extension(db: &DBCenter, ext_name: &str) -> Result<()> {
     let mut client = db.get_client();
     let create_sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext_name);

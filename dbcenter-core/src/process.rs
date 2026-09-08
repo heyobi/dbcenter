@@ -532,6 +532,78 @@ fn update_pg_hba_for_network(
     Ok(())
 }
 
+/// Set a `postgresql.conf` setting, replacing the existing line if there is one.
+///
+/// Returns whether the file actually changed, which is what callers use to
+/// decide if a restart is owed. Commented-out defaults count as the existing
+/// line: PostgreSQL ships most settings that way, and appending a second
+/// definition below one leaves two lines claiming the same key.
+pub(crate) fn set_conf_setting(data_dir: &Path, key: &str, value: &str) -> Result<bool> {
+    let conf_path = data_dir.join("postgresql.conf");
+    let content = fs::read_to_string(&conf_path).map_err(DBCenterError::IoError)?;
+    let setting = format!("{} = '{}'", key, value.replace('\'', "\\'"));
+
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+    let mut replaced = false;
+    for line in lines.iter_mut() {
+        let trimmed = line.trim().trim_start_matches('#').trim_start();
+        if trimmed.starts_with(key) && trimmed[key.len()..].trim_start().starts_with('=') {
+            if *line == setting {
+                return Ok(false);
+            }
+            *line = setting.clone();
+            replaced = true;
+            break;
+        }
+    }
+
+    let updated = if replaced {
+        let mut out = lines.join("\n");
+        out.push('\n');
+        out
+    } else {
+        format!("{}\n# DBCenter\n{}\n", content.trim_end(), setting)
+    };
+
+    fs::write(&conf_path, updated).map_err(DBCenterError::IoError)?;
+    tracing::info!("postgresql.conf: {}", setting);
+    Ok(true)
+}
+
+/// Add a library to `shared_preload_libraries` without dropping what is there.
+///
+/// This setting is a list, and it is the one setting an extension cannot ask
+/// for at run time - PostgreSQL only reads it at startup. Overwriting it would
+/// silently disable whatever a previous extension had put there, so the
+/// existing entries are parsed and the new one appended.
+pub(crate) fn add_shared_preload_library(data_dir: &Path, library: &str) -> Result<bool> {
+    let conf_path = data_dir.join("postgresql.conf");
+    let content = fs::read_to_string(&conf_path).map_err(DBCenterError::IoError)?;
+
+    let mut existing: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || !trimmed.starts_with("shared_preload_libraries") {
+            continue;
+        }
+        if let Some((_, rhs)) = trimmed.split_once('=') {
+            let rhs = rhs.trim().trim_matches('\'');
+            let rhs = rhs.split('#').next().unwrap_or(rhs);
+            existing = rhs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+
+    if existing.iter().any(|l| l == library) {
+        return Ok(false);
+    }
+    existing.push(library.to_string());
+    set_conf_setting(data_dir, "shared_preload_libraries", &existing.join(","))
+}
+
 /// Configure dynamic_library_path in postgresql.conf to include extension directories
 fn update_postgresql_conf_library_path(data_dir: &std::path::Path) -> Result<()> {
     let conf_path = data_dir.join("postgresql.conf");
