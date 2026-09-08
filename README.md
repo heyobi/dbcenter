@@ -403,6 +403,18 @@ Compaction takes the storage lock, so with several nodes running exactly one
 does the work and the others move on. Without it every push leaves another
 Parquet object behind and cold starts get slower without bound.
 
+## What it costs, and what it costs you
+
+`docs/cost-and-scale.md` measures the whole argument on one core and 1 GB - the
+cheapest tier anyone rents - against a plain PostgreSQL with the same limits.
+The short version: an aggregate over the table is 9.6x faster read as Parquet
+out of a bucket than out of PostgreSQL's own storage, a node holding none of the
+table answers it on a quarter of the disk, and the bill is about a fifth. A
+point lookup that has to reach object storage costs ninety times what a local
+indexed one does, and the collection view - which is what makes the delta layer
+work - costs 103.8 ms against 0.7 ms on an ordered, limited query. Both numbers
+are in the document, with the rig that produced them.
+
 ## Building
 
 ```bash

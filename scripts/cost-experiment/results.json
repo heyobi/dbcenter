@@ -1,33 +1,96 @@
 {
-  "rows": 1000000,
+  "rows": 200000,
   "targets": {
     "postgres": {
       "load": {
-        "insert_s": 21.4,
-        "index_s": 3.8
+        "insert_s": 3.8,
+        "index_s": 0.4
       },
-      "disk_bytes": 635456974,
+      "disk_bytes": 161279438,
       "bucket_bytes": 71538,
-      "cold_start_s": 2.9,
-      "rows_held_locally": 1000000,
+      "cold_start_s": 2.1,
+      "rows_held_locally": 200000,
       "aggregate_collection": {
-        "median_ms": 708.76,
-        "best_ms": 708.21,
+        "median_ms": 188.72,
+        "best_ms": 121.54,
         "rows": 5
       },
       "recent_window": {
-        "median_ms": 0.49,
-        "best_ms": 0.37,
+        "median_ms": 0.73,
+        "best_ms": 0.57,
         "rows": 100
       },
       "point_lookup": {
-        "median_ms": 0.35,
-        "best_ms": 0.33,
+        "median_ms": 0.43,
+        "best_ms": 0.34,
         "rows": 1
       },
-      "insert_200_rows_ms": 1756.0,
-      "inserts_per_second": 114,
+      "insert_200_rows_ms": 1664.2,
+      "inserts_per_second": 120,
       "memory_bytes": 41796239
+    },
+    "dbcenter": {
+      "load": {
+        "insert_s": 6.7,
+        "index_s": 1.7,
+        "sync_s": 20.3,
+        "compact_s": 80.8,
+        "deltas_left": 0
+      },
+      "disk_bytes": 417915088,
+      "bucket_bytes": 330475069,
+      "cold_start_s": 6.3,
+      "rows_held_locally": 200000,
+      "aggregate_collection": {
+        "median_ms": 684.46,
+        "best_ms": 615.28,
+        "rows": 5
+      },
+      "aggregate_columnar": {
+        "median_ms": 19.72,
+        "best_ms": 18.14,
+        "rows": 5
+      },
+      "recent_window": {
+        "median_ms": 103.8,
+        "best_ms": 101.76,
+        "rows": 100
+      },
+      "point_lookup": {
+        "median_ms": 0.86,
+        "best_ms": 0.83,
+        "rows": 1
+      },
+      "insert_200_rows_ms": 1831.6,
+      "inserts_per_second": 109,
+      "memory_bytes": 132854579
+    },
+    "lazy": {
+      "load": {
+        "note": "restored from the bucket, deltas only"
+      },
+      "disk_bytes": 41349022,
+      "bucket_bytes": 142291944,
+      "cold_start_s": 4.7,
+      "rows_held_locally": 200,
+      "aggregate_columnar": {
+        "median_ms": 46.0,
+        "best_ms": 45.89,
+        "rows": 5
+      },
+      "recent_window": {
+        "median_ms": 45.32,
+        "best_ms": 41.67,
+        "rows": 100
+      },
+      "point_lookup": {
+        "median_ms": 36.1,
+        "best_ms": 34.99,
+        "rows": 1
+      },
+      "insert_200_rows_ms": 1819.0,
+      "inserts_per_second": 110,
+      "memory_bytes": 83581992
     }
   }
 }

@@ -225,9 +225,14 @@ def load_dbcenter(conn, rows):
         load = time.perf_counter() - started
 
         started = time.perf_counter()
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_base_user ON events_base (user_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_adds_user ON events_adds (user_id)")
+        # The same indexes the plain PostgreSQL gets, on both delta tables -
+        # the collection is a view over them, so an index on one side only
+        # would make half the rows a sequential scan.
+        for table in ("events_base", "events_adds"):
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_user ON {table} (user_id)")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table} (ts_epoch)")
         cur.execute("ANALYZE events_adds")
+        cur.execute("ANALYZE events_base")
         index = time.perf_counter() - started
     return {"insert_s": round(load, 1), "index_s": round(index, 1)}
 

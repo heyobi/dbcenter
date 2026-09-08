@@ -153,18 +153,43 @@ OAuth client they belong to has been deleted upstream, so they are inert, but
 purging them means rewriting history and force-pushing, which nobody has approved.
 A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`.
 
+**A small machine and a bucket are cheaper, and the read path is faster - but the
+delta view taxes ordinary queries.** Measured on one core and 1 GB against a
+plain PostgreSQL 18 with the same limits and the same indexes, 200,000 rows:
+an aggregate over the whole table is 188.7 ms against PostgreSQL's storage and
+19.7 ms against the same rows as Parquet, and a lazy node holding none of the
+table answers it in 46 ms on 39 MB of disk against PostgreSQL's 154 MB. On list
+prices that is about $7.69 a month against Supabase Pro's $36.50 for the same
+100 GB.
+
+Two things came out of it that are not good news. A hundred rows by timestamp
+takes 0.7 ms against a plain table and **103.8 ms against the collection**, with
+the same index on both sides: the collection is a view over three tables and
+PostgreSQL will not push the ordering and the limit through it. Every DBCenter
+deployment pays that, synced or not. And at a million rows **a compaction does
+not fit in 1 GB** - it reads the whole base back to rewrite it, and the container
+stalls at its memory ceiling. The full write-up, with the rig, is in
+`docs/cost-and-scale.md`.
+
 ## Next, in order
 
-1. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
+1. **Make the collection view answer an ordered, limited query without sorting
+   everything.** 103.8 ms against 0.7 ms is the largest single gap between
+   DBCenter and the PostgreSQL underneath it, and it is paid by every query that
+   is not a point lookup.
+2. **Make compaction stream.** It reads the whole base snapshot into memory to
+   rewrite it, so a 1 GB machine cannot compact a million-row table - which is
+   the machine the whole argument rests on.
+3. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
    Marked experimental is honest; it is not a resting place.
-2. Build pg_duckdb from source rather than repackaging upstream's binary.
+4. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
    compile than this machine has spare.
-3. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
+5. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
    the base snapshot, which is what `SyncMode::Partial` has always done. It is
    written down now, in the enum and in the README, so it stops being a phrase
    that means whatever the reader assumes.
-4. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
+6. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
    PostgreSQL 15 silently gets pgvector 0.8.0 instead.
 
 ## How the two read paths fit together
