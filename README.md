@@ -51,6 +51,45 @@ db.Collection("users").InsertOne(map[string]interface{}{
 - `dbcenter-serve`: the same engine as a container workload, with its durable
   copy on object storage
 
+## Extensions
+
+PostGIS, pgvector and pgsql-http are not part of the PostgreSQL distribution, so
+they are downloaded on first use and unpacked into the local installation.
+
+They come from this repository's GitHub Releases. There used to be a CDN run by
+the project, with a fixed `?token=admin-secret-key` compiled into every client -
+a shared secret in everyone's binary, guarding a service that had to stay up or
+the feature stopped existing. GitHub Releases needs no secret and no server.
+
+Because these archives are loaded into the database process, a substituted one
+is arbitrary code execution. Every download is checked against a SHA-256 pinned
+in `EXTENSION_CHECKSUMS` in `dbcenter-core/src/extensions.rs`, so the host
+serving them is not trusted: a tampered asset fails to verify even if the
+account publishing it is compromised. An asset with no pinned digest is refused.
+
+| Variable | Meaning |
+|---|---|
+| `DBCENTER_EXTENSION_BASE_URL` | Fetch from a fork, a local server, or an offline mirror |
+| `DBCENTER_ALLOW_UNVERIFIED_EXTENSIONS` | Accept an asset with no pinned digest. For publishing a new one, not for normal use |
+
+### Publishing a build
+
+1. Build the extension for the target PostgreSQL major version and platform, and
+   archive it with the layout of the PostgreSQL installation (`lib/`, `share/`).
+2. Name it `<name>-<version>-<platform>-pg<major>.<tar.gz|zip>`, e.g.
+   `vector-0.8.1-linux-amd64-pg18.tar.gz`. The name is the whole address -
+   release assets are a flat namespace.
+3. Upload it to the `extensions-v1` release.
+4. Add its `sha256sum` to `EXTENSION_CHECKSUMS` and record the PostgreSQL major
+   version range in the table for that extension. Skipping this leaves the asset
+   unusable, which is the intended failure direction.
+
+A build for an older major version is not a fallback: PostgreSQL stamps every
+loadable module with the major version it was compiled against and refuses to
+load one that disagrees. Asking for a PostgreSQL that has no published build is
+an error naming the newest one that exists, rather than a download that fails
+later with "incompatible library".
+
 ## Running as a container
 
 The engine is meant to be embedded in a process, with object storage holding

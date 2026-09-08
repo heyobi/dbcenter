@@ -4,7 +4,7 @@ use crate::DBCenter;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// PostGIS version info for CDN mapping
 #[derive(Debug, Clone)]
@@ -124,6 +124,126 @@ const POSTGIS_LINUX_VERSIONS: &[PostGISVersion] = &[
         max_pg: 15,
     },
 ];
+
+/// Where extension bundles are fetched from.
+///
+/// They used to come from a CDN this project ran, with `?token=admin-secret-key`
+/// baked into every client - a shared secret sitting in everyone's binary,
+/// guarding a service that had to stay up or the feature stopped existing. It is
+/// down as of this writing, which is exactly the failure mode. GitHub Releases
+/// needs no secret and no server, and is fronted by a CDN that is somebody
+/// else's problem to keep running.
+const DEFAULT_ASSET_BASE_URL: &str =
+    "https://github.com/heyobi/dbcenter/releases/download/extensions-v1";
+
+/// SHA-256 of each published bundle, keyed by file name.
+///
+/// These archives are unpacked into the PostgreSQL installation and their shared
+/// libraries are loaded into the server process, so a substituted one is
+/// arbitrary code execution. Pinning the digests here means the host serving
+/// them is not trusted: a tampered asset fails to verify even if the account
+/// publishing it is compromised.
+///
+/// Add an entry per uploaded asset. A download whose name is not listed is
+/// refused; the error reports the digest it computed, which is the value to pin.
+const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
+    // ("vector-0.8.1-linux-amd64-pg18.tar.gz", "<sha256>"),
+    // ("postgis-3.5.0-linux-amd64-pg17.tar.gz", "<sha256>"),
+];
+
+fn asset_base_url() -> String {
+    // Overridable for a fork, a local file server while testing, or an
+    // air-gapped mirror.
+    std::env::var("DBCENTER_EXTENSION_BASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_ASSET_BASE_URL.to_string())
+}
+
+fn allow_unverified_assets() -> bool {
+    matches!(
+        std::env::var("DBCENTER_ALLOW_UNVERIFIED_EXTENSIONS").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Check a bundle against its pinned digest, deleting it if it does not match.
+///
+/// A bad archive is removed rather than left in the cache, so a retry re-fetches
+/// instead of failing forever on a poisoned file.
+fn verify_asset(path: &Path, file_name: &str) -> Result<()> {
+    verify_against(path, file_name, EXTENSION_CHECKSUMS)
+}
+
+/// The body of [`verify_asset`], with the digest table passed in so it can be
+/// exercised without publishing real assets.
+fn verify_against(path: &Path, file_name: &str, checksums: &[(&str, &str)]) -> Result<()> {
+    let actual = sha256_file(path)?;
+    let expected = checksums
+        .iter()
+        .find(|(name, _)| *name == file_name)
+        .map(|(_, digest)| *digest);
+
+    match expected {
+        Some(expected) if expected.eq_ignore_ascii_case(&actual) => {
+            tracing::debug!("Verified {}", file_name);
+            Ok(())
+        }
+        Some(expected) => {
+            let _ = fs::remove_file(path);
+            Err(DBCenterError::ExtensionError(format!(
+                "Checksum mismatch for '{}'. Expected {}, got {}. \
+                 The download was discarded and not installed.",
+                file_name, expected, actual
+            )))
+        }
+        None if allow_unverified_assets() => {
+            tracing::warn!(
+                "Installing '{}' without verification (sha256 {}). \
+                 Set DBCENTER_ALLOW_UNVERIFIED_EXTENSIONS only when you trust the source.",
+                file_name,
+                actual
+            );
+            Ok(())
+        }
+        None => {
+            let _ = fs::remove_file(path);
+            Err(DBCenterError::ExtensionError(format!(
+                "No pinned checksum for '{}', so it was not installed. \
+                 Its sha256 is {} - add that to EXTENSION_CHECKSUMS to publish it, \
+                 or set DBCENTER_ALLOW_UNVERIFIED_EXTENSIONS=1 to accept it unverified.",
+                file_name, actual
+            )))
+        }
+    }
+}
+
+/// Fetch one extension bundle into the cache and verify it.
+///
+/// Verification runs on a cache hit too, not only on a fresh download: otherwise
+/// anything that could write to the cache directory could bypass it entirely.
+fn fetch_extension_asset(cache_dir: &Path, file_name: &str, description: &str) -> Result<PathBuf> {
+    fs::create_dir_all(cache_dir)?;
+    let path = cache_dir.join(file_name);
+
+    if path.exists() {
+        tracing::info!("Using cached {}", description);
+    } else {
+        let url = format!("{}/{}", asset_base_url().trim_end_matches('/'), file_name);
+        download_with_progress(&url, &path, description)?;
+    }
+
+    verify_asset(&path, file_name)?;
+    Ok(path)
+}
 
 /// Install PostgreSQL extension
 pub fn install_extension(db: &DBCenter, name: &str) -> Result<()> {
@@ -365,22 +485,19 @@ fn install_extension_windows(
     let (ver_str, target_pg) =
         find_best_extension_version(pg_version, versions, requested_version)?;
 
-    let url = format!(
-        "https://cdn.db.center/extensions/{}/{}-{}-windows-amd64-pg{}.zip?token=admin-secret-key",
-        folder_name, file_prefix, ver_str, target_pg
+    let _ = folder_name;
+    let file_name = format!(
+        "{}-{}-windows-amd64-pg{}.zip",
+        file_prefix, ver_str, target_pg
     );
 
     let base_dir = crate::binary::base_dir_for_version(db.postgres_version())?;
     let cache_dir = base_dir.join("cache").join("extensions");
-    fs::create_dir_all(&cache_dir)?;
-
-    let zip_path = cache_dir.join(format!("{}-{}-pg{}.zip", file_prefix, ver_str, target_pg));
-
-    if !zip_path.exists() {
-        download_with_progress(&url, &zip_path, &format!("{} {}", file_prefix, ver_str))?;
-    } else {
-        tracing::info!("Using cached {} {} bundle", file_prefix, ver_str);
-    }
+    let zip_path = fetch_extension_asset(
+        &cache_dir,
+        &file_name,
+        &format!("{} {} for PostgreSQL {}", file_prefix, ver_str, target_pg),
+    )?;
 
     let pg_root = get_postgres_root(db)?;
     extract_postgis_bundle(&zip_path, &pg_root)?; // Reuse the robust extractor
@@ -399,28 +516,40 @@ fn install_extension_unix(
     let (ver_str, target_pg) =
         find_best_extension_version(pg_version, versions, requested_version)?;
 
-    let url = format!(
-        "https://cdn.db.center/extensions/{}/{}-{}-linux-amd64-pg{}.tar.gz?token=admin-secret-key",
-        folder_name, file_prefix, ver_str, target_pg
+    let _ = folder_name;
+    let file_name = format!(
+        "{}-{}-linux-amd64-pg{}.tar.gz",
+        file_prefix, ver_str, target_pg
     );
 
     let base_dir = crate::binary::base_dir_for_version(db.postgres_version())?;
     let cache_dir = base_dir.join("cache").join("extensions");
-    fs::create_dir_all(&cache_dir)?;
-
-    let tar_path = cache_dir.join(format!(
-        "{}-{}-pg{}.tar.gz",
-        file_prefix, ver_str, target_pg
-    ));
-
-    if !tar_path.exists() {
-        download_with_progress(&url, &tar_path, &format!("{} {}", file_prefix, ver_str))?;
-    }
+    let tar_path = fetch_extension_asset(
+        &cache_dir,
+        &file_name,
+        &format!("{} {} for PostgreSQL {}", file_prefix, ver_str, target_pg),
+    )?;
 
     let pg_root = get_postgres_root(db)?;
     extract_postgis_tarball(&tar_path, &pg_root)?;
 
     Ok(())
+}
+
+/// Why a build for an older major version is not a usable fallback.
+///
+/// PostgreSQL stamps every loadable module with a magic block carrying the major
+/// version it was compiled against, and refuses to load one that disagrees. So
+/// fetching a pg17 build for a pg18 server cannot work; it only spends the
+/// download and turns a clear "not published yet" into "incompatible library"
+/// somewhere deep in CREATE EXTENSION.
+fn unsupported_pg(extension: &str, version: &str, pg_version: u32, max_pg: u32) -> DBCenterError {
+    DBCenterError::ExtensionError(format!(
+        "{} {} has no build for PostgreSQL {}; the newest published is for \
+         PostgreSQL {}. Run DBCenter with .postgres_version(\"{}\") to use it, \
+         or wait for a {} build.",
+        extension, version, pg_version, max_pg, max_pg, pg_version
+    ))
 }
 
 fn find_best_extension_version(
@@ -434,14 +563,7 @@ fn find_best_extension_version(
                 if pg_version >= v.min_pg && pg_version <= v.max_pg {
                     return Ok((v.version, pg_version));
                 } else if pg_version > v.max_pg {
-                    tracing::warn!(
-                        "PG {} too new for {} {}. Using pg{}",
-                        pg_version,
-                        req_ver,
-                        v.version,
-                        v.max_pg
-                    );
-                    return Ok((v.version, v.max_pg));
+                    return Err(unsupported_pg(req_ver, v.version, pg_version, v.max_pg));
                 }
             }
         }
@@ -457,16 +579,14 @@ fn find_best_extension_version(
         }
     }
 
-    // Fallback newest
     if let Some(v) = versions.first() {
         if pg_version > v.max_pg {
-            tracing::warn!(
-                "PG {} too new. Using {} pg{}",
-                pg_version,
+            return Err(unsupported_pg(
+                "This extension",
                 v.version,
-                v.max_pg
-            );
-            return Ok((v.version, v.max_pg));
+                pg_version,
+                v.max_pg,
+            ));
         }
     }
 
@@ -489,12 +609,7 @@ fn find_best_postgis_version(
                 if pg_version >= v.min_pg && pg_version <= v.max_pg {
                     return Ok((v.version, pg_version));
                 } else if pg_version > v.max_pg {
-                    // Try with max supported pg version
-                    tracing::warn!(
-                        "PostgreSQL {} not supported by PostGIS {}. Using pg{} binaries (may have compatibility issues).",
-                        pg_version, req_ver, v.max_pg
-                    );
-                    return Ok((v.version, v.max_pg));
+                    return Err(unsupported_pg("PostGIS", v.version, pg_version, v.max_pg));
                 } else {
                     return Err(DBCenterError::ExtensionError(format!(
                         "PostGIS {} requires PostgreSQL {} or newer, but you have PostgreSQL {}.",
@@ -522,17 +637,9 @@ fn find_best_postgis_version(
         }
     }
 
-    // If PostgreSQL version is too new, use the latest PostGIS with its max supported pg version
     if let Some(v) = versions.first() {
         if pg_version > v.max_pg {
-            tracing::warn!(
-                "PostgreSQL {} is newer than PostGIS {} max support (pg{}). Using pg{} binaries.",
-                pg_version,
-                v.version,
-                v.max_pg,
-                v.max_pg
-            );
-            return Ok((v.version, v.max_pg));
+            return Err(unsupported_pg("PostGIS", v.version, pg_version, v.max_pg));
         }
     }
 
@@ -625,32 +732,21 @@ fn install_postgis_windows(db: &DBCenter, requested_version: Option<&str>) -> Re
     let (postgis_version, target_pg_version) =
         find_best_postgis_version(pg_version, POSTGIS_WINDOWS_VERSIONS, requested_version)?;
 
-    // Use cdn.db.center
-    let url = format!(
-        "https://cdn.db.center/extensions/postgis/postgis-{}-windows-amd64-pg{}.zip?token=admin-secret-key",
+    let file_name = format!(
+        "postgis-{}-windows-amd64-pg{}.zip",
         postgis_version, target_pg_version
     );
 
-    // Cache directory
     let base_dir = crate::binary::base_dir_for_version(db.postgres_version())?;
     let cache_dir = base_dir.join("cache").join("extensions");
-    fs::create_dir_all(&cache_dir)?;
-
-    let zip_path = cache_dir.join(format!(
-        "postgis-{}-pg{}.zip",
-        postgis_version, target_pg_version
-    ));
-
-    // Download if not cached
-    if !zip_path.exists() {
-        let description = format!(
+    let zip_path = fetch_extension_asset(
+        &cache_dir,
+        &file_name,
+        &format!(
             "PostGIS {} for PostgreSQL {}",
             postgis_version, target_pg_version
-        );
-        download_with_progress(&url, &zip_path, &description)?;
-    } else {
-        tracing::info!("Using cached PostGIS {} bundle", postgis_version);
-    }
+        ),
+    )?;
 
     // Extract to PostgreSQL directory
     let pg_root = get_postgres_root(db)?;
@@ -669,29 +765,20 @@ fn install_postgis_unix(db: &DBCenter, requested_version: Option<&str>) -> Resul
 
     let base_dir = crate::binary::base_dir_for_version(db.postgres_version())?;
 
-    // Use cdn.db.center
-    let url = format!(
-        "https://cdn.db.center/extensions/postgis/postgis-{}-linux-amd64-pg{}.tar.gz?token=admin-secret-key",
+    let file_name = format!(
+        "postgis-{}-linux-amd64-pg{}.tar.gz",
         postgis_version, target_pg_version
     );
 
     let cache_dir = base_dir.join("cache").join("extensions");
-    fs::create_dir_all(&cache_dir)?;
-
-    let tar_path = cache_dir.join(format!(
-        "postgis-{}-pg{}.tar.gz",
-        postgis_version, target_pg_version
-    ));
-
-    if !tar_path.exists() {
-        let description = format!(
+    let tar_path = fetch_extension_asset(
+        &cache_dir,
+        &file_name,
+        &format!(
             "PostGIS {} for PostgreSQL {}",
             postgis_version, target_pg_version
-        );
-        download_with_progress(&url, &tar_path, &description)?;
-    } else {
-        tracing::info!("Using cached PostGIS {} bundle", postgis_version);
-    }
+        ),
+    )?;
 
     // Extract
     let pg_root = get_postgres_root(db)?;
@@ -1057,4 +1144,95 @@ fn postgres_major_version(db: &DBCenter) -> u32 {
         .next()
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// sha256 of the three bytes "abc", the standard test vector.
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("dbcenter_asset_test_{}", name));
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn digest_matches_the_known_vector() {
+        let path = temp_file("digest", b"abc");
+        assert_eq!(sha256_file(&path).unwrap(), ABC_SHA256);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn an_unpinned_asset_is_refused_and_its_digest_reported() {
+        // Refusing by default is the point: these archives are unpacked into the
+        // PostgreSQL installation and loaded into the server process.
+        let path = temp_file("unpinned", b"abc");
+        let err = verify_asset(&path, "not-in-the-table.tar.gz").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("No pinned checksum"), "{message}");
+        // The digest has to be in the message, or there is no way to pin it.
+        assert!(message.contains(ABC_SHA256), "{message}");
+        // A refused download must not be left in the cache.
+        assert!(!path.exists(), "the rejected file should have been removed");
+    }
+
+    #[test]
+    fn a_mismatched_digest_is_refused_and_the_file_removed() {
+        let path = temp_file("mismatch", b"abc");
+        let checksums: &[(&str, &str)] = &[("asset.tar.gz", "00".repeat(32).leak())];
+        let err = verify_against(&path, "asset.tar.gz", checksums).unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
+        assert!(
+            !path.exists(),
+            "a tampered file must not survive in the cache"
+        );
+    }
+
+    #[test]
+    fn a_matching_digest_passes() {
+        let path = temp_file("match", b"abc");
+        let checksums: &[(&str, &str)] = &[("asset.tar.gz", ABC_SHA256)];
+        verify_against(&path, "asset.tar.gz", checksums).unwrap();
+        assert!(path.exists(), "a good file stays cached");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_too_new_postgres_is_a_clear_error_not_an_older_build() {
+        // PostGIS on Linux is published up to pg17 while the default PostgreSQL
+        // is 18, so this is the live case, not a hypothetical.
+        let versions: &[PostGISVersion] = &[PostGISVersion {
+            version: "3.5.0",
+            min_pg: 12,
+            max_pg: 17,
+        }];
+
+        let err = find_best_postgis_version(18, versions, None).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("no build for PostgreSQL 18"), "{message}");
+        // The message has to say what would work, or it is a dead end.
+        assert!(message.contains("17"), "{message}");
+
+        // A version the caller asked for explicitly gets the same treatment.
+        let err = find_best_postgis_version(18, versions, Some("3.5.0")).unwrap_err();
+        assert!(err.to_string().contains("no build for PostgreSQL 18"));
+
+        // And a supported pairing still resolves.
+        assert_eq!(
+            find_best_postgis_version(17, versions, None).unwrap(),
+            ("3.5.0", 17)
+        );
+    }
+
+    #[test]
+    fn base_url_can_be_overridden() {
+        std::env::set_var("DBCENTER_EXTENSION_BASE_URL", "http://localhost:9/mirror");
+        assert_eq!(asset_base_url(), "http://localhost:9/mirror");
+        std::env::remove_var("DBCENTER_EXTENSION_BASE_URL");
+        assert_eq!(asset_base_url(), DEFAULT_ASSET_BASE_URL);
+    }
 }
