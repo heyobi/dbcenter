@@ -584,27 +584,27 @@ const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
     ),
     (
         "postgis-3.5.0-linux-amd64-pg12.tar.gz",
-        "ba09d6a04c98d30a89da8c631549221f1e0806dda27c268666c5e5b35af0d711",
+        "1179c7636bf3b44e90fad65a6ad98a0aee32ad2ef52e33e092bd6a050a803083",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg13.tar.gz",
-        "df0f5e04fa7253a19f0306e176703a17d3d369752160ad9562af3b589112de21",
+        "be92e6bdd3e46e5106934abbe5ef4e8afbb1341d0c0631aa1d1542e142486f84",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg14.tar.gz",
-        "5982ce50d7c8411d8360c667b3c02f1243717991941a2c51f29265720493fb61",
+        "91307002492744021cb664df7d15513b02419085b6d756f14a0bac23a6f19c78",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg15.tar.gz",
-        "bff59b2123c31b695f3c6e2ab51dec9570670fa54926bc7f1555c4cafa03d18e",
+        "0e1adf5d6f71b197a3971a344d92fe90040e5b362bfc8d4731307502142e6a44",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg16.tar.gz",
-        "dc1fe80643bc4f62a830e03b73779543febf7fde5cc35d1ce030bc94cfdd8bf1",
+        "7d43f7ebd5a5ffd37efdb0033b3e27a9a95e6faeac2652f5c4a202edbc6285cf",
     ),
     (
         "postgis-3.5.0-linux-amd64-pg17.tar.gz",
-        "64a28158d88eaecec27b56c88e995960eec715e99898493a7b44a314186fbe79",
+        "1af27887886d327c564c274b75f39f2abe97188d9a25b78957db9dee596a07ac",
     ),
     (
         "postgis-3.5.0-windows-amd64-pg16.zip",

@@ -27,6 +27,87 @@ pub enum SyncMode {
     Partial,
 }
 
+/// Turn a Parquet row from a synced table into the document it came from.
+///
+/// The synced schema is (id, data, created_at, updated_at) with everything cast
+/// to text, and `data` holds the document as JSON. This used to emit `col_0`,
+/// `data`, `col_2`, `col_3`, which no caller could do anything with.
+fn row_to_document(row: &parquet::record::Row) -> serde_json::Value {
+    let mut doc = serde_json::Map::new();
+    let mut fields = serde_json::Map::new();
+
+    for (name, value) in row.get_column_iter() {
+        let text = value.to_string();
+        let text = text.trim_matches('"');
+        match name.as_str() {
+            "data" => {
+                // Parquet's Display escapes the JSON it holds.
+                let unescaped = text.replace("\\\"", "\"");
+                if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&unescaped) {
+                    fields = map;
+                }
+            }
+            other => {
+                doc.insert(
+                    other.to_string(),
+                    serde_json::Value::String(text.to_string()),
+                );
+            }
+        }
+    }
+
+    // The document's own fields sit at the top level, the way find() returns
+    // them, with the row's id alongside.
+    for (k, v) in fields {
+        doc.insert(k, v);
+    }
+    if let Some(id) = doc.get("id").cloned() {
+        doc.insert("_id".to_string(), id);
+    }
+    serde_json::Value::Object(doc)
+}
+
+/// Add a column for a restored document field if the table has not got one.
+///
+/// The synced schema is only (id, data, created_at, updated_at); the fields a
+/// document carries are whatever it happened to have. A database restoring a
+/// table it has never seen has to grow the columns as it reads them.
+fn ensure_restored_column(
+    transaction: &mut postgres::Transaction<'_>,
+    table: &str,
+    column: &str,
+    value: &serde_json::Value,
+) -> crate::error::Result<bool> {
+    let sql_type = match value {
+        serde_json::Value::Bool(_) => "BOOLEAN",
+        serde_json::Value::Number(n) if n.is_i64() => "BIGINT",
+        serde_json::Value::Number(_) => "DOUBLE PRECISION",
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => "JSONB",
+        // A null says nothing about the type; text takes anything.
+        _ => "TEXT",
+    };
+
+    // Both delta tables, because the view unions them and a UNION ALL needs the
+    // same shape on each side.
+    for target in [format!("{}_base", table), format!("{}_adds", table)] {
+        let sql = format!(
+            "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {}",
+            crate::query::quote_ident(&target),
+            crate::query::quote_ident(column),
+            sql_type
+        );
+        transaction.batch_execute(&sql).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!(
+                "Could not add column '{}' while restoring '{}': {}",
+                column,
+                target,
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
+    }
+    Ok(true)
+}
+
 impl SyncEngine {
     pub fn new(db: Arc<DBCenter>, storage: Arc<Box<dyn StorageAdapter + Send + Sync>>) -> Self {
         Self { db, storage }
@@ -97,8 +178,23 @@ impl SyncEngine {
 
         // 2. Fetch rows
         // We cast EVERYTHING to text to simplify Arrow generic handling and strictly control format
+        // The document lives in the row's own columns: inserts go through the
+        // relational path, which adds a column per field, and leaves the `data`
+        // JSONB column null. Reading only `data` therefore synced ids and
+        // timestamps and nothing else - every document written through the
+        // collection API was lost on the way to object storage.
+        //
+        // Take the whole row as JSON instead, minus the bookkeeping columns, and
+        // merge in whatever `data` did hold, for rows written as JSONB directly.
         let sql_fetch = format!(
-            "SELECT id::text, data::text, created_at::text, updated_at::text FROM \"{}\" ORDER BY created_at ASC LIMIT {}", 
+            r#"SELECT id::text,
+                      ((to_jsonb(t) - 'id' - 'data' - 'created_at' - 'updated_at')
+                       || COALESCE(t.data, '{{}}'::jsonb))::text AS data,
+                      created_at::text,
+                      updated_at::text
+               FROM "{}" t
+               ORDER BY created_at ASC
+               LIMIT {}"#,
             adds_table, limit
         );
         let rows = {
@@ -496,6 +592,7 @@ impl SyncEngine {
 
         let mut sorted_files = files.clone();
         sorted_files.sort();
+        let mut added_columns = false;
 
         for file in sorted_files {
             if !file.ends_with(".parquet") {
@@ -586,18 +683,55 @@ impl SyncEngine {
                     let data_json: serde_json::Value =
                         serde_json::from_str(data_str).unwrap_or(serde_json::Value::Null);
 
+                    // Put the document back where the collection API expects it:
+                    // one column per field. Restoring only into `data` left the
+                    // fields nested under it, so a round trip through storage
+                    // came back in a shape find() does not produce.
+                    let fields = data_json.as_object().cloned().unwrap_or_default();
+                    let base_table = format!("{}_base", table_name);
+
+                    let mut columns = vec![
+                        "id".to_string(),
+                        "data".to_string(),
+                        "updated_at".to_string(),
+                    ];
+                    let mut values = vec![
+                        "$1::uuid".to_string(),
+                        "$2".to_string(),
+                        "$3::text::timestamptz".to_string(),
+                    ];
+                    let mut assignments = vec![
+                        "data = EXCLUDED.data".to_string(),
+                        "updated_at = EXCLUDED.updated_at".to_string(),
+                    ];
+
+                    for (key, value) in &fields {
+                        if matches!(key.as_str(), "id" | "data" | "created_at" | "updated_at") {
+                            continue;
+                        }
+                        if ensure_restored_column(&mut transaction, table_name, key, value)? {
+                            added_columns = true;
+                        }
+                        let quoted = crate::query::quote_ident(key);
+                        columns.push(quoted.clone());
+                        values.push(crate::query::QueryBuilder::json_to_sql_literal(value));
+                        assignments.push(format!("{q} = EXCLUDED.{q}", q = quoted));
+                    }
+
                     // LWW: Update only if incoming (EXCLUDED) is newer than existing
                     // We cast $3 to text first, then timestamptz, to accept String input from Rust.
                     let upsert_base = format!(
                         r#"
-                        INSERT INTO "{}_base" (id, data, updated_at)
-                        VALUES ($1::uuid, $2, $3::text::timestamptz)
-                        ON CONFLICT (id) DO UPDATE SET 
-                            data = EXCLUDED.data, 
-                            updated_at = EXCLUDED.updated_at
-                        WHERE EXCLUDED.updated_at > "{}_base".updated_at
+                        INSERT INTO "{}" ({})
+                        VALUES ({})
+                        ON CONFLICT (id) DO UPDATE SET {}
+                        WHERE EXCLUDED.updated_at > "{}".updated_at
                         "#,
-                        table_name, table_name
+                        base_table,
+                        columns.join(", "),
+                        values.join(", "),
+                        assignments.join(", "),
+                        base_table
                     );
 
                     let id_uuid = uuid::Uuid::parse_str(id_str).unwrap();
@@ -617,11 +751,29 @@ impl SyncEngine {
             })?;
         }
 
+        // PostgreSQL freezes `SELECT *` when a view is created, so columns added
+        // during the restore are invisible through the collection until the view
+        // is rebuilt. Do it after the client lock is released - ensure_delta_tables
+        // takes it itself.
+        if added_columns {
+            DeltaManager::ensure_delta_tables(&self.db, table_name)?;
+        }
+
         Ok(())
     }
 
     /// Task 5.3: Smart Scan (Predicate Pushdown)
     /// Finds the latest BASE file and executes a smart scan on it using RemoteFile.
+    /// Look one id up in object storage, reading as little as possible.
+    ///
+    /// Every Parquet object for the table is consulted, not only the newest base
+    /// snapshot: a compaction writes `<table>_BASE_...` and each incremental push
+    /// writes `<table>_DELTA_...`, so reading only the base silently misses
+    /// everything written since the last vacuum. Later objects win, which matches
+    /// how the rows were applied locally.
+    ///
+    /// Row groups whose id range cannot contain the target are skipped without
+    /// being fetched. See `tests/lazy_read.rs` for what that saves.
     pub fn scan_smart(
         &self,
         table_name: &str,
@@ -630,65 +782,41 @@ impl SyncEngine {
         use crate::vfs::remote_file::RemoteFile;
         use crate::vfs::smart_reader::SmartParquetReader;
 
-        // 1. Find Base File
-        let files = self.storage.list(table_name)?;
-        let base_file = files
-            .iter()
-            .filter(|f| f.contains("_BASE_") && f.ends_with(".parquet"))
-            .max(); // Lexicographical sort usually gives latest timestamp if named correctly
+        // Names carry a unix timestamp, so sorting them puts the base first and
+        // the deltas after it in the order they were written.
+        let mut objects: Vec<String> = self
+            .storage
+            .list(table_name)?
+            .into_iter()
+            .filter(|f| f.ends_with(".parquet") && (f.contains("_BASE_") || f.contains("_DELTA_")))
+            .collect();
+        objects.sort();
 
-        let file_key = match base_file {
-            Some(f) => f,
-            None => return Ok(vec![]), // No base file, return empty
-        };
-
-        let size = self.storage.size(file_key).unwrap_or(0);
-        if size == 0 {
-            return Ok(vec![]);
-        }
-
-        // 2. Init Smart Reader
-        // Cache path: db_path/.meta/
         let meta_dir = self.db.get_path().join(".meta");
         std::fs::create_dir_all(&meta_dir).ok();
-        let meta_path = meta_dir.join(format!("{}.meta", file_key));
 
-        let remote_file = RemoteFile::new(
-            self.storage.clone(),
-            file_key.clone(),
-            size,
-            5 * 1024 * 1024, // 5MB Cache
-            Some(meta_path),
-        );
+        let mut newest: Option<serde_json::Value> = None;
 
-        let reader = SmartParquetReader::new(remote_file)?;
-
-        // 3. Scan
-        let rows = reader.scan_for_id(target_id)?;
-
-        // 4. Convert to JSON
-        let mut json_results = Vec::new();
-        for row in rows {
-            // Simplified conversion:
-            // We assume column 1 is "data" (JSON string) as per schema.
-            // Row -> (id, data, created, updated)
-            let mut row_json = serde_json::Map::new();
-            for (i, (_name, val)) in row.get_column_iter().enumerate() {
-                let val_str = val.to_string();
-                if i == 1 {
-                    let clean_str = val_str.trim_matches('"').replace("\\\"", "\"");
-                    if let Ok(v) = serde_json::from_str(&clean_str) {
-                        row_json.insert("data".to_string(), v);
-                    } else {
-                        row_json.insert("data_raw".to_string(), serde_json::Value::String(val_str));
-                    }
-                } else {
-                    row_json.insert(format!("col_{}", i), serde_json::Value::String(val_str));
-                }
+        for key in objects {
+            let size = self.storage.size(&key).unwrap_or(0);
+            if size == 0 {
+                continue;
             }
-            json_results.push(serde_json::Value::Object(row_json));
+
+            let remote_file = RemoteFile::new(
+                self.storage.clone(),
+                key.clone(),
+                size,
+                5 * 1024 * 1024,
+                Some(meta_dir.join(format!("{}.meta", key.replace('/', "_")))),
+            );
+
+            let reader = SmartParquetReader::new(remote_file)?;
+            for row in reader.scan_for_id(target_id)? {
+                newest = Some(row_to_document(&row));
+            }
         }
 
-        Ok(json_results)
+        Ok(newest.into_iter().collect())
     }
 }

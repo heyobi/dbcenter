@@ -5,7 +5,7 @@
 //! than asserted.
 
 use dbcenter_core::storage::{CountingStorage, LocalStorageAdapter, StorageAdapter};
-use dbcenter_core::sync_engine::SyncEngine;
+use dbcenter_core::sync_engine::{SyncEngine, SyncMode};
 use dbcenter_core::DBCenter;
 use serde_json::json;
 use std::sync::Arc;
@@ -147,4 +147,137 @@ fn a_remote_lookup_reads_a_fraction_of_the_table() {
         "a single lookup issued {} requests",
         counting.read_requests()
     );
+}
+
+#[test]
+fn a_remote_lookup_sees_rows_written_since_the_last_compaction() {
+    // A compaction writes <table>_BASE_...; every push after it writes
+    // <table>_DELTA_.... Reading only the newest base - which is what this did -
+    // silently misses everything written since, and reports it as "not found".
+    let (db, _counting, engine) = setup("deltas");
+
+    let collection = db.collection("orders");
+    collection
+        .insert_many(&[json!({"ref": "before-vacuum"})])
+        .unwrap();
+    engine.sync_table("orders", 10_000).unwrap();
+    engine.vacuum("orders").unwrap();
+
+    // Written after the compaction, so it lives in a delta object only.
+    collection
+        .insert_many(&[json!({"ref": "after-vacuum"})])
+        .unwrap();
+    engine.sync_table("orders", 10_000).unwrap();
+
+    let rows = db
+        .query(
+            "SELECT id::text AS id, data->>'ref' AS r FROM orders_base ORDER BY created_at",
+            &[],
+        )
+        .unwrap();
+    let ids: Vec<(String, String)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().to_string(),
+                r["r"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "both rows should be in the local base: {ids:?}"
+    );
+
+    for (id, marker) in &ids {
+        let found = engine.scan_smart("orders", id).unwrap();
+        assert_eq!(
+            found.len(),
+            1,
+            "'{marker}' was written but a remote lookup cannot find it"
+        );
+
+        // The shape has to be usable. It used to come back as col_0, col_2, col_3.
+        let doc = &found[0];
+        assert_eq!(
+            doc["ref"],
+            json!(marker),
+            "the document's own fields belong at the top level: {doc:?}"
+        );
+        assert!(doc.get("_id").is_some(), "no _id in {doc:?}");
+    }
+
+    db.shutdown().unwrap();
+}
+
+#[test]
+fn a_document_survives_the_round_trip_through_storage() {
+    // Write through the collection API, sync, and read it back on a database
+    // that has never seen it. This is the whole premise - the machine is
+    // disposable, the bucket is not - and it is the path the earlier cluster
+    // tests missed, because those inserted JSONB through psql directly.
+    let dir = std::env::temp_dir().join("dbcenter_roundtrip");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("storage")).unwrap();
+
+    let storage = || -> Arc<Box<dyn StorageAdapter + Send + Sync>> {
+        Arc::new(Box::new(LocalStorageAdapter::new(dir.join("storage"))))
+    };
+
+    let source = DBCenter::new(
+        Some(dir.join("a").to_str().unwrap()),
+        true,
+        false,
+        None,
+        None,
+        None,
+        None,
+        true,
+    )
+    .unwrap();
+    source
+        .collection("invoices")
+        .insert_many(&[
+            json!({"ref": "INV-1", "amount": 19.99, "paid": true}),
+            json!({"ref": "INV-2", "amount": 5.0, "paid": false}),
+        ])
+        .unwrap();
+    SyncEngine::new(Arc::clone(&source), storage())
+        .sync_table("invoices", 10_000)
+        .unwrap();
+    source.shutdown().unwrap();
+
+    // A different database, nothing in common but the bucket.
+    let target = DBCenter::new(
+        Some(dir.join("b").to_str().unwrap()),
+        true,
+        false,
+        None,
+        None,
+        None,
+        None,
+        true,
+    )
+    .unwrap();
+    SyncEngine::new(Arc::clone(&target), storage())
+        .pull_and_apply("invoices", SyncMode::Full)
+        .unwrap();
+
+    let mut docs = target.collection("invoices").find(None).unwrap();
+    docs.sort_by_key(|d| d["ref"].as_str().unwrap_or_default().to_string());
+
+    assert_eq!(docs.len(), 2, "restored: {docs:?}");
+    assert_eq!(
+        docs[0]["ref"],
+        json!("INV-1"),
+        "fields must come back at the top level, not nested: {:?}",
+        docs[0]
+    );
+    assert_eq!(docs[0]["amount"], json!(19.99));
+    assert_eq!(docs[0]["paid"], json!(true));
+    assert_eq!(docs[1]["ref"], json!("INV-2"));
+
+    target.shutdown().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }

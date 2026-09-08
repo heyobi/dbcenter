@@ -50,13 +50,23 @@ unrecognised query operator. The behaviour that silently dropped the condition,
 turning `delete_many` into a full-table delete, was introduced between that
 release and the last commit before this work.
 
-**No Linux PostGIS below PostgreSQL 18 bundles its dependencies.** Only the 18
-build was rebuilt. The pg12-pg17 archives still carry the modules alone, so they
-only load where GEOS and PROJ are already installed. `build-systems/postgis-pg18`
-in the extensions repo is the recipe; the others need the same treatment.
+**Linux PostGIS is being rebuilt with bundled dependencies.** The published
+archives carry the modules alone, so they only load where GEOS and PROJ already
+are. PostgreSQL 12, 13, 14, 16 and 18 are rebuilt; 15 fails to compile and 17 is
+still going. `build-systems/postgis-pg18` in the extensions repo is the recipe.
 
 **`vector-0.8.1-windows-amd64-pg15` is quarantined.** It shipped an import library
 instead of a DLL. Windows PostgreSQL 15 resolves to pgvector 0.8.0 instead.
+
+**Nothing that reaches object storage is faithful before this.** Documents are
+stored as columns - inserts add a column per field - while `sync_table` read only
+the `data` JSONB column, which those inserts leave null. Everything written
+through the collection API therefore synced as an id and two timestamps, with the
+document dropped. Restoring put the JSON back into `data` rather than expanding it
+into columns, so a round trip came back in a shape `find()` never produces. Both
+sides are fixed and `tests/lazy_read.rs` covers the round trip. Worth knowing why
+it went unnoticed for so long: the cluster tests wrote through psql directly into
+`data`, which is the one path that worked.
 
 **Reading remotely still costs more than it should.** A single-id lookup now reads
 31% of a 15MB table instead of 100%, and the fraction falls as the table grows
@@ -74,6 +84,15 @@ off by default for this reason.
 
 **The bindings other than Python are barely exercised.** Java and Node compile
 again but have no tests. R is not in the workspace.
+
+**The test suite was the reason most of this survived.** The Python suite has 27
+assertions against 83 prints, and never calls fuzzy_search, delete_many,
+update_many, find, create_index or lazy at all. It checks that things do not
+crash. Every bug found in this work was either in a function it never called or
+on a path no test provokes: an unrecognised operator, a type with no mapping, a
+machine without GIS libraries, a document written through the API rather than as
+JSONB. When adding a feature here, add the test that would fail without it, and
+one that provokes the wrong input.
 
 **Credentials are still in git history.** `client_secret.json` and
 `token_cache.json` were removed from the tree but remain in earlier commits. The
