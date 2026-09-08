@@ -73,9 +73,9 @@ impl<'a> VectorStore<'a> {
         }
 
         let mut client = self.db.get_client();
-        let mut transaction = client
-            .transaction()
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        let mut transaction = client.transaction().map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         for i in 0..ids.len() {
             let id = &ids[i];
@@ -116,12 +116,14 @@ impl<'a> VectorStore<'a> {
 
             transaction
                 .execute(&sql, &[&id, &metadata_json])
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+                .map_err(|e| {
+                    crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+                })?;
         }
 
-        transaction
-            .commit()
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        transaction.commit().map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         Ok(())
     }

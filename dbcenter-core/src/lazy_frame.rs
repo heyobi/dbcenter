@@ -110,9 +110,12 @@ impl LazyFrame {
         let wrapper_sql = format!("SELECT to_jsonb(t) FROM ({}) t", sql);
 
         let mut client = self.db.get_client();
-        let rows = client
-            .query(&wrapper_sql, &[])
-            .map_err(|e| DBCenterError::QueryError(format!("Collect failed: {}", e)))?;
+        let rows = client.query(&wrapper_sql, &[]).map_err(|e| {
+            DBCenterError::QueryError(format!(
+                "Collect failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -127,9 +130,12 @@ impl LazyFrame {
     pub fn to_arrow_ipc(&self) -> Result<Vec<u8>> {
         let sql = self.build_sql();
         let mut client = self.db.get_client();
-        let rows = client
-            .query(&sql, &[])
-            .map_err(|e| DBCenterError::QueryError(format!("Arrow export failed: {}", e)))?;
+        let rows = client.query(&sql, &[]).map_err(|e| {
+            DBCenterError::QueryError(format!(
+                "Arrow export failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
 
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -138,7 +144,7 @@ impl LazyFrame {
         // 1. Infer Arrow Schema from Postgres Columns
         let stmt = client
             .prepare(&sql)
-            .map_err(|e| DBCenterError::QueryError(e.to_string()))?;
+            .map_err(|e| DBCenterError::QueryError(crate::utils::format_postgres_error(&e)))?;
         let columns = stmt.columns();
 
         let mut arrow_fields = Vec::new();

@@ -50,7 +50,10 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         client.batch_execute(&sql).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Table creation failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Table creation failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(())
@@ -74,9 +77,9 @@ impl<'a> Collection<'a> {
             // 1. Get existing columns for this table
             let sql_cols =
                 "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
-            let rows = client
-                .query(sql_cols, &[&table])
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            let rows = client.query(sql_cols, &[&table]).map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
             let existing_cols: std::collections::HashSet<String> =
                 rows.iter().map(|r| r.get(0)).collect();
 
@@ -188,7 +191,10 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         let row = client.query_one(&sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Insert failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Insert failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(row.get(0))
@@ -262,7 +268,10 @@ impl<'a> Collection<'a> {
             );
 
             let rows = client.query(&sql, &[]).map_err(|e| {
-                crate::error::DBCenterError::QueryError(format!("Batch insert failed: {}", e))
+                crate::error::DBCenterError::QueryError(format!(
+                    "Batch insert failed: {}",
+                    crate::utils::format_postgres_error(&e)
+                ))
             })?;
 
             for r in rows {
@@ -293,9 +302,12 @@ impl<'a> Collection<'a> {
         };
 
         let mut client = self.db.get_client();
-        let rows = client
-            .query(&sql, &[])
-            .map_err(|e| crate::error::DBCenterError::QueryError(format!("Find failed: {}", e)))?;
+        let rows = client.query(&sql, &[]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!(
+                "Find failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -349,9 +361,9 @@ impl<'a> Collection<'a> {
             .map(|p| p as &(dyn postgres::types::ToSql + Sync))
             .collect();
 
-        let row = client
-            .query_one(&sql, &param_refs[..])
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        let row = client.query_one(&sql, &param_refs[..]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         Ok(row.get(0))
     }
@@ -377,7 +389,10 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         let rows = client.query(&select_sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Update (find) failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Update (find) failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         if rows.is_empty() {
@@ -401,7 +416,10 @@ impl<'a> Collection<'a> {
         );
 
         let affected = client.execute(&update_sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Update (execute) failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Update (execute) failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(affected as i32)
@@ -435,7 +453,10 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         let affected = client.execute(&sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Update failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Update failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(affected)
@@ -458,7 +479,10 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         let rows = client.query(&select_sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Delete (find) failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Delete (find) failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         if rows.is_empty() {
@@ -475,7 +499,10 @@ impl<'a> Collection<'a> {
         );
 
         let affected = client.execute(&sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Delete failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Delete failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(affected as i32)
@@ -497,7 +524,10 @@ impl<'a> Collection<'a> {
 
         let mut client = self.db.get_client();
         let affected = client.execute(&sql, &[]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!("Delete failed: {}", e))
+            crate::error::DBCenterError::QueryError(format!(
+                "Delete failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         Ok(affected)
@@ -520,7 +550,10 @@ impl<'a> Collection<'a> {
                 &[&self.name, &column],
             )
             .map_err(|e| {
-                crate::error::DBCenterError::QueryError(format!("Column lookup failed: {}", e))
+                crate::error::DBCenterError::QueryError(format!(
+                    "Column lookup failed: {}",
+                    crate::utils::format_postgres_error(&e)
+                ))
             })?;
         Ok(row.get(0))
     }
@@ -562,9 +595,9 @@ impl<'a> Collection<'a> {
         );
 
         let mut client = self.db.get_client();
-        client
-            .execute(&sql, &[])
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        client.execute(&sql, &[]).map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         tracing::info!("Created index: {}", idx_name);
         Ok(())
@@ -685,7 +718,9 @@ impl<'a> Collection<'a> {
         let mut client = self.db.get_client();
         let row = client
             .query_one("SELECT similarity($1, $2)", &[&s1, &s2])
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            .map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
 
         Ok(row.get(0))
     }

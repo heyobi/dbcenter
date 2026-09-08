@@ -85,9 +85,9 @@ impl SyncEngine {
         let count: i64 = {
             let mut client = self.db.get_client();
             let sql_check = format!("SELECT COUNT(*) FROM \"{}\"", adds_table);
-            let rows = client
-                .query(&sql_check, &[])
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            let rows = client.query(&sql_check, &[]).map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
             rows[0].get("count")
         };
 
@@ -103,9 +103,9 @@ impl SyncEngine {
         );
         let rows = {
             let mut client = self.db.get_client();
-            client
-                .query(&sql_fetch, &[])
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?
+            client.query(&sql_fetch, &[]).map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?
         };
 
         if rows.is_empty() {
@@ -157,9 +157,9 @@ impl SyncEngine {
 
         // 6. Compact / Cleanup (Move to Base)
         let mut client = self.db.get_client();
-        let mut transaction = client
-            .transaction()
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        let mut transaction = client.transaction().map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         for row in &rows {
             let id: String = row.get("id");
@@ -203,9 +203,9 @@ impl SyncEngine {
                 })?;
         }
 
-        transaction
-            .commit()
-            .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+        transaction.commit().map_err(|e| {
+            crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+        })?;
 
         Ok(rows.len())
     }
@@ -369,9 +369,9 @@ impl SyncEngine {
             );
             let rows = {
                 let mut client = self.db.get_client();
-                client
-                    .query(&sql_base, &[])
-                    .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?
+                client.query(&sql_base, &[]).map_err(|e| {
+                    crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+                })?
             };
 
             if rows.is_empty() {
@@ -532,9 +532,9 @@ impl SyncEngine {
             })?;
 
             let mut client = self.db.get_client();
-            let mut transaction = client
-                .transaction()
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            let mut transaction = client.transaction().map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
 
             for batch_result in reader {
                 let batch = batch_result.map_err(|e| {
@@ -612,9 +612,9 @@ impl SyncEngine {
                 }
             }
 
-            transaction
-                .commit()
-                .map_err(|e| crate::error::DBCenterError::QueryError(e.to_string()))?;
+            transaction.commit().map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
         }
 
         Ok(())

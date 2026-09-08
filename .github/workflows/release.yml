@@ -20,9 +20,15 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest,  platform: linux,   target: x86_64  }
-          - { os: ubuntu-latest,  platform: linux,   target: aarch64 }
+          # ring's assembly does not build under the cross gcc without being told
+          # the architecture: "ARM assembler must define __ARM_ARCH". It arrives
+          # through reqwest's rustls.
+          - { os: ubuntu-latest,  platform: linux,   target: aarch64,
+              cflags: "-D__ARM_ARCH=8" }
           - { os: macos-14,       platform: macos,   target: aarch64 }
-          - { os: macos-13,       platform: macos,   target: x86_64  }
+          # On macos-14, which is arm64, cross-compiled. macos-13 is being
+          # retired and its runners sat queued for hours.
+          - { os: macos-14,       platform: macos,   target: x86_64  }
           - { os: windows-latest, platform: windows, target: x64     }
 
     steps:
@@ -39,7 +45,11 @@ jobs:
           manylinux: auto
           # build.rs compiles the watcher for the same target and embeds it, so
           # cross builds need the target's toolchain inside the container too.
-          docker-options: -e CARGO_BUILD_JOBS=2
+          docker-options: >-
+            -e CARGO_BUILD_JOBS=2
+            -e CFLAGS_aarch64_unknown_linux_gnu=${{ matrix.cflags }}
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: ${{ matrix.cflags }}
 
       - uses: actions/upload-artifact@v4
         with:

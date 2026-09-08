@@ -74,6 +74,68 @@ impl<'a> GeoCollection<'a> {
         Ok(())
     }
 
+    /// Does this table have the given column?
+    fn has_column(&self, column: &str) -> Result<bool> {
+        let mut client = self.db.get_client();
+        let row = client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM information_schema.columns
+                     WHERE table_name = $1 AND column_name = $2
+                 )",
+                &[&self.name, &column],
+            )
+            .map_err(|e| {
+                crate::error::DBCenterError::QueryError(format!(
+                    "Column lookup failed: {}",
+                    crate::utils::format_postgres_error(&e)
+                ))
+            })?;
+        Ok(row.get(0))
+    }
+
+    /// A WHERE condition selecting the row an id refers to.
+    ///
+    /// A number is the `id` primary key. A string is matched against whatever the
+    /// table actually has: `name` in the relational layout, `data->>'name'` and
+    /// `data->>'id'` in the JSONB one.
+    ///
+    /// This used to look only in `data`. Geo inserts go through the relational
+    /// path, which writes each field to its own column and leaves `data` null, so
+    /// every string lookup matched nothing - and both callers report that as "not
+    /// found" rather than an error, so `distance_between` quietly returned None
+    /// and `contains_point` quietly returned false.
+    fn row_condition(&self, id: &JsonValue) -> Result<String> {
+        if let JsonValue::Number(n) = id {
+            return Ok(format!("id = {}", n));
+        }
+
+        let value = match id {
+            JsonValue::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let literal =
+            crate::query::QueryBuilder::json_to_sql_literal(&JsonValue::String(value.clone()));
+
+        let mut alternatives = Vec::new();
+        if self.has_column("name")? {
+            alternatives.push(format!("\"name\" = {}", literal));
+        }
+        if self.has_column("data")? {
+            alternatives.push(format!("data->>'name' = {}", literal));
+            alternatives.push(format!("data->>'id' = {}", literal));
+        }
+
+        if alternatives.is_empty() {
+            return Err(crate::error::DBCenterError::InvalidQuery(format!(
+                "'{}' cannot be resolved: collection '{}' has neither a 'name' \
+                 column nor a 'data' column to match it against. Pass the numeric id.",
+                value, self.name
+            )));
+        }
+        Ok(format!("({})", alternatives.join(" OR ")))
+    }
+
     /// Insert documents (delegates to standard collection)
     pub fn insert_many(&self, documents: &[JsonValue]) -> Result<Vec<String>> {
         self.db.collection(&self.name).insert_many(documents)
@@ -150,23 +212,8 @@ impl<'a> GeoCollection<'a> {
     /// can refer to a place by its name without knowing the generated id.
     /// Returns `None` when either document is missing or has no coordinates.
     pub fn distance_between(&self, from_id: &JsonValue, to_id: &JsonValue) -> Result<Option<f64>> {
-        let (val1, is_int1) = self.extract_id_val(from_id);
-        let (val2, is_int2) = self.extract_id_val(to_id);
-
-        let get_cond = |val: &String, is_int: bool, _placeholder: &str| {
-            if is_int {
-                format!("id = {}", val)
-            } else {
-                format!(
-                    "(data->>'id' = '{}' OR data->>'name' = '{}')",
-                    val.replace("'", "''"),
-                    val.replace("'", "''")
-                )
-            }
-        };
-
-        let cond1 = get_cond(&val1, is_int1, "");
-        let cond2 = get_cond(&val2, is_int2, "");
+        let cond1 = self.row_condition(from_id)?;
+        let cond2 = self.row_condition(to_id)?;
 
         let sql = format!(
             r#"
@@ -195,14 +242,6 @@ impl<'a> GeoCollection<'a> {
         Ok(None)
     }
 
-    fn extract_id_val(&self, v: &JsonValue) -> (String, bool) {
-        match v {
-            JsonValue::Number(n) => (n.to_string(), true),
-            JsonValue::String(s) => (s.clone(), false),
-            _ => (v.to_string(), false),
-        }
-    }
-
     /// Check if point is inside a polygon (identified by ID)
     /// Polygon is assumed to be in `data->'geometry'` or `data->'polygon'`?
     /// User prompt says: `contains_point(polygon_id="...", lat=..., lon=...)`.
@@ -216,19 +255,7 @@ impl<'a> GeoCollection<'a> {
     /// The user didn't specify format. I will try to handle `geometry` (GeoJSON) or `wkt`.
     /// Most likely GeoJSON in `data`.
     pub fn contains_point(&self, polygon_id: &JsonValue, lat: f64, lon: f64) -> Result<bool> {
-        let (val, is_int) = self.extract_id_val(polygon_id);
-        let get_cond = |val: &String, is_int: bool| {
-            if is_int {
-                format!("id = {}", val)
-            } else {
-                format!(
-                    "(data->>'id' = '{}' OR data->>'name' = '{}')",
-                    val.replace("'", "''"),
-                    val.replace("'", "''")
-                )
-            }
-        };
-        let cond = get_cond(&val, is_int);
+        let cond = self.row_condition(polygon_id)?;
 
         // ST_Contains(polygon, point)
         // Use "geometry" column

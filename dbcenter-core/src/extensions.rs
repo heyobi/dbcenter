@@ -616,7 +616,7 @@ const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
     ),
     (
         "postgis-3.6.1-linux-amd64-pg18.tar.gz",
-        "a23f85e06f1fbb319ec7a03959cee31fa1965cc6dc439520835b559001b86c02",
+        "873c873ab40a5ed6f153e0cebe89530ef64ef20b347f618aa46c1616808b05f3",
     ),
     (
         "postgis-3.6.1-windows-amd64-pg13.zip",
@@ -1025,7 +1025,10 @@ fn install_postgis(db: &DBCenter, requested_version: Option<&str>) -> Result<()>
     let rows = client
         .query("SELECT PostGIS_Version() as version", &[])
         .map_err(|e| {
-            DBCenterError::ExtensionError(format!("PostGIS verification failed: {}", e))
+            DBCenterError::ExtensionError(format!(
+                "PostGIS verification failed: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
     if let Some(row) = rows.first() {

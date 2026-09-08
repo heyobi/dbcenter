@@ -23,7 +23,12 @@ cargo clippy -p dbcenter-core -p dbcenter-serve --all-targets -- -D warnings; ch
 
 step "Object storage for the S3 tests"
 if docker info >/dev/null 2>&1; then
-  docker rm -f dbcenter-verify-minio >/dev/null 2>&1
+  # Any container already holding the port makes the S3 tests fail for a reason
+  # that has nothing to do with the code, which is how a suite stops being
+  # believed.
+  for c in $(docker ps -q --filter "publish=19000"); do
+    docker rm -f "$c" >/dev/null 2>&1
+  done
   docker run -d --name dbcenter-verify-minio -p 19000:9000 \
     -e MINIO_ROOT_USER=dbcenter -e MINIO_ROOT_PASSWORD=dbcenter123 \
     minio/minio:latest server /data >/dev/null 2>&1

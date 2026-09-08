@@ -25,7 +25,10 @@ impl DeltaManager {
             table_name
         );
         client.batch_execute(&create_base_sql).map_err(|e| {
-            DBCenterError::QueryError(format!("Failed to create base table: {}", e))
+            DBCenterError::QueryError(format!(
+                "Failed to create base table: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         // 2. Create Adds Table
@@ -39,7 +42,10 @@ impl DeltaManager {
             table_name
         );
         client.batch_execute(&create_adds_sql).map_err(|e| {
-            DBCenterError::QueryError(format!("Failed to create adds table: {}", e))
+            DBCenterError::QueryError(format!(
+                "Failed to create adds table: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         // 3. Create Dels Table
@@ -51,7 +57,10 @@ impl DeltaManager {
             table_name
         );
         client.batch_execute(&create_dels_sql).map_err(|e| {
-            DBCenterError::QueryError(format!("Failed to create dels table: {}", e))
+            DBCenterError::QueryError(format!(
+                "Failed to create dels table: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         // Create indexes
@@ -62,9 +71,12 @@ impl DeltaManager {
             "#,
             table_name, table_name, table_name, table_name
         );
-        client
-            .batch_execute(&create_indexes_sql)
-            .map_err(|e| DBCenterError::QueryError(format!("Failed to create indexes: {}", e)))?;
+        client.batch_execute(&create_indexes_sql).map_err(|e| {
+            DBCenterError::QueryError(format!(
+                "Failed to create indexes: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
 
         // 2. Create Create "Transparent View"
         // Union of base and adds, filtering out dels
@@ -89,7 +101,10 @@ impl DeltaManager {
 
         tracing::info!("Creating/Replacing View for {}", table_name);
         client.batch_execute(&view_sql).map_err(|e| {
-            DBCenterError::QueryError(format!("Failed to create delta view: {}", e))
+            DBCenterError::QueryError(format!(
+                "Failed to create delta view: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
         })?;
 
         // 3. Implement INSTEAD OF TRIGGERS
@@ -220,7 +235,10 @@ impl DeltaManager {
         client
             .batch_execute(&format!("{}{}{}", insert_sql, update_sql, delete_sql))
             .map_err(|e| {
-                DBCenterError::QueryError(format!("Failed to create delta triggers: {}", e))
+                DBCenterError::QueryError(format!(
+                    "Failed to create delta triggers: {}",
+                    crate::utils::format_postgres_error(&e)
+                ))
             })?;
 
         Ok(())
