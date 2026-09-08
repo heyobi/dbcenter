@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "dbcenter"
-version = "0.2.0"
+version = "0.3.0"
 description = "Embedded PostgreSQL with a MongoDB-style API, PostGIS and pgvector included"
 readme = "README.md"
 requires-python = ">=3.8"

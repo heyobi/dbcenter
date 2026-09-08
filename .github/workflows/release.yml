@@ -124,6 +124,43 @@ jobs:
               assert "Unsupported query operator" in str(e), e
           assert c.count() == 2, "the rows must still be there"
 
+          # The sync round trip, which is where the damage was. A document
+          # written through the collection API used to reach object storage as
+          # an id and two timestamps - the fields live in the row's own columns
+          # and only the `data` column was read - and the move into _base
+          # dropped them locally as well. An updated row then disappeared from
+          # the collection entirely, because syncing left its delete marker
+          # behind. None of that is visible without syncing and reading back.
+          import shutil, os
+          shutil.rmtree("/tmp/sync", ignore_errors=True)
+          os.makedirs("/tmp/sync/storage")
+          sdb = dbcenter.DBCenter(path="/tmp/sync/db", persist=True, multi_user_sync=True)
+          engine = dbcenter.SyncEngine(sdb, dbcenter.LocalStorageAdapter("/tmp/sync/storage"))
+          accounts = sdb.collection("accounts")
+          accounts.insert_many([{"name": "ada", "balance": 100},
+                                {"name": "grace", "balance": 250}])
+          assert engine.sync_table("accounts", 1000) == 2
+
+          rows = sdb.query("SELECT name, balance FROM accounts ORDER BY name")
+          assert rows == [{"name": "ada", "balance": 100},
+                          {"name": "grace", "balance": 250}], rows
+
+          sdb.query("UPDATE accounts SET balance = 500 WHERE name = 'ada'")
+          engine.sync_table("accounts", 1000)
+          assert accounts.count() == 2, f"a synced update lost a row: {accounts.count()}"
+          after = sdb.query("SELECT balance FROM accounts WHERE name = 'ada'")
+          assert after == [{"balance": 500}], after
+
+          # And the parquet itself has to be columnar, which is the whole reason
+          # to keep it as parquet at all.
+          import glob
+          files = glob.glob("/tmp/sync/storage/**/*.parquet", recursive=True)
+          assert files, "nothing was written to storage"
+          blob = open(files[0], "rb").read()
+          for field in (b"name", b"balance"):
+              assert field in blob, f"{field!r} is not a column in the parquet file"
+
+          sdb.shutdown()
           db.shutdown()
           print("wheel works")
           PY
