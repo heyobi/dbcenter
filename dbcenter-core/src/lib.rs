@@ -51,8 +51,17 @@ static INSTANCES: Lazy<Mutex<HashMap<PathBuf, Arc<DBCenter>>>> =
 /// one `SET` in the codebase and every transaction are held on a single guard -
 /// so which connection a caller gets does not matter.
 /// How many connections the pool holds, and opening that many.
-fn open_pool_connections(conn_str: &str) -> Result<Vec<Client>> {
-    let pool_size = std::env::var("DBCENTER_POOL_SIZE")
+/// How many connections the pool holds.
+///
+/// Never one. A single connection is enough to deadlock the engine against
+/// itself: several operations hold a connection while calling something that
+/// asks for another - a sync commits its transaction and then refreshes the
+/// columnar view - and with a pool of one the second call waits for a
+/// connection the first will not give back until it returns. It only appears on
+/// a machine with one core, because that is what `available_parallelism`
+/// reports there, and one core is exactly the cheap tier this is built for.
+fn pool_size_from_env() -> usize {
+    std::env::var("DBCENTER_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or_else(|| {
@@ -60,7 +69,11 @@ fn open_pool_connections(conn_str: &str) -> Result<Vec<Client>> {
                 .map(|n| n.get())
                 .unwrap_or(4)
         })
-        .clamp(1, 32);
+        .clamp(2, 32)
+}
+
+fn open_pool_connections(conn_str: &str) -> Result<Vec<Client>> {
+    let pool_size = pool_size_from_env();
 
     let mut clients = Vec::with_capacity(pool_size);
     for _ in 0..pool_size {
@@ -1021,4 +1034,27 @@ fn escape_quotes(path: &Path) -> String {
         }
     }
     escaped
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::pool_size_from_env;
+
+    /// A pool of one deadlocks the engine against itself the first time a sync
+    /// finishes and goes to refresh the columnar view. `available_parallelism`
+    /// returns 1 inside a one-core container, so this is not a hypothetical.
+    #[test]
+    fn the_pool_never_holds_a_single_connection() {
+        std::env::set_var("DBCENTER_POOL_SIZE", "1");
+        assert_eq!(pool_size_from_env(), 2);
+
+        std::env::set_var("DBCENTER_POOL_SIZE", "64");
+        assert_eq!(pool_size_from_env(), 32, "and it stays bounded above");
+
+        std::env::set_var("DBCENTER_POOL_SIZE", "8");
+        assert_eq!(pool_size_from_env(), 8);
+
+        std::env::remove_var("DBCENTER_POOL_SIZE");
+        assert!(pool_size_from_env() >= 2);
+    }
 }

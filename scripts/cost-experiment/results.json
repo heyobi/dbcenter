@@ -1,0 +1,33 @@
+{
+  "rows": 1000000,
+  "targets": {
+    "postgres": {
+      "load": {
+        "insert_s": 23.1,
+        "index_s": 3.9
+      },
+      "disk_bytes": 635456974,
+      "bucket_bytes": 71538,
+      "cold_start_s": 2.5,
+      "rows_held_locally": 1000000,
+      "aggregate_collection": {
+        "median_ms": 707.63,
+        "best_ms": 703.46,
+        "rows": 5
+      },
+      "recent_window": {
+        "median_ms": 0.73,
+        "best_ms": 0.6,
+        "rows": 100
+      },
+      "point_lookup": {
+        "median_ms": 0.38,
+        "best_ms": 0.34,
+        "rows": 1
+      },
+      "insert_200_rows_ms": 1691.9,
+      "inserts_per_second": 118,
+      "memory_bytes": 41859153
+    }
+  }
+}

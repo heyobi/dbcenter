@@ -69,7 +69,7 @@ an ordinary connection string.
 flowchart TB
     subgraph clients["Everything that connects"]
         driver["psql, DBeaver, pgAdmin<br/>any PostgreSQL driver"]
-        api["Python, C, Go, Java, Node<br/>collection API"]
+        api["collection API<br/>Python (supported)<br/>C, Go, Java, Node, R (experimental)"]
     end
 
     subgraph engine["DBCenter"]
@@ -110,6 +110,9 @@ flowchart TB
     adds --> r
     base --> r
     dels -.->|"subtracted"| r
+
+    conf["orders_conflicts<br/>versions a pull discarded"]
+    base -.->|"a pull overwrote a row<br/>that differed"| conf
 ```
 
 A document's fields are ordinary columns. The first time a document carries a
@@ -141,6 +144,12 @@ sequenceDiagram
     App->>Sync: pull_and_apply
     Sync->>S3: read base, then every delta after it
     Sync->>PG: upsert into orders_base, newest updated_at wins
+    Note over Sync,PG: equal timestamps break on a hash of the row,<br/>so every node picks the same version
+    Sync->>PG: write the version that lost into orders_conflicts
+
+    Note over App,S3: a node that only wants what changed
+    App->>Sync: pull_and_apply(partial)
+    Sync->>S3: read the deltas, skip the base snapshot
 ```
 
 The Parquet is written with **one column per document field**, with the type the
@@ -167,10 +176,12 @@ flowchart TB
 
     q -->|"a row, or a write"| a["orders<br/>the collection"]
     q -->|"an aggregate over history"| b["orders_columnar<br/>published when columnar=True"]
+    q -->|"one id, on a machine<br/>with no local copy"| c["smart_query<br/>needs no extension"]
 
     a --> pg[("PostgreSQL tables<br/>indexed, transactional,<br/>current to this instant")]
     b --> duck["pg_duckdb"]
     duck --> s3[("Parquet on object storage<br/>as current as the last sync")]
+    c -->|"range requests, skipping<br/>row groups by id"| s3
 ```
 
 They are not merged into one view, and that is a decision rather than an
@@ -371,6 +382,22 @@ stayed different for good. They now converge on the same one.
 What this is not is a merge. Two nodes incrementing the same counter still end
 at one increment, not two; `<collection>_conflicts` tells you it happened, and
 what the other value was.
+
+### Lazy sync
+
+A table in object storage is one base snapshot plus the deltas written since the
+last compaction. `pull_and_apply(table, partial=True)` reads only the deltas and
+leaves the base where it is, so a node comes up current on what changed recently
+while holding none of the history. What it cannot answer locally it answers
+against object storage: a point lookup through `smart_query`, an aggregate
+through the `<name>_columnar` view. `partial=False` brings the base down too and
+gives the node the whole table.
+
+That is the whole of it - "lazy" is about not downloading the snapshot, not
+about deferring the push. Pushes are explicit (`sync_table`), and compaction is
+occasional rather than continuous: it rewrites the base and deletes the deltas
+it replaces, and it forces a full pull first so it cannot compact a table it
+only half has.
 
 Compaction takes the storage lock, so with several nodes running exactly one
 does the work and the others move on. Without it every push leaves another

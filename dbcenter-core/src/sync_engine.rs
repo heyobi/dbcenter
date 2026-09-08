@@ -66,10 +66,27 @@ pub struct SyncEngine {
     storage: Arc<Box<dyn StorageAdapter + Send + Sync>>,
 }
 
-/// Synchronization Mode
+/// How much of what is in object storage a pull brings down.
+///
+/// This is what "lazy sync" means here, and it is worth being precise because
+/// the phrase has been used loosely. A table in object storage is one base
+/// snapshot plus every delta written since the last compaction. The base is the
+/// bulk of it; the deltas are what changed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SyncMode {
+    /// Read the base snapshot and every delta after it, so the local copy holds
+    /// the whole table. What a node needs before it can serve arbitrary reads
+    /// on its own, and what a compaction forces before it rewrites the base.
     Full,
+    /// Read only the deltas and leave the base snapshot where it is. A node in
+    /// this mode is current on everything that has changed recently and holds
+    /// none of the history: it answers a point lookup into the base with
+    /// [`SyncEngine::scan_smart`], and an aggregate over it through the
+    /// `<table>_columnar` view, both of which read object storage directly.
+    ///
+    /// This is the mode that makes a small machine viable. The cost is that a
+    /// query the local tables cannot answer pays a round trip to object storage
+    /// instead of a disk read.
     Partial,
 }
 
@@ -134,12 +151,31 @@ fn row_to_document(row: &parquet::record::Row) -> serde_json::Value {
 /// The synced schema is only (id, data, created_at, updated_at); the fields a
 /// document carries are whatever it happened to have. A database restoring a
 /// table it has never seen has to grow the columns as it reads them.
+/// `a.col1, a.col2, ...` - the columns of a row comparison, qualified.
+fn qualified(columns: &[String], alias: &str) -> String {
+    columns
+        .iter()
+        .map(|c| format!("{}.{}", alias, c))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn ensure_restored_column(
     transaction: &mut postgres::Transaction<'_>,
     table: &str,
     column: &str,
     value: &serde_json::Value,
+    ensured: &mut std::collections::HashSet<String>,
 ) -> crate::error::Result<bool> {
+    // Every row of a Parquet file has the same columns, and this used to run two
+    // `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements for each field of
+    // each row: a five-field table of 200,000 rows meant two million no-op DDL
+    // statements, each taking a catalog lock, and a restore spent almost all of
+    // its time there. Once per column per restore is enough.
+    if !ensured.insert(column.to_string()) {
+        return Ok(false);
+    }
+
     let sql_type = match value {
         serde_json::Value::Bool(_) => "BOOLEAN",
         serde_json::Value::Number(n) if n.is_i64() => "BIGINT",
@@ -536,6 +572,11 @@ impl SyncEngine {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
 
+        // Give the connection back before asking for another one. Committing
+        // does not release it - the guard lives until the end of the function -
+        // and refreshing the view needs a connection of its own.
+        drop(client);
+
         // A new delta object changes which deduplication the view needs.
         self.refresh_columnar_view(table_name);
 
@@ -881,6 +922,9 @@ impl SyncEngine {
         let mut sorted_files = files.clone();
         sorted_files.sort();
         let mut added_columns = false;
+        // Which columns this restore has already made sure of.
+        let mut ensured_columns: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         for file in sorted_files {
             if !file.ends_with(".parquet") {
@@ -928,8 +972,168 @@ impl SyncEngine {
                     ))
                 })?;
 
+                // Build the statement once for the batch, not once per row.
+                //
+                // The values used to be written into the SQL text, so every row
+                // produced a different statement and PostgreSQL parsed and
+                // planned all of them: a restore of a million rows planned a
+                // million statements, and that - not the writing - was where
+                // the time went. The document rides in as one jsonb parameter
+                // instead, so the text is the same for every row of a file and
+                // the driver prepares it once.
+                //
+                // The casts come from the Arrow schema rather than from each
+                // row's value, because a column with nulls in it would
+                // otherwise produce two different statements.
+                let field_specs: Vec<(String, String)> = batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .filter(|f| {
+                        !matches!(
+                            f.name().as_str(),
+                            "id" | "data" | "created_at" | "updated_at"
+                        )
+                    })
+                    .map(|f| {
+                        // `quote_sql_literal` escapes the quotes inside; the
+                        // surrounding pair is the caller's job.
+                        let key = format!("'{}'", quote_sql_literal(f.name()));
+                        let expr = match f.data_type() {
+                            DataType::Int64 => format!("($4::jsonb->>{})::bigint", key),
+                            DataType::Float64 => {
+                                format!("($4::jsonb->>{})::double precision", key)
+                            }
+                            DataType::Boolean => format!("($4::jsonb->>{})::boolean", key),
+                            _ => format!("$4::jsonb->>{}", key),
+                        };
+                        (f.name().clone(), expr)
+                    })
+                    .collect();
+
+                for (name, _) in &field_specs {
+                    let sample = match batch.schema().field_with_name(name).map(|f| f.data_type()) {
+                        Ok(DataType::Int64) => serde_json::Value::from(0i64),
+                        Ok(DataType::Float64) => serde_json::Value::from(0.0f64),
+                        Ok(DataType::Boolean) => serde_json::Value::from(false),
+                        _ => serde_json::Value::from(""),
+                    };
+                    if ensure_restored_column(
+                        &mut transaction,
+                        table_name,
+                        name,
+                        &sample,
+                        &mut ensured_columns,
+                    )? {
+                        added_columns = true;
+                    }
+                }
+
+                let base_table = format!("{}_base", table_name);
+                let conflict_table = format!("{}_conflicts", table_name);
+
+                let mut columns = vec![
+                    "id".to_string(),
+                    "data".to_string(),
+                    "updated_at".to_string(),
+                ];
+                let mut values = vec![
+                    "$1::uuid".to_string(),
+                    "$2::jsonb".to_string(),
+                    "$3::text::timestamptz".to_string(),
+                ];
+                let mut assignments = vec![
+                    "data = EXCLUDED.data".to_string(),
+                    "updated_at = EXCLUDED.updated_at".to_string(),
+                ];
+                for (name, expr) in &field_specs {
+                    let quoted = crate::query::quote_ident(name);
+                    columns.push(quoted.clone());
+                    values.push(expr.clone());
+                    assignments.push(format!("{q} = EXCLUDED.{q}", q = quoted));
+                }
+
+                // The timestamp decides, and only an exact tie falls through to
+                // the row itself.
+                //
+                // Two rows that are simply equal - which is every row of a file
+                // being applied a second time, and a compaction forces exactly
+                // that - are sent away by the `IS DISTINCT FROM` before anything
+                // expensive happens. Only a genuine tie renders the rows as
+                // text.
+                //
+                // Text, because a plain row comparison cannot break the tie: SQL
+                // row comparison yields NULL as soon as it meets a NULL column,
+                // so two rows differing only after a null column compare neither
+                // greater nor less and neither node would take the other's
+                // version. The text rendering is null-safe and identical on
+                // every node. `created_at` is deliberately left out: the row
+                // being inserted takes the column default, which is local time.
+                let compared: Vec<String> = columns
+                    .iter()
+                    .filter(|c| c.as_str() != "id" && c.as_str() != "updated_at")
+                    .cloned()
+                    .collect();
+
+                // Last write wins, and the version that loses is written to
+                // `<table>_conflicts` rather than dropped. `before` is read in
+                // the same statement, so it holds the row as it was before the
+                // upsert touched it.
+                let upsert_base = format!(
+                    r#"
+                    WITH incoming AS (
+                        SELECT {select_list}
+                    ),
+                    before AS (
+                        SELECT * FROM "{base}" WHERE id = $1::uuid
+                    ),
+                    applied AS (
+                        INSERT INTO "{base}" ({cols})
+                        SELECT {cols} FROM incoming
+                        ON CONFLICT (id) DO UPDATE SET {assignments}
+                        WHERE EXCLUDED.updated_at > "{base}".updated_at
+                           OR (EXCLUDED.updated_at = "{base}".updated_at
+                               AND ({excluded_tuple})
+                                   IS DISTINCT FROM ({base_tuple})
+                               AND ROW({excluded_tuple})::text
+                                 > ROW({base_tuple})::text)
+                        RETURNING id
+                    )
+                    INSERT INTO "{conflicts}" (id, incoming_won, incoming, existing)
+                    SELECT i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(i), to_jsonb(b)
+                    FROM before b, incoming i
+                    WHERE ({b_tuple}) IS DISTINCT FROM ({i_tuple})
+                    "#,
+                    select_list = columns
+                        .iter()
+                        .zip(values.iter())
+                        .map(|(c, v)| format!("{} AS {}", v, c))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    base = base_table,
+                    cols = columns.join(", "),
+                    assignments = assignments.join(", "),
+                    conflicts = conflict_table,
+                    excluded_tuple = qualified(&compared, "EXCLUDED"),
+                    base_tuple = qualified(&compared, &format!("\"{}\"", base_table)),
+                    b_tuple = qualified(&compared, "b"),
+                    i_tuple = qualified(&compared, "i"),
+                );
+
                 for i in 0..batch.num_rows() {
                     let (mut fields, data_json) = arrow_row_to_document(&batch, i);
+
+                    // A JSON null is not an empty column: binding the value as
+                    // it stands writes jsonb 'null' into `data`, where the row
+                    // it came from had SQL NULL. Two nodes then disagree about a
+                    // row they hold identically - one side renders "null" and
+                    // the other renders nothing - and each accepts the other's
+                    // version forever.
+                    let data_param: Option<&serde_json::Value> = if data_json.is_null() {
+                        None
+                    } else {
+                        Some(&data_json)
+                    };
 
                     let Some(serde_json::Value::String(id_str)) = fields.remove("id") else {
                         // A row with no id cannot be upserted into _base, and
@@ -945,96 +1149,8 @@ impl SyncEngine {
                         _ => chrono::Utc::now().naive_utc().to_string(),
                     };
                     fields.remove("created_at");
-
-                    let base_table = format!("{}_base", table_name);
-
-                    let mut columns = vec![
-                        "id".to_string(),
-                        "data".to_string(),
-                        "updated_at".to_string(),
-                    ];
-                    let mut values = vec![
-                        "$1::uuid".to_string(),
-                        "$2::jsonb".to_string(),
-                        "$3::text::timestamptz".to_string(),
-                    ];
-                    let mut assignments = vec![
-                        "data = EXCLUDED.data".to_string(),
-                        "updated_at = EXCLUDED.updated_at".to_string(),
-                    ];
-
-                    for (key, value) in &fields {
-                        if matches!(key.as_str(), "id" | "data" | "created_at" | "updated_at") {
-                            continue;
-                        }
-                        if ensure_restored_column(&mut transaction, table_name, key, value)? {
-                            added_columns = true;
-                        }
-                        let quoted = crate::query::quote_ident(key);
-                        columns.push(quoted.clone());
-                        values.push(crate::query::QueryBuilder::json_to_sql_literal(value));
-                        assignments.push(format!("{q} = EXCLUDED.{q}", q = quoted));
-                    }
-
-                    // Last write wins, with two things the plain version got
-                    // wrong.
-                    //
-                    // The comparison was `EXCLUDED.updated_at > base.updated_at`,
-                    // so on equal timestamps each node kept whichever row it
-                    // already had - two nodes that edited a row in the same
-                    // clock tick ended up holding different data and stayed
-                    // that way. The tie is now broken on a hash of the row,
-                    // which every node computes the same way, so they converge
-                    // on the same version instead of diverging. `created_at` is
-                    // left out of the hash: the row being inserted takes the
-                    // column default, so it holds this node's clock rather than
-                    // anything the two nodes agree on.
-                    //
-                    // And the version that loses is written to
-                    // `<table>_conflicts` rather than dropped. Last-write-wins
-                    // is still the resolution - this only makes what it
-                    // discarded something you can go and look at. `before` is
-                    // read in the same statement, so it holds the row as it was
-                    // before the upsert touched it.
-                    //
-                    // $3 is cast to text first, then timestamptz, to accept a
-                    // String from Rust.
-                    let incoming_columns = columns.join(", ");
-                    let conflict_table = format!("{}_conflicts", table_name);
-                    let upsert_base = format!(
-                        r#"
-                        WITH incoming AS (
-                            SELECT {select_list}
-                        ),
-                        before AS (
-                            SELECT * FROM "{base}" WHERE id = $1::uuid
-                        ),
-                        applied AS (
-                            INSERT INTO "{base}" ({cols})
-                            SELECT {cols} FROM incoming
-                            ON CONFLICT (id) DO UPDATE SET {assignments}
-                            WHERE (EXCLUDED.updated_at,
-                                   md5((to_jsonb(EXCLUDED) - 'created_at')::text))
-                                > ("{base}".updated_at,
-                                   md5((to_jsonb("{base}") - 'created_at')::text))
-                            RETURNING id
-                        )
-                        INSERT INTO "{conflicts}" (id, incoming_won, incoming, existing)
-                        SELECT i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(i), to_jsonb(b)
-                        FROM before b, incoming i
-                        WHERE NOT (to_jsonb(b) @> to_jsonb(i))
-                        "#,
-                        select_list = columns
-                            .iter()
-                            .zip(values.iter())
-                            .map(|(c, v)| format!("{} AS {}", v, c))
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        base = base_table,
-                        cols = incoming_columns,
-                        assignments = assignments.join(", "),
-                        conflicts = conflict_table,
-                    );
+                    fields.remove("data");
+                    let document = serde_json::Value::Object(fields);
 
                     let id_uuid = uuid::Uuid::parse_str(&id_str).map_err(|e| {
                         crate::error::DBCenterError::QueryError(format!(
@@ -1043,7 +1159,10 @@ impl SyncEngine {
                         ))
                     })?;
                     transaction
-                        .execute(&upsert_base, &[&id_uuid, &data_json, &updated_at_val])
+                        .execute(
+                            &upsert_base,
+                            &[&id_uuid, &data_param, &updated_at_val, &document],
+                        )
                         .map_err(|e| {
                             crate::error::DBCenterError::QueryError(format!(
                                 "Failed to apply parquet row to base: {:?}",

@@ -96,6 +96,21 @@ now - if you add another cache along this path, do the same.
 which is the local clock. Including it made both nodes accept the other's row,
 which is the same divergence in the opposite direction.
 
+**Never hold a pooled connection while calling something that takes another.**
+The pool is sized from `available_parallelism`, which is 1 inside a one-core
+container - the cheap tier this is built for - and one connection is enough to
+deadlock the engine against itself. A sync held its transaction guard past the
+commit and then refreshed the columnar view, and the node hung. The floor is now
+two connections, but the floor is a seatbelt, not the fix: drop the guard first.
+
+**A wire-protocol client cannot add a field to a collection.** Schema evolution
+happens inside `insert_one`; a client connected over TCP can only insert into
+the view, whose columns were frozen when it was created. Everything it writes
+then lands in the `data` JSONB column - which works, and quietly costs the
+columnar read path its whole advantage, because the Parquet holds one JSON
+string per row instead of one column per field. `dbcenter-serve` takes
+`DBCENTER_SCHEMA` for this reason.
+
 **A Python `Collection` reads any unknown attribute as a column.** `coll.name`
 does not give you the collection's name, it gives you the values of a field
 called "name". Tests keep the name in a variable.

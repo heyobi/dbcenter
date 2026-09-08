@@ -38,7 +38,8 @@ pub fn run(config: ServeConfig) -> Result<(), String> {
         .persist(true)
         .host(&config.listen_host)
         .port(config.port)
-        .multi_user_sync_mode(true);
+        .multi_user_sync_mode(true)
+        .columnar(config.columnar);
 
     // The password has to be part of the initial configuration, not applied
     // afterwards: it is what makes the engine write a scram rule into
@@ -70,12 +71,45 @@ pub fn run(config: ServeConfig) -> Result<(), String> {
         tracing::info!("Collection '{}' ready", name);
     }
 
+    // Declared fields become real columns. Without them a wire client's writes
+    // all land in the `data` JSONB column, and the Parquet that gets published
+    // carries one JSON string per row instead of one column per field.
+    for declared in &config.schema {
+        db.collection(&declared.collection)
+            .ensure_fields(&declared.fields)
+            .map_err(|e| {
+                format!(
+                    "Could not declare the schema of '{}': {}",
+                    declared.collection, e
+                )
+            })?;
+        tracing::info!(
+            "Collection '{}' has {} declared field(s)",
+            declared.collection,
+            declared.fields.len()
+        );
+    }
+
     let engine = storage
         .as_ref()
         .map(|s| SyncEngine::new(Arc::clone(&db), Arc::clone(s)));
 
     if let (Some(engine), Some(storage)) = (&engine, &storage) {
-        restore(engine, storage, &db)?;
+        restore(engine, storage, &db, config.lazy_restore)?;
+    }
+
+    // The view has to exist even for a table this machine has no local rows
+    // for: with a lazy restore that is every table, and the view is then the
+    // only way to read the history at all.
+    if let Some(engine) = &engine {
+        if config.columnar {
+            for name in collection_names(&db)? {
+                match engine.ensure_columnar_view(&name) {
+                    Ok(()) => tracing::info!("Columnar view ready for '{}'", name),
+                    Err(e) => tracing::warn!("No columnar view for '{}': {}", name, e),
+                }
+            }
+        }
     }
 
     tracing::info!(
@@ -164,7 +198,12 @@ fn tables_in_storage(storage: &Storage) -> Result<Vec<String>, String> {
     Ok(tables)
 }
 
-fn restore(engine: &SyncEngine, storage: &Storage, db: &Arc<DBCenter>) -> Result<(), String> {
+fn restore(
+    engine: &SyncEngine,
+    storage: &Storage,
+    db: &Arc<DBCenter>,
+    lazy: bool,
+) -> Result<(), String> {
     let tables = tables_in_storage(storage)?;
     if tables.is_empty() {
         tracing::info!("Nothing in object storage yet; starting empty");
@@ -181,10 +220,23 @@ fn restore(engine: &SyncEngine, storage: &Storage, db: &Arc<DBCenter>) -> Result
         // in; it is a no-op when they already exist.
         let _ = db.collection(&table);
 
+        // Lazy: take the deltas and leave the base snapshot in the bucket. The
+        // machine is then current on recent changes and holds none of the
+        // history, which is what keeps its volume small.
+        let mode = if lazy {
+            SyncMode::Partial
+        } else {
+            SyncMode::Full
+        };
         engine
-            .pull_and_apply(&table, SyncMode::Full)
+            .pull_and_apply(&table, mode)
             .map_err(|e| format!("Could not restore '{}': {}", table, e))?;
-        tracing::info!("Restored '{}' in {:?}", table, started.elapsed());
+        tracing::info!(
+            "Restored '{}' in {:?}{}",
+            table,
+            started.elapsed(),
+            if lazy { " (deltas only)" } else { "" }
+        );
     }
     Ok(())
 }
@@ -240,15 +292,14 @@ fn compact_all(engine: &SyncEngine, db: &Arc<DBCenter>) {
 /// views - so the view name never appears. The `_adds` table is both present in
 /// that list and exactly where pending rows live.
 fn collection_names(db: &Arc<DBCenter>) -> Result<Vec<String>, String> {
-    let tables = db
+    // `list_collections` already names collections rather than the tables
+    // behind them. It used to return the raw table list, so this looked for an
+    // `_adds` suffix to work out what a collection was called - and when the
+    // core stopped returning those, every sync pass quietly found nothing to
+    // do.
+    let mut names = db
         .list_collections()
         .map_err(|e| format!("Could not list tables: {}", e))?;
-
-    let mut names: Vec<String> = tables
-        .iter()
-        .filter_map(|t| t.strip_suffix("_adds"))
-        .map(str::to_string)
-        .collect();
     names.sort();
     names.dedup();
     Ok(names)
@@ -327,6 +378,34 @@ fn serve_until_signalled(
 
 #[cfg(test)]
 mod tests {
+    use super::collection_names;
+    use dbcenter_core::DBCenter;
+
+    /// A sync pass acts on whatever this returns, so if it returns nothing the
+    /// node runs forever and pushes nothing. It did: it was looking for tables
+    /// ending in `_adds`, and the core stopped listing those.
+    #[test]
+    fn a_collection_is_found_by_the_name_a_client_would_use() {
+        let dir = std::env::temp_dir().join("dbcenter_serve_collection_names");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let db = DBCenter::builder()
+            .path(dir.to_str().unwrap())
+            .persist(false)
+            .multi_user_sync_mode(true)
+            .build()
+            .expect("embedded postgres should start");
+        let _ = db.collection("orders");
+
+        let names = collection_names(&db).unwrap();
+        assert!(names.contains(&"orders".to_string()), "{names:?}");
+        for internal in ["orders_base", "orders_adds", "orders_dels"] {
+            assert!(!names.contains(&internal.to_string()), "{names:?}");
+        }
+
+        db.shutdown().unwrap();
+    }
+
     #[test]
     fn table_names_come_from_both_markers() {
         let keys = [

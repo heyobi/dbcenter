@@ -1,0 +1,118 @@
+# Is a small machine plus object storage cheaper than a database server?
+#
+# Three services, so the same workload can be run against three shapes:
+#
+#   postgres  a plain PostgreSQL with the whole table on its volume - what you
+#             rent from a managed provider
+#   dbcenter  DBCenter with a full local copy, so it is PostgreSQL plus a
+#             columnar view of the same data in object storage
+#   lazy      DBCenter restored from the deltas only: the history stays in the
+#             bucket and is read from there
+#
+# The two DBCenter nodes share one bucket and are never up at the same time as
+# each other, so the numbers are not measuring them competing for the disk.
+#
+#   docker compose -f scripts/cost-experiment/docker-compose.yml up -d storage storage-init
+#   python scripts/cost-experiment/run.py
+
+name: dbcenter-cost
+
+services:
+  storage:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: dbcenter
+      MINIO_ROOT_PASSWORD: dbcenter123
+    ports:
+      - "29000:9000"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  storage-init:
+    image: minio/minio:latest
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "mc alias set s3 http://storage:9000 dbcenter dbcenter123 &&
+             mc mb --ignore-existing s3/events &&
+             echo bucket ready"
+
+  # A managed PostgreSQL, sized like the machine next to it.
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_PASSWORD: dbcenter123
+      POSTGRES_DB: postgres
+    # Fly's shared-cpu-1x with 1GB, which is the cheapest tier that can hold a
+    # working set at all.
+    cpus: 1.0
+    mem_limit: 1g
+    shm_size: 256m
+    ports:
+      - "25432:5432"
+    volumes:
+      # PostgreSQL 18's image wants the whole directory, not the data
+      # subdirectory: it keeps the cluster in a version-named folder under it.
+      - pg-data:/var/lib/postgresql
+
+  dbcenter: &node
+    image: dbcenter:bench
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    cpus: 1.0
+    mem_limit: 1g
+    environment: &node-env
+      DBCENTER_STORAGE: s3
+      DBCENTER_BUCKET: events
+      DBCENTER_PREFIX: bench
+      AWS_ENDPOINT_URL_S3: http://storage:9000
+      AWS_ACCESS_KEY_ID: dbcenter
+      AWS_SECRET_ACCESS_KEY: dbcenter123
+      AWS_REGION: us-east-1
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      DBCENTER_PASSWORD: dbcenter123
+      DBCENTER_COLLECTIONS: events
+      # Without this every field would land in the `data` JSONB column, because
+      # a client on the wire protocol cannot evolve a collection's schema. The
+      # Parquet would then be one JSON string per row and the columnar view
+      # would have nothing to be fast about.
+      DBCENTER_SCHEMA: >-
+        {"events":{"user_id":"int","region":"text","amount":"float",
+                   "ts_epoch":"int","payload":"text"}}
+      DBCENTER_COLUMNAR: "true"
+      # One pass must not try to hold the whole table in memory at once.
+      DBCENTER_SYNC_BATCH: "500000"
+      DBCENTER_SYNC_INTERVAL_SECS: "10"
+      DBCENTER_COMPACT_INTERVAL_SECS: "60"
+      DBCENTER_PULL: "false"
+      RUST_LOG: info
+    ports:
+      - "25433:5432"
+    volumes:
+      - dbcenter-data:/data
+
+  # The same image, restored from the deltas only.
+  lazy:
+    <<: *node
+    environment:
+      <<: *node-env
+      DBCENTER_LAZY_RESTORE: "true"
+      DBCENTER_NODE_ID: lazy
+    ports:
+      - "25434:5432"
+    volumes:
+      - lazy-data:/data
+
+volumes:
+  minio-data:
+  pg-data:
+  dbcenter-data:
+  lazy-data:

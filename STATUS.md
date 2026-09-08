@@ -160,8 +160,10 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 2. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
    compile than this machine has spare.
-3. Decide what "lazy sync" should mean, and either make the restore path lazy or
-   stop claiming it.
+3. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
+   the base snapshot, which is what `SyncMode::Partial` has always done. It is
+   written down now, in the enum and in the README, so it stops being a phrase
+   that means whatever the reader assumes.
 4. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
    PostgreSQL 15 silently gets pgvector 0.8.0 instead.
 

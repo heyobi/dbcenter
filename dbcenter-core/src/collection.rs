@@ -189,6 +189,27 @@ impl<'a> Collection<'a> {
         Ok(())
     }
 
+    /// Declare the fields a collection has, without writing a document.
+    ///
+    /// Schema evolution normally happens as a side effect of `insert_one`, which
+    /// is fine for a caller holding this API. A client connected over the wire
+    /// protocol has no way to reach it: it can `INSERT` into the view, but the
+    /// view was frozen with whatever columns existed when it was created, so
+    /// every field it writes ends up in the `data` JSONB column. That still
+    /// works, and it is what a container deployment did until now - but the
+    /// Parquet then carries one JSON blob instead of one column per field, and
+    /// the columnar read path is only fast because of the columns.
+    ///
+    /// The values are samples, read for their type only: `0` makes a BIGINT,
+    /// `0.0` a DOUBLE PRECISION, `""` a TEXT, `false` a BOOLEAN, `{}` a JSONB.
+    pub fn ensure_fields(&self, fields: &HashMap<String, JsonValue>) -> Result<()> {
+        if fields.is_empty() {
+            return Ok(());
+        }
+        self.ensure_table()?;
+        self.ensure_columns(fields)
+    }
+
     /// Insert a single document (Relational)
     pub fn insert_one(&self, document: &JsonValue) -> Result<String> {
         let obj = document.as_object().ok_or_else(|| {
