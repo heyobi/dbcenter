@@ -123,3 +123,19 @@ DuckDB - the 550x problem above, for the sake of rows the collection can answer
 for in 0.2 ms. Aggregate over the collection when the answer has to include this
 second's writes; use the columnar view for the history, which is what it is
 large enough to be worth reading fast.
+
+## One difference to expect between the two paths
+
+`sum()` over a float column does not come back bit-identical. PostgreSQL and
+DuckDB aggregate in different orders, and floating-point addition is not
+associative:
+
+```
+postgres: 330013.1999999999
+columnar: 330013.2
+```
+
+That is 1e-10 on a sum of 16,667 values, and it is arithmetic, not a bug in
+either. Round before comparing the two paths, or use `numeric` for anything
+where the last bits matter - money, most obviously, which is why the sync writes
+`numeric` as text rather than quietly turning it into a double.

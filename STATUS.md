@@ -39,10 +39,13 @@ Fixed and verified against a real server:
 
 ## What is still wrong
 
-**PyPI is at 0.2.0**, published 8 September 2026, with wheels for five
-platforms. Verified from a real `pip install`: fuzzy search, NUMERIC, arrays,
-PostGIS and pgvector all work. 0.1.0 is still on PyPI and predates everything
-here - it cannot load any extension on Linux.
+**PyPI is at 0.3.0**, published 8 September 2026, with wheels for five
+platforms. Verified from a real `pip install` in a clean environment: the sync
+round trip keeps the document, a synced update does not lose the row, the
+Parquet has a column per field, and `install_extension("pg_duckdb")` downloads
+from the public release in about five seconds and gives a columnar view 19x
+faster than the collection on a 200,000-row aggregate. 0.1.0 and 0.2.0 are still
+on PyPI; 0.2.0 loses rows on sync and 0.1.0 cannot load any extension on Linux.
 
 **Linux PostGIS is being rebuilt with bundled dependencies.** The published
 archives carry the modules alone, so they only load where GEOS and PROJ already
@@ -107,20 +110,19 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 
 ## Next, in order
 
-1. **Republish to PyPI.** 0.2.0 predates all of the columnar work, including
-   two data-loss fixes: a synced row arrived in `_base` with no document at all,
-   and an updated row disappeared from the collection after a sync. Anyone on
-   0.2.0 who syncs is losing data.
-2. **Decide whether the columnar view should be automatic.** It exists, it is
+1. **Decide whether the columnar view should be automatic.** It exists, it is
    refreshed when the files change, and both `install_extension("pg_duckdb")`
    and `ensure_columnar_view` are reachable from Python - but a user still has
    to ask for both. Doing it on their behalf means installing a 50 MB extension
-   and restarting their database, which is not something to do without being
-   asked.
+   and restarting their database, which is not something to do unasked.
+2. **`scan_smart` is now the slow way to do what pg_duckdb does better.** It is
+   a hand-rolled Parquet reader that only does equality on `id`, reachable only
+   from Python's `smart_query`. Either point it at the columnar view or drop it.
 3. Rebuild the pg12-pg17 Linux PostGIS archives with bundled dependencies.
 4. Build pg_duckdb from source rather than repackaging upstream's binary.
-   `build-systems/pg_duckdb` is written and correct; DuckDB simply wants more
-   memory to compile than this machine has spare.
+   `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
+   compile than this machine has spare, and it fails whenever anything else is
+   running.
 5. Decide what "lazy sync" should mean, and either make the restore path lazy or
    stop claiming it.
 
