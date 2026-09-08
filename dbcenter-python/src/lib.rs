@@ -744,7 +744,7 @@ fn resolve_watcher_path(py: Python<'_>) -> PyResult<PathBuf> {
 
     if let Ok(explicit) = std::env::var("DBCENTER_WATCHER_PATH") {
         let explicit_path = PathBuf::from(explicit);
-        if explicit_path.exists() {
+        if explicit_path.is_file() {
             return Ok(explicit_path);
         }
         attempted.push(explicit_path.display().to_string());
@@ -755,7 +755,7 @@ fn resolve_watcher_path(py: Python<'_>) -> PyResult<PathBuf> {
             if let Ok(path_str) = file_attr.extract::<String>() {
                 if let Some(parent) = Path::new(&path_str).parent() {
                     let candidate = parent.join(WATCHER_BASENAME);
-                    if candidate.exists() {
+                    if candidate.is_file() {
                         return Ok(candidate);
                     }
                     attempted.push(candidate.display().to_string());
@@ -779,8 +779,13 @@ fn resolve_watcher_path(py: Python<'_>) -> PyResult<PathBuf> {
         PathBuf::from(WATCHER_BASENAME),
     ];
 
+    // is_file, not exists: `dbcenter-watcher` is also the name of a directory in
+    // this workspace, and exists() is true for one. Anyone running from the repo
+    // root - or from any project with a folder of that name - got the directory
+    // back as the watcher path and then a bare "No such file or directory" from
+    // the spawn, which points nowhere near the cause.
     for candidate in dev_candidates {
-        if candidate.exists() {
+        if candidate.is_file() {
             return Ok(candidate);
         }
         attempted.push(candidate.display().to_string());

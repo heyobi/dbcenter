@@ -2,16 +2,21 @@
 
 Last updated 8 September 2026.
 
-Everything below is on `fix/linux-extensions-and-query-safety`, **not merged to
-`main`**. Twelve commits. Each one says what was wrong and how it was checked.
+Merged to `main` on 8 September 2026.
+`main`. Each commit says what was wrong and how it was checked.
 
 ## What was broken and now is not
 
-The published product did not work. `pip install dbcenter` raised on the first
-call, because the wheel does not carry the `dbcenter-watcher` binary the engine
-looks for. On Linux no extension could load at all: `dynamic_library_path` was
-joined with `;`, the Windows separator, so PostgreSQL read the whole list as one
-nonexistent directory. PostGIS and pgvector were served from a CDN that is off.
+On Linux no extension could load at all: `dynamic_library_path` was joined with
+`;`, the Windows separator, so PostgreSQL read the whole list as one nonexistent
+directory. PostGIS and pgvector were served from a CDN that is off.
+
+An earlier version of this file said the published wheel raised on construction
+and did not carry the watcher binary. That was wrong. The watcher is embedded in
+the extension module by `build.rs` and written out at run time, and 0.1.0 installs
+and works. What produced the failure was running from a directory containing a
+folder named `dbcenter-watcher` - the repository root, for instance - because the
+path search used `exists()`, which is true for a directory. That is now `is_file`.
 
 Fixed and verified against a real server:
 
@@ -34,11 +39,16 @@ Fixed and verified against a real server:
 
 ## What is still wrong
 
-**The PyPI package is stale and broken.** 0.1.0, published 12 December 2025,
-predates all of this. It has no macOS or arm64 wheel, an empty description, and
-does not carry the watcher binary, so it raises on construction. Republishing is
-the single highest-leverage thing left: everything above is invisible until
-someone can install it.
+**The PyPI package is stale.** 0.1.0, published 12 December 2025, predates all of
+this. It installs and the core works - insert, count and query are fine - but
+`fuzzy_search` fails, because pg_trgm cannot load on Linux, and PostGIS and
+pgvector fail because the CDN they came from is gone. It has no macOS or arm64
+wheel and an empty description on PyPI.
+
+It is also, in one respect, safer than the source it was cut from: it rejects an
+unrecognised query operator. The behaviour that silently dropped the condition,
+turning `delete_many` into a full-table delete, was introduced between that
+release and the last commit before this work.
 
 **No Linux PostGIS below PostgreSQL 18 bundles its dependencies.** Only the 18
 build was rebuilt. The pg12-pg17 archives still carry the modules alone, so they
