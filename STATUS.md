@@ -47,10 +47,18 @@ from the public release in about five seconds and gives a columnar view 19x
 faster than the collection on a 200,000-row aggregate. 0.1.0 and 0.2.0 are still
 on PyPI; 0.2.0 loses rows on sync and 0.1.0 cannot load any extension on Linux.
 
-**Linux PostGIS is being rebuilt with bundled dependencies.** The published
-archives carry the modules alone, so they only load where GEOS and PROJ already
-are. PostgreSQL 12, 13, 14, 16 and 18 are rebuilt; 15 fails to compile and 17 is
-still going. `build-systems/postgis-pg18` in the extensions repo is the recipe.
+**Linux PostGIS bundles its dependencies on every major.** Checked against the
+published release: PostGIS 3.5.0 for PostgreSQL 12 through 17 and 3.6.1 for 18 -
+which is what the version table picks by default for every major - all carry the
+43 to 45 libraries they link against. Only an explicitly requested older version
+(3.1.11, say) still ships the module alone and needs GEOS and PROJ on the host.
+
+**PostGIS still unpacks its libraries into the shared module directory.**
+pg_duckdb was moved into a `<name>-libs/` directory of its own after installing
+both broke one of them; PostGIS was left on the old scheme because it is now the
+only bundle that ships libraries at all, so there is nothing left to collide
+with. That makes it a landmine rather than a bug: the next bundle that carries a
+library will collide with PostGIS the way pg_duckdb did.
 
 **`vector-0.8.1-windows-amd64-pg15` is quarantined.** It shipped an import library
 instead of a DLL. Windows PostgreSQL 15 resolves to pgvector 0.8.0 instead.
@@ -76,22 +84,21 @@ columns by position. All three are fixed, and
 Worth knowing why it went unnoticed for so long: the cluster tests wrote through
 psql directly into `data`, which is the one path that worked.
 
-**Reading remotely still costs more than it should.** A single-id lookup now reads
-31% of a 15MB table instead of 100%, and the fraction falls as the table grows
-because a row group holds a fixed number of rows. Two things would take it
-further: reading only the `id` column to locate a match before fetching the row,
-and covering the delta objects rather than only the newest base snapshot.
-`scan_smart` is also reachable only from Python's `smart_query(table, id)` and
-only does equality on `id`, so the mechanism works but almost nothing can reach
-it. `CountingStorage` and `tests/lazy_read.rs` are how any of this is measured.
+**`scan_smart` is the slow hand-rolled version of what pg_duckdb now does.** It
+reads Parquet over range requests and only does equality on `id`, and is
+reachable only from Python's `smart_query(table, id)`. The columnar view does
+arbitrary SQL over the same files, faster. Either point it at the view or drop
+it. `CountingStorage` and `tests/lazy_read.rs` are how the byte counts are
+measured, and are worth keeping either way.
 
 **Conflict resolution is last-write-wins on `updated_at`.** Two nodes editing one
 row concurrently: the later edit wins and the earlier is lost. Fine for
 append-heavy and partitioned work, wrong for a shared counter. `DBCENTER_PULL` is
 off by default for this reason.
 
-**The bindings other than Python are barely exercised.** Java and Node compile
-again but have no tests. R is not in the workspace.
+**The bindings other than Python are barely exercised.** Go has one test file;
+Java, Node and R have none. CI only runs `cargo test` for `dbcenter-core` and
+`dbcenter-serve`. They compile, and that is all anyone knows about them.
 
 **The test suite was the reason most of this survived.** The Python suite has 27
 assertions against 83 prints, and never calls fuzzy_search, delete_many,
@@ -110,20 +117,21 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 
 ## Next, in order
 
-1. **Decide whether the columnar view should be automatic.** It exists, it is
-   refreshed when the files change, and both `install_extension("pg_duckdb")`
-   and `ensure_columnar_view` are reachable from Python - but a user still has
-   to ask for both. Doing it on their behalf means installing a 50 MB extension
-   and restarting their database, which is not something to do unasked.
-2. **`scan_smart` is now the slow way to do what pg_duckdb does better.** It is
-   a hand-rolled Parquet reader that only does equality on `id`, reachable only
-   from Python's `smart_query`. Either point it at the columnar view or drop it.
-3. Rebuild the pg12-pg17 Linux PostGIS archives with bundled dependencies.
-4. Build pg_duckdb from source rather than repackaging upstream's binary.
+1. **Give the Python suite assertions.** `python_tests/test_final.py` has 27
+   assertions against 83 prints; the other five files have none at all and only
+   check that nothing raises. The release smoke test in `release.yml` is now the
+   strongest Python-level gate there is, which is the wrong way round.
+2. **`scan_smart`: point it at the columnar view, or delete it.** It is a slower,
+   less capable version of something that now exists.
+3. **Test a binding other than Python, or say plainly that they are
+   unsupported.** Go has one test file, Java and Node have none, and CI builds
+   but does not test them.
+4. Move PostGIS's bundled libraries into `postgis-libs/` before some third
+   bundle collides with them the way pg_duckdb did.
+5. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
-   compile than this machine has spare, and it fails whenever anything else is
-   running.
-5. Decide what "lazy sync" should mean, and either make the restore path lazy or
+   compile than this machine has spare.
+6. Decide what "lazy sync" should mean, and either make the restore path lazy or
    stop claiming it.
 
 ## How the two read paths fit together
