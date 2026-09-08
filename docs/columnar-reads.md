@@ -105,3 +105,21 @@ Ranking every row - the obvious "one window over all the files" - was the first
 version, and it cost 27x on the million-row run above: 22.7 ms became 608.5 ms.
 Sorting a million rows to discover that none of them were duplicates is most of
 the query.
+
+## What the columnar view does not do
+
+It is as current as the last sync. The view reads Parquet, Parquet holds what
+`sync_table` wrote, so a row inserted since then is in the collection and not in
+the view:
+
+```
+writing a row without syncing...
+  collection sees it: 1, columnar sees it: 0
+```
+
+There is no cheap way around this. Reading the unsynced rows means putting a
+PostgreSQL table into the view, and that sends the whole query back through
+DuckDB - the 550x problem above, for the sake of rows the collection can answer
+for in 0.2 ms. Aggregate over the collection when the answer has to include this
+second's writes; use the columnar view for the history, which is what it is
+large enough to be worth reading fast.

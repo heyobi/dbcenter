@@ -1045,6 +1045,15 @@ impl SyncEngine {
     /// that behind the view is what lets someone connected with a plain
     /// connection string write plain SQL against it.
     ///
+    /// **It is as current as the last sync.** The view reads Parquet, and
+    /// Parquet holds what `sync_table` has written; a row inserted since then
+    /// is in the collection and not here. That is the one thing about this
+    /// view a caller has to know, and there is no cheap way around it - reading
+    /// the unsynced rows out of PostgreSQL means putting a PostgreSQL table in
+    /// the view, which sends the whole query back through DuckDB and gives up
+    /// what the view was for. Aggregate over the collection when the answer has
+    /// to include this second's writes.
+    ///
     /// Requires the pg_duckdb extension; install it with
     /// `install_extension("pg_duckdb")` first.
     pub fn ensure_columnar_view(&self, table_name: &str) -> Result<()> {

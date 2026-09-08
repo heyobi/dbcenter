@@ -144,5 +144,25 @@ fn main() {
     assert_eq!(updated, 1, "the columnar view should show the new value");
     println!("  the update is visible and counted once");
 
+    // The columnar view reads Parquet, and Parquet only has what has been
+    // synced. Rows written since the last sync are in the collection and not in
+    // the columnar view - which is the one thing a user has to know about it.
+    println!("\nwriting a row without syncing...");
+    collection
+        .insert_many(&[json!({"sensor": "sensor-unsynced", "celsius": 0.0,
+                              "count": 0, "ok": true})])
+        .unwrap();
+    let in_collection =
+        count("SELECT count(*) AS n FROM readings WHERE sensor = 'sensor-unsynced'");
+    let in_columnar =
+        count("SELECT count(*) AS n FROM readings_columnar WHERE sensor = 'sensor-unsynced'");
+    println!("  collection sees it: {in_collection}, columnar sees it: {in_columnar}");
+    assert_eq!(in_collection, 1);
+    assert_eq!(
+        in_columnar, 0,
+        "documenting the lag, not endorsing it: the columnar view is as current \
+         as the last sync"
+    );
+
     db.shutdown().unwrap();
 }

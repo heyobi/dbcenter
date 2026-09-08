@@ -1813,6 +1813,11 @@ impl SyncEngine {
     /// PostgreSQL. Point lookups should still go to the collection, which is
     /// why this is a second view rather than a replacement.
     ///
+    /// The view is as current as the last `sync_table`: it reads the Parquet
+    /// on object storage, so rows written since then are in the collection and
+    /// not in it. Aggregate over the collection when the answer has to include
+    /// this second's writes.
+    ///
     /// Needs the pg_duckdb extension: `db.install_extension("pg_duckdb")`.
     fn ensure_columnar_view(&self, table_name: &str) -> PyResult<()> {
         Python::with_gil(|py| {
