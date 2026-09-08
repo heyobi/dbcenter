@@ -1014,7 +1014,11 @@ impl SyncEngine {
                 .map(|row| row.get::<_, bool>(0))
                 .unwrap_or(false)
         };
-        if !exists {
+        // With `columnar` set the view is DBCenter's to maintain, so it is
+        // created the first time there is something to read. Without it, the
+        // view only exists because someone asked for it, and a database that
+        // never asked should not have one appear.
+        if !exists && !self.db.config().columnar {
             return;
         }
         if let Err(e) = self.ensure_columnar_view(table_name) {

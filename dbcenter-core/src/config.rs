@@ -38,6 +38,14 @@ pub struct DBCenterConfig {
 
     /// Enable Phase 2 Delta Layer (Multi-User Sync on Dumb Storage)
     pub multi_user_sync_mode: bool,
+
+    /// Install pg_duckdb and keep a columnar view of every synced collection.
+    ///
+    /// Off by default, and deliberately: pg_duckdb takes the resident set from
+    /// about 128 MB to 250 MB, and a database nobody runs an aggregate against
+    /// should not pay that. When it is on, the extension is put in place before
+    /// PostgreSQL starts, so there is no restart to absorb.
+    pub columnar: bool,
 }
 
 impl Default for DBCenterConfig {
@@ -55,6 +63,7 @@ impl Default for DBCenterConfig {
             postgres_path: None,
             postgres_version: DEFAULT_POSTGRES_VERSION.to_string(),
             multi_user_sync_mode: false,
+            columnar: false,
         }
     }
 }

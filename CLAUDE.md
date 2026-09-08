@@ -63,6 +63,17 @@ uploading it to the `extensions-v1` release on
 [dbcenter-extensions](https://github.com/heyobi/dbcenter-extensions) *and* pinning
 its SHA-256 here; `every_offered_version_has_a_published_asset` fails otherwise.
 
+**A bundled extension's libraries go in a directory of its own.** Every archive
+carries the libraries its module links against, and they used to be unpacked
+straight into PostgreSQL's module directory - which every extension shares.
+PostGIS and pg_duckdb bundle twenty-six of the same sonames from different base
+images, so installing both left one of them with a library it was never linked
+against, and the server refused to start on an undefined symbol. The module
+still goes in the module directory, because `$libdir/<name>` has to find it; its
+dependencies go in `<name>-libs/` beside it, with the module's RUNPATH pointing
+there. `examples/two_extensions.rs` installs both, in both orders, and checks
+they both still answer.
+
 **Linux PostGIS bundles its own GEOS and PROJ**, with an `$ORIGIN` RUNPATH. Without
 that it does not load on a machine that has no GIS libraries installed - which is
 most machines. Test extension work in a container with nothing installed, never

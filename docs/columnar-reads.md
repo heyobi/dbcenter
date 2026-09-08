@@ -139,3 +139,24 @@ That is 1e-10 on a sum of 16,667 values, and it is arithmetic, not a bug in
 either. Round before comparing the two paths, or use `numeric` for anything
 where the last bits matter - money, most obviously, which is why the sync writes
 `numeric` as text rather than quietly turning it into a double.
+
+## Turning it on
+
+```python
+db = dbcenter.DBCenter(path="/data", multi_user_sync=True, columnar=True)
+```
+
+That is the whole thing. pg_duckdb is put in place before PostgreSQL starts, so
+`shared_preload_libraries` is read at the first startup and there is no restart
+to absorb; `<name>_columnar` appears beside each collection as soon as there is
+something synced to read, and is rebuilt whenever the set of Parquet objects
+changes.
+
+| | |
+|---|---|
+| first database on a machine | 26.3 s - downloading and unpacking 50 MB |
+| every database after that | 2.7 s, the same as without it |
+| resident memory | about 250 MB against 128 MB |
+
+It is off by default because of that last row. Doubling the footprint of an
+embedded database is not something to do to someone who never runs an aggregate.

@@ -204,23 +204,23 @@ const DEFAULT_ASSET_BASE_URL: &str =
 const EXTENSION_CHECKSUMS: &[(&str, &str)] = &[
     (
         "pg_duckdb-1.1.1-linux-amd64-pg14.tar.gz",
-        "ec566c90a5aa5b8b1ef3c63021e9e15d236c0a675adad668044098d614043ee5",
+        "119a896bd004c47d11bdfd865522b3b0956ad3dcaa15993e83c1bfea5700b6b6",
     ),
     (
         "pg_duckdb-1.1.1-linux-amd64-pg15.tar.gz",
-        "b3b46f5cbe00cac403276f7ec8973c0ed488d2c03283421a9f15b76934df523f",
+        "5790e442c83f2083c32f35da97e0f67735db09b1dc60a11328be1370f4f199b2",
     ),
     (
         "pg_duckdb-1.1.1-linux-amd64-pg16.tar.gz",
-        "389e8ecbb88b9486e48f268486c415e35e6545c33e8450b6cf62310d061fd1fc",
+        "a316b2e01e167a330327959cf4e60ec8daec5c023fdb0841eddf736de7433803",
     ),
     (
         "pg_duckdb-1.1.1-linux-amd64-pg17.tar.gz",
-        "e86d267c34c69b8e09fbd9ee142480e43996df2c0b4bfa62030a2c074b2a9c00",
+        "d94ca1dca21a1551bf9c12d67696ffd72f7c3a28cbeb328efdc40e74a0033c25",
     ),
     (
         "pg_duckdb-1.1.1-linux-amd64-pg18.tar.gz",
-        "4f3a6f7a34ae847175c0923456f49c9078145f0ebb63a1e66e9af3ec817d0216",
+        "12ddb0d97ef7f1ba182c0507c44d53b8f93a6e1d2a9447f1bcb4b06bd72bff7c",
     ),
     (
         "pghttp-1.3.1-linux-amd64-pg12.tar.gz",
@@ -1107,6 +1107,50 @@ fn install_pghttp(db: &DBCenter, requested_version: Option<&str>) -> Result<()> 
 }
 
 /// Generic installer for bundled extensions (like pg_trgm)
+/// Put pg_duckdb in place and preload it, before PostgreSQL starts.
+///
+/// `shared_preload_libraries` is only read at startup, so installing pg_duckdb
+/// on a running server costs a restart. Staging it here - after `initialize_db`
+/// wrote postgresql.conf, before the postmaster is spawned - means the server
+/// comes up with it already loaded and nothing has to be bounced. This is what
+/// `DBCenterBuilder::columnar` uses; `install_extension("pg_duckdb")` remains
+/// the way to add it to a database that is already up, restart and all.
+///
+/// `CREATE EXTENSION` is not done here: that needs a connection, and there is
+/// no server yet.
+pub(crate) fn stage_pg_duckdb(config: &crate::config::DBCenterConfig) -> Result<()> {
+    if cfg!(windows) {
+        return Err(DBCenterError::ExtensionError(
+            "pg_duckdb has no Windows build, so the columnar path cannot be \
+             enabled there: it vendors DuckDB and compiles it from source, \
+             which this pipeline only does for Linux."
+                .to_string(),
+        ));
+    }
+
+    let pg_version = major_of(&config.postgres_version);
+    let (ver_str, target_pg) =
+        find_best_extension_version(pg_version, PG_DUCKDB_LINUX_VERSIONS, None)?;
+    let file_name = format!("pg_duckdb-{}-linux-amd64-pg{}.tar.gz", ver_str, target_pg);
+
+    let pg_root = postgres_root_for_version(&config.postgres_version)?;
+    if !already_unpacked(&pg_root, &file_name) {
+        let cache_dir = crate::binary::base_dir_for_version(&config.postgres_version)?
+            .join("cache")
+            .join("extensions");
+        let tar_path = fetch_extension_asset(
+            &cache_dir,
+            &file_name,
+            &format!("pg_duckdb {} for PostgreSQL {}", ver_str, target_pg),
+        )?;
+        extract_postgis_tarball(&tar_path, &pg_root)?;
+        record_unpacked(&pg_root, &file_name);
+    }
+
+    crate::process::add_shared_preload_library(&config.data_dir, "pg_duckdb")?;
+    Ok(())
+}
+
 /// Install pg_duckdb, which is the read path.
 ///
 /// Everything else here is a library the server loads on demand. This one has
@@ -1935,7 +1979,16 @@ fn extract_postgis_tarball(tar_path: &Path, pg_root: &Path) -> Result<()> {
 
 /// Get PostgreSQL root directory
 fn get_postgres_root(db: &DBCenter) -> Result<std::path::PathBuf> {
-    let base_dir = crate::binary::base_dir_for_version(db.postgres_version())?;
+    postgres_root_for_version(db.postgres_version())
+}
+
+/// Where an installation's files live, from the version alone.
+///
+/// Needed before a DBCenter exists: with `columnar` set, pg_duckdb has to be in
+/// place before PostgreSQL starts, because `shared_preload_libraries` is only
+/// read at startup and staging it first is what avoids a restart.
+fn postgres_root_for_version(version: &str) -> Result<std::path::PathBuf> {
+    let base_dir = crate::binary::base_dir_for_version(version)?;
 
     // Check for pgsql subdirectory
     let pgsql_dir = base_dir.join("pgsql");
@@ -1948,13 +2001,17 @@ fn get_postgres_root(db: &DBCenter) -> Result<std::path::PathBuf> {
 
 /// Get PostgreSQL major version
 fn postgres_major_version(db: &DBCenter) -> u32 {
+    major_of(db.postgres_version())
+}
+
+fn major_of(version: &str) -> u32 {
     let fallback = DEFAULT_POSTGRES_VERSION
         .split('.')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(18);
 
-    db.postgres_version()
+    version
         .split('.')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
