@@ -49,10 +49,29 @@ if docker info >/dev/null 2>&1; then
     docker logs dbcenter-verify-minio 2>&1 | tail -5
     check 1
   else
-    docker exec dbcenter-verify-minio mc alias set local http://127.0.0.1:9000 dbcenter dbcenter123 >/dev/null 2>&1
-    docker exec dbcenter-verify-minio mc mb --ignore-existing local/dbcenter-test >/dev/null 2>&1
-    . scripts/s3-test-env.sh
-    echo "MinIO up at $DBCENTER_S3_TEST_ENDPOINT"
+    # Health says the server is listening; it does not say mc can talk to it
+    # yet. Retry, and check the bucket is really there afterwards - a missing
+    # bucket fails every S3 test with a 404 that looks like a code problem.
+    bucket=1
+    for _ in $(seq 1 15); do
+      docker exec dbcenter-verify-minio mc alias set local \
+        http://127.0.0.1:9000 dbcenter dbcenter123 >/dev/null 2>&1
+      docker exec dbcenter-verify-minio mc mb --ignore-existing \
+        local/dbcenter-test >/dev/null 2>&1
+      if docker exec dbcenter-verify-minio mc ls local/dbcenter-test >/dev/null 2>&1; then
+        bucket=0; break
+      fi
+      sleep 1
+    done
+
+    if [ $bucket -ne 0 ]; then
+      echo "could not create the bucket:"
+      docker exec dbcenter-verify-minio mc mb local/dbcenter-test 2>&1 | tail -3
+      check 1
+    else
+      . scripts/s3-test-env.sh
+      echo "MinIO up at $DBCENTER_S3_TEST_ENDPOINT, bucket ready"
+    fi
   fi
 else
   echo "no docker; the S3 tests will skip themselves"
