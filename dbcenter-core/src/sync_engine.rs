@@ -242,6 +242,25 @@ fn arrow_row_to_document(
     (doc, data)
 }
 
+/// Escape a value for a single-quoted SQL literal.
+///
+/// Object keys and endpoints come from configuration rather than from a user's
+/// query, but they still end up inside a CREATE VIEW that cannot take
+/// parameters, so they are escaped rather than trusted.
+fn quote_sql_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+/// The PostgreSQL type a Parquet column is surfaced as through the view.
+fn pg_type_for(arrow: &DataType) -> &'static str {
+    match arrow {
+        DataType::Int64 => "bigint",
+        DataType::Float64 => "double precision",
+        DataType::Boolean => "boolean",
+        _ => "text",
+    }
+}
+
 impl SyncEngine {
     pub fn new(db: Arc<DBCenter>, storage: Arc<Box<dyn StorageAdapter + Send + Sync>>) -> Self {
         Self { db, storage }
@@ -381,7 +400,24 @@ impl SyncEngine {
         }
 
         // 3. Convert to Arrow
-        let batch = self.rows_to_record_batch(&columns, rows.clone())?; // Clone needed because we iterate rows later
+        // The ids are taken before the batch is built so `rows` can be moved into
+        // it rather than cloned. Cloning held a second copy of the whole sync in
+        // memory, which a million-row sync could not afford.
+        let ids: Vec<uuid::Uuid> = rows
+            .iter()
+            .map(|row| {
+                let id: String = row.get("id");
+                uuid::Uuid::parse_str(&id).map_err(|e| {
+                    crate::error::DBCenterError::QueryError(format!(
+                        "Row in '{}' has an id that is not a uuid ({}): {}",
+                        adds_table, id, e
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let row_count = rows.len();
+
+        let batch = self.rows_to_record_batch(&columns, rows)?;
 
         // 4. Write to Parquet (In-Memory)
         let mut buffer = Vec::new();
@@ -420,7 +456,7 @@ impl SyncEngine {
         tracing::info!(
             "Uploaded Parquet batch {} with {} items",
             batch_filename,
-            rows.len()
+            row_count
         );
 
         // 6. Compact / Cleanup (Move to Base)
@@ -438,19 +474,6 @@ impl SyncEngine {
         let mut transaction = client.transaction().map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
-
-        let ids: Vec<uuid::Uuid> = rows
-            .iter()
-            .map(|row| {
-                let id: String = row.get("id");
-                uuid::Uuid::parse_str(&id).map_err(|e| {
-                    crate::error::DBCenterError::QueryError(format!(
-                        "Row in '{}' has an id that is not a uuid ({}): {}",
-                        adds_table, id, e
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
 
         // _base and _adds are created together and altered together, so their
         // column lists match and the names can be reused for both sides.
@@ -478,18 +501,26 @@ impl SyncEngine {
             assign = assignments.join(", "),
         );
 
-        transaction.execute(&move_to_base, &[&ids]).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!(
-                "Failed to move synced rows to base: {}",
-                crate::utils::format_postgres_error(&e)
-            ))
-        })?;
+        // In chunks, because the id list travels as one bind parameter and a
+        // sync of a million rows put a million uuids in a single message:
+        // PostgreSQL ran out of memory building it ("Failed on request of size
+        // 40 in memory context MessageContext"). One statement per batch is
+        // still far fewer than the two per row this replaced.
+        const MOVE_CHUNK: usize = 10_000;
+        for chunk in ids.chunks(MOVE_CHUNK) {
+            transaction.execute(&move_to_base, &[&chunk]).map_err(|e| {
+                crate::error::DBCenterError::QueryError(format!(
+                    "Failed to move synced rows to base: {}",
+                    crate::utils::format_postgres_error(&e)
+                ))
+            })?;
+        }
 
         transaction.commit().map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
 
-        Ok(rows.len())
+        Ok(row_count)
     }
 
     /// Task 3.5: Compaction / Vacuum with Heartbeat Lease (Phase 4)
@@ -934,6 +965,167 @@ impl SyncEngine {
             DeltaManager::ensure_delta_tables(&self.db, table_name)?;
         }
 
+        Ok(())
+    }
+
+    /// Publish a view that reads this table's Parquet directly, through DuckDB.
+    ///
+    /// This is the read advantage made reachable. The collection's own view
+    /// stays pure PostgreSQL - point lookups there are 0.2 ms against 38 ms
+    /// off object storage, and a view that unioned the two would send every
+    /// query through DuckDB and cost 550x on the lookups (docs/columnar-reads.md).
+    /// So the columnar path gets its own name, `<table>_columnar`, holding the
+    /// same rows read the fast way: 12.7x PostgreSQL on aggregates, over data
+    /// PostgreSQL never has to hold.
+    ///
+    /// From a client it is an ordinary view with ordinary columns. `read_parquet`
+    /// hands DuckDB's untyped `r['col']` accessor back to PostgreSQL, and hiding
+    /// that behind the view is what lets someone connected with a plain
+    /// connection string write plain SQL against it.
+    ///
+    /// Requires the pg_duckdb extension; install it with
+    /// `install_extension("pg_duckdb")` first.
+    pub fn ensure_columnar_view(&self, table_name: &str) -> Result<()> {
+        let Some(access) = self.storage.duckdb_access() else {
+            return Err(crate::error::DBCenterError::StorageError(
+                "This storage backend cannot be read by DuckDB directly, so there \
+                 is no columnar view to publish for it."
+                    .to_string(),
+            ));
+        };
+
+        let base_table = format!("{}_base", table_name);
+        let columns = self.sync_columns(&base_table)?;
+
+        let mut client = self.db.get_client();
+
+        // The secret is per-connection state in DuckDB, so it is (re)declared
+        // here rather than once at startup - a pooled connection that was
+        // opened later would otherwise have no credentials.
+        if let Some(creds) = &access.credentials {
+            client
+                .execute(
+                    "SELECT duckdb.create_simple_secret(type := 'S3', key_id := $1, \
+                     secret := $2, region := $3, endpoint := $4, url_style := $5, \
+                     use_ssl := $6)",
+                    &[
+                        &creds.key_id,
+                        &creds.secret,
+                        &creds.region,
+                        &creds.endpoint,
+                        &creds.url_style.to_string(),
+                        &creds.use_ssl.to_string(),
+                    ],
+                )
+                .map_err(|e| {
+                    crate::error::DBCenterError::StorageError(format!(
+                        "Could not give DuckDB the object storage credentials: {}",
+                        crate::utils::format_postgres_error(&e)
+                    ))
+                })?;
+        }
+
+        // `union_by_name` is what makes a file written before a field existed
+        // readable beside one written after: the files genuinely have different
+        // columns, because the table grows a column the first time a document
+        // carries a field.
+        let objects: Vec<String> = self
+            .storage
+            .list(table_name)?
+            .into_iter()
+            .filter(|f| f.ends_with(".parquet"))
+            .collect();
+        let has_base = objects.iter().any(|f| f.contains("_BASE_"));
+        let delta_count = objects.iter().filter(|f| f.contains("_DELTA_")).count();
+
+        if !has_base && delta_count == 0 {
+            return Err(crate::error::DBCenterError::StorageError(format!(
+                "Nothing has been synced for '{}' yet, so there is nothing for a \
+                 columnar view to read. Call sync_table first.",
+                table_name
+            )));
+        }
+
+        let base_glob =
+            quote_sql_literal(&access.url_for(&format!("{}_BASE_*.parquet", table_name)));
+        let delta_glob =
+            quote_sql_literal(&access.url_for(&format!("{}_DELTA_*.parquet", table_name)));
+
+        let projection = columns
+            .iter()
+            .map(|c| {
+                format!(
+                    "r['{}']::{} AS {}",
+                    c.name.replace('\'', "''"),
+                    pg_type_for(&c.arrow),
+                    crate::query::quote_ident(&c.name)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let names = columns
+            .iter()
+            .map(|c| crate::query::quote_ident(&c.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // What it takes for the same id to appear twice.
+        //
+        // Within one file it cannot: the rows come from _adds, which has id as
+        // its primary key. It takes an update to a row that was already synced,
+        // which writes it to _adds again and puts it in a later file. So a
+        // single delta file needs no deduplication at all, and several of them
+        // need it only among themselves.
+        //
+        // This matters because deduplication is not cheap. Ranking every row -
+        // one window over every file - costs 12.9x on an aggregate, because
+        // ranking five million rows means sorting them and that is most of the
+        // query. Ranking only the deltas and anti-joining their ids out of the
+        // compacted base says the same thing for 2.3x, and saying nothing at
+        // all, when nothing can be duplicated, costs nothing.
+        let plain_base = format!(
+            "SELECT {projection} FROM read_parquet('{base_glob}', union_by_name => true) r"
+        );
+        let plain_deltas = format!(
+            "SELECT {projection} FROM read_parquet('{delta_glob}', union_by_name => true) r"
+        );
+        let deltas = if delta_count > 1 {
+            format!(
+                "SELECT {names} FROM (SELECT {projection}, row_number() OVER (\
+                 PARTITION BY r['id'] ORDER BY r['updated_at'] DESC) AS rn \
+                 FROM read_parquet('{delta_glob}', union_by_name => true) r) ranked WHERE rn = 1"
+            )
+        } else {
+            plain_deltas
+        };
+
+        let body = match (has_base, delta_count) {
+            (true, 0) => plain_base,
+            (false, _) => deltas,
+            _ => format!(
+                "SELECT {projection} FROM read_parquet('{base_glob}', union_by_name => true) r \
+                 WHERE NOT EXISTS (SELECT 1 FROM read_parquet('{delta_glob}', union_by_name => true) d \
+                 WHERE d['id'] = r['id']) \
+                 UNION ALL {deltas}"
+            ),
+        };
+
+        let view = crate::query::quote_ident(&format!("{}_columnar", table_name));
+        let sql = format!("CREATE OR REPLACE VIEW {view} AS {body}");
+
+        client.batch_execute(&sql).map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!(
+                "Could not create the columnar view for '{}': {}",
+                table_name,
+                crate::utils::format_postgres_error(&e)
+            ))
+        })?;
+
+        tracing::info!(
+            "Columnar view {}_columnar reads {}",
+            table_name,
+            access.url_for(&format!("{}_*.parquet", table_name))
+        );
         Ok(())
     }
 

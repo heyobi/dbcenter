@@ -68,3 +68,40 @@ scan would have touched one. A single unified view would be a 550x regression
 on the most common operation in the product, so the collection's own view stays
 pure PostgreSQL - which is also what keeps a plain client like DBeaver seeing an
 ordinary database.
+
+## End to end, through DBCenter's own API
+
+`cargo run -p dbcenter-core --example columnar_e2e 1000000` writes a million
+documents through the collection API, syncs them to a MinIO bucket, installs
+pg_duckdb, publishes the columnar view and queries both paths from the same
+connection:
+
+```
+PostgreSQL, the collection's own view             1039.8 ms
+DuckDB, the same rows as Parquet                    22.7 ms
+  -> columnar is 45.74x the speed of postgres
+both paths return identical results over 12 groups
+```
+
+The client sees two ordinary views on one ordinary PostgreSQL connection. The
+`read_parquet` call and DuckDB's untyped `r['col']` accessor are inside the
+view definition, so what a person writes in DBeaver is plain SQL over plain
+columns.
+
+## What deduplication costs, and when it is needed
+
+A row can appear in two Parquet files: an update writes it to `_adds` again, and
+the next sync puts it in a new file. Within a single file it cannot, because
+`_adds` has `id` as its primary key. So the view is built from what is actually
+in storage:
+
+| in storage | view does | cost |
+|---|---|---|
+| one file | nothing | 1x |
+| compacted base + deltas | rank the deltas, anti-join their ids out of the base | 2.3x |
+| several deltas, no base | rank the deltas | up to 12.9x |
+
+Ranking every row - the obvious "one window over all the files" - was the first
+version, and it cost 27x on the million-row run above: 22.7 ms became 608.5 ms.
+Sorting a million rows to discover that none of them were duplicates is most of
+the query.
