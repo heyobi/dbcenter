@@ -453,25 +453,15 @@ impl DBCenter {
     }
 
     /// Get the database port
+    ///
+    /// This used to ask the server with `inet_server_port()`, which returns NULL
+    /// over a Unix socket - so it raised "Could not get port information" on
+    /// every default instance, which is exactly the case where the caller has no
+    /// other way to find the port. The process knows the number it was started
+    /// with, so ask that instead.
     #[getter]
     fn port(&self) -> PyResult<u16> {
-        // Query the database for its port
-        Python::with_gil(|py| {
-            let results = self
-                .inner
-                .query("SELECT inet_server_port() as port", &[])
-                .map_err(|e| PyException::new_err(e.to_string()))?;
-
-            if let Some(row) = results.first() {
-                if let Some(port_value) = row.get("port") {
-                    if let Some(port) = port_value.as_i64() {
-                        return Ok(port as u16);
-                    }
-                }
-            }
-
-            Err(PyException::new_err("Could not get port information"))
-        })
+        Ok(self.inner.get_port())
     }
 
     /// Support attribute access: db.users -> Collection

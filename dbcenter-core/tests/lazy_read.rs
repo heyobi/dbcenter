@@ -375,3 +375,63 @@ fn an_updated_row_survives_being_synced() {
     let rows = db.query("SELECT balance FROM accounts", &[]).unwrap();
     assert_eq!(rows[0]["balance"], json!(250), "and it is the new value");
 }
+
+/// The footer cache exists so a second lookup does not re-read the metadata.
+///
+/// It never worked: the cache was written only when a read ended exactly at the
+/// end of the file and was longer than eight bytes, and Parquet's metadata block
+/// ends eight bytes before the end. The file was never created, so every lookup
+/// paid for the footer again.
+#[test]
+fn a_second_lookup_reads_less_because_the_footer_is_cached() {
+    let (db, counting, engine) = setup("footer_cache");
+
+    let collection = db.collection("events");
+    let docs: Vec<_> = (0..20_000)
+        .map(|n| json!({ "seq": n, "payload": format!("{:0>200}", n) }))
+        .collect();
+    collection.insert_many(&docs).unwrap();
+    engine.sync_table("events", 50_000).unwrap();
+    engine.vacuum("events").unwrap();
+
+    let target: String = db
+        .query("SELECT id::text AS id FROM events_base LIMIT 1", &[])
+        .unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    counting.reset();
+    let first = engine.scan_smart("events", &target).unwrap();
+    let cold = counting.bytes_downloaded();
+
+    counting.reset();
+    let second = engine.scan_smart("events", &target).unwrap();
+    let warm = counting.bytes_downloaded();
+
+    println!("cold lookup {cold} bytes, warm lookup {warm} bytes");
+
+    assert_eq!(first, second, "the cached footer changed the answer");
+    assert!(!first.is_empty(), "the row should have been found");
+
+    let meta_dir = db.get_path().join(".meta");
+    let cached: Vec<_> = std::fs::read_dir(&meta_dir)
+        .expect("the .meta directory should exist")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(!cached.is_empty(), "nothing was cached in {meta_dir:?}");
+    for entry in &cached {
+        assert!(
+            entry.metadata().unwrap().len() > 8,
+            "{:?} holds only the offset header",
+            entry.path()
+        );
+    }
+
+    assert!(
+        warm < cold,
+        "the second lookup read {warm} bytes against the first one's {cold}; the footer cache is not being used"
+    );
+
+    db.shutdown().unwrap();
+}

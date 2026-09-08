@@ -109,46 +109,59 @@ impl RemoteFile {
         }
     }
 
-    /// Try to read from local metadata cache if the read is for the footer
+    /// Serve a read out of the on-disk footer cache, if it covers the range.
+    ///
+    /// The cache file is the byte range it holds: eight bytes of little-endian
+    /// start offset, then the bytes themselves. Storing the offset is what makes
+    /// this work at all - Parquet's metadata block ends eight bytes before the
+    /// end of the file, not at the end, so a cache that could only describe
+    /// itself as "the last N bytes" could never hold it.
     fn try_read_local_metadata(&self, start: u64, length: usize) -> Option<Vec<u8>> {
-        if let Some(path) = &self.metadata_cache_path {
-            // Heuristic: If we are reading the END of the file, it's likely metadata.
-            // Parquet footer is at the end.
-            if start + length as u64 == self.length && path.exists() {
-                // Check file size match? Or just try read.
-                // The .meta file should contain the Footer bytes.
-                // But we don't know if .meta is exactly 'length' bytes or full footer.
-                // For simplicity: If .meta exists, read it ALL and see if it covers the request?
-                // Or just read EXACTLY what is requested from .meta if feasible.
-
-                // Implementation: .meta stores the LAST N bytes of the file.
-                // If existing .meta size >= length, we can serve it.
-                if let Ok(meta_bytes) = std::fs::read(path) {
-                    if meta_bytes.len() >= length {
-                        // Get the last 'length' bytes
-                        let offset = meta_bytes.len() - length;
-                        return Some(meta_bytes[offset..].to_vec());
-                    }
-                }
-            }
+        let path = self.metadata_cache_path.as_ref()?;
+        let raw = std::fs::read(path).ok()?;
+        if raw.len() < 8 {
+            return None;
         }
-        None
+        let cached_start = u64::from_le_bytes(raw[..8].try_into().ok()?);
+        let body = &raw[8..];
+        let cached_end = cached_start + body.len() as u64;
+
+        if start < cached_start || start + length as u64 > cached_end {
+            return None;
+        }
+        let offset = (start - cached_start) as usize;
+        Some(body[offset..offset + length].to_vec())
     }
 
+    /// Keep a downloaded footer so the next open does not fetch it again.
+    ///
+    /// Parquet reads its metadata in two steps: eight trailing bytes giving the
+    /// length, then the metadata block that ends just before them. Only the
+    /// second one is worth caching, and it is the one the old heuristic - "the
+    /// read ends at the end of the file, and is longer than eight bytes" - could
+    /// never match, so nothing was ever written here.
     fn save_to_local_metadata(&self, data: &[u8], start: u64) {
-        if let Some(path) = &self.metadata_cache_path {
-            // Heuristic: If we downloaded the end of the file, save it as .meta
-            if start + data.len() as u64 == self.length {
-                // Only save if it looks like a substantial footer (e.g. > 4 bytes)
-                if data.len() > 8 {
-                    // Overwrite .meta
-                    if let Err(e) = std::fs::write(path, data) {
-                        tracing::warn!("Failed to save metadata cache: {}", e);
-                    } else {
-                        tracing::debug!("Saved metadata cache to {:?}", path);
-                    }
-                }
-            }
+        let Some(path) = &self.metadata_cache_path else {
+            return;
+        };
+        // Anything ending in the last eight bytes of the file is the footer.
+        let end = start + data.len() as u64;
+        if data.len() <= 8 || end + 8 < self.length || end > self.length {
+            return;
+        }
+
+        let mut buffer = Vec::with_capacity(8 + data.len());
+        buffer.extend_from_slice(&start.to_le_bytes());
+        buffer.extend_from_slice(data);
+        if let Err(e) = std::fs::write(path, &buffer) {
+            tracing::warn!("Failed to save metadata cache: {}", e);
+        } else {
+            tracing::debug!(
+                "Cached {} footer bytes from offset {} to {:?}",
+                data.len(),
+                start,
+                path
+            );
         }
     }
 }

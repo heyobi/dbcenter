@@ -407,12 +407,27 @@ impl<'a> Collection<'a> {
         Ok(row.get(0))
     }
 
+    /// A `$set` may name a field the table does not have yet. `insert_one` grows
+    /// the schema to fit the document, so an update has to do the same: without
+    /// this, writing a new field through `update_one` fails with "column does not
+    /// exist" where the identical `insert_one` would have succeeded.
+    fn ensure_set_columns(&self, update: &HashMap<String, JsonValue>) -> Result<()> {
+        if let Some(JsonValue::Object(set)) = update.get("$set") {
+            let map: HashMap<String, JsonValue> =
+                set.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            self.ensure_columns(&map)?;
+        }
+        Ok(())
+    }
+
     /// Update one document
     pub fn update_one(
         &self,
         query: &HashMap<String, JsonValue>,
         update: &HashMap<String, JsonValue>,
     ) -> Result<i32> {
+        self.ensure_set_columns(update)?;
+
         // 1. Find the ID of the document to update
         let (where_clause, _) = QueryBuilder::build_where(query)?;
 
@@ -470,6 +485,8 @@ impl<'a> Collection<'a> {
         query: &HashMap<String, JsonValue>,
         update: &HashMap<String, JsonValue>,
     ) -> Result<u64> {
+        self.ensure_set_columns(update)?;
+
         let (where_clause, _) = QueryBuilder::build_where(query)?;
         let (update_clause, _) = QueryBuilder::build_relational_update(update)?;
 
@@ -623,14 +640,30 @@ impl<'a> Collection<'a> {
             )));
         }
 
+        // The indexed expression is always text. GIN and GiST have no default
+        // operator class for text, so `create_index(field, "gin")` was rejected
+        // outright by PostgreSQL. pg_trgm's classes are the right ones here:
+        // they are what `fuzzy_search` searches the same field with.
+        let opclass = match method.as_str() {
+            "gin" => " gin_trgm_ops",
+            "gist" => " gist_trgm_ops",
+            _ => "",
+        };
+        if !opclass.is_empty() {
+            if let Err(e) = self.db.install_extension("pg_trgm") {
+                tracing::warn!("pg_trgm install warning: {}", e);
+            }
+        }
+
         let expr = self.field_as_text(field)?;
         let idx_name = format!("idx_{}_{}_{}", self.name, field, method);
         let sql = format!(
-            r#"CREATE INDEX IF NOT EXISTS {} ON {} USING {} (({}))"#,
+            r#"CREATE INDEX IF NOT EXISTS {} ON {} USING {} (({}){})"#,
             quote_ident(&idx_name),
             self.table(),
             method,
-            expr
+            expr,
+            opclass
         );
 
         let mut client = self.db.get_client();
