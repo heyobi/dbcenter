@@ -56,8 +56,9 @@ which is what the version table picks by default for every major - all carry the
 **PostGIS's libraries now live in `postgis-libs/`, like pg_duckdb's.** The seven
 bundles that carry libraries - 3.5.0 for PostgreSQL 12 to 17, 3.6.1 for 18 - were
 repacked with their 43 dependencies in a directory of their own and RUNPATH
-`$ORIGIN/postgis-libs`, and re-pinned. Nothing shares the module directory any
-more, so the next bundle that ships a library has nothing to collide with.
+`$ORIGIN/postgis-libs`, re-pinned, and published to `extensions-v1`. Nothing
+shares the module directory any more, so the next bundle that ships a library
+has nothing to collide with.
 
 Two things had to change for a republished bundle to take effect at all, and
 both were found by publishing this one. The download cache keyed on file name,
@@ -66,8 +67,11 @@ and failed verification for good; a cached file that no longer matches its
 pinned digest is now fetched again. And the "already unpacked" marker recorded
 the archive's name, so the new layout would never have been extracted over the
 old one; it records the digest. Installing over an old install also deletes the
-copies the previous layout left behind, checked on PostgreSQL 17 and 18 with
-both extensions in both orders.
+copies the previous layout left behind. Checked from the public release with an
+empty cache on PostgreSQL 17 and 18, both extensions, both orders: every
+download matched its pinned digest, PostGIS answers 349.4 km and DuckDB answers
+42, and the only library left loose in the module directory is PostgreSQL's own
+`libpqwalreceiver.so`.
 
 **`vector-0.8.1-windows-amd64-pg15` is quarantined.** It shipped an import library
 instead of a DLL. Windows PostgreSQL 15 resolves to pgvector 0.8.0 instead.
@@ -151,20 +155,14 @@ A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`
 
 ## Next, in order
 
-1. **Publish the repacked PostGIS bundles.** The seven archives are built,
-   verified against both extensions on PostgreSQL 17 and 18, and pinned in
-   `extensions.rs`, but the upload to the `extensions-v1` release has not been
-   made. Until it is, the pinned digests do not match what is published and
-   PostGIS will not install from the public release. This is the one thing here
-   that is half-done rather than not started.
-2. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
+1. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
    Marked experimental is honest; it is not a resting place.
-3. Build pg_duckdb from source rather than repackaging upstream's binary.
+2. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
    compile than this machine has spare.
-4. Decide what "lazy sync" should mean, and either make the restore path lazy or
+3. Decide what "lazy sync" should mean, and either make the restore path lazy or
    stop claiming it.
-5. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
+4. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
    PostgreSQL 15 silently gets pgvector 0.8.0 instead.
 
 ## How the two read paths fit together
