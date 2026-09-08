@@ -1120,6 +1120,18 @@ impl SyncEngine {
                     i_tuple = qualified(&compared, "i"),
                 );
 
+                // Prepared explicitly, once. `execute` with a `&str` prepares
+                // the statement every time it is called - the driver keeps no
+                // cache - so a constant statement text alone bought nothing:
+                // PostgreSQL still parsed and planned four CTEs per row, and a
+                // compaction of half a million rows ran for hours on one core.
+                let statement = transaction.prepare(&upsert_base).map_err(|e| {
+                    crate::error::DBCenterError::QueryError(format!(
+                        "Could not prepare the restore statement: {}",
+                        crate::utils::format_postgres_error(&e)
+                    ))
+                })?;
+
                 for i in 0..batch.num_rows() {
                     let (mut fields, data_json) = arrow_row_to_document(&batch, i);
 
@@ -1160,7 +1172,7 @@ impl SyncEngine {
                     })?;
                     transaction
                         .execute(
-                            &upsert_base,
+                            &statement,
                             &[&id_uuid, &data_param, &updated_at_val, &document],
                         )
                         .map_err(|e| {

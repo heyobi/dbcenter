@@ -3,31 +3,31 @@
   "targets": {
     "postgres": {
       "load": {
-        "insert_s": 23.1,
-        "index_s": 3.9
+        "insert_s": 21.4,
+        "index_s": 3.8
       },
       "disk_bytes": 635456974,
       "bucket_bytes": 71538,
-      "cold_start_s": 2.5,
+      "cold_start_s": 2.9,
       "rows_held_locally": 1000000,
       "aggregate_collection": {
-        "median_ms": 707.63,
-        "best_ms": 703.46,
+        "median_ms": 708.76,
+        "best_ms": 708.21,
         "rows": 5
       },
       "recent_window": {
-        "median_ms": 0.73,
-        "best_ms": 0.6,
+        "median_ms": 0.49,
+        "best_ms": 0.37,
         "rows": 100
       },
       "point_lookup": {
-        "median_ms": 0.38,
-        "best_ms": 0.34,
+        "median_ms": 0.35,
+        "best_ms": 0.33,
         "rows": 1
       },
-      "insert_200_rows_ms": 1691.9,
-      "inserts_per_second": 118,
-      "memory_bytes": 41859153
+      "insert_200_rows_ms": 1756.0,
+      "inserts_per_second": 114,
+      "memory_bytes": 41796239
     }
   }
 }
