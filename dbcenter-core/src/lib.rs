@@ -38,6 +38,18 @@ static INSTANCES: Lazy<Mutex<HashMap<PathBuf, Arc<DBCenter>>>> =
 pub struct DBCenter {
     config: DBCenterConfig,
     client: Mutex<Client>,
+    /// Columns each table is known to have.
+    ///
+    /// Every insert used to ask information_schema which columns existed, so it
+    /// could add any the document introduced. That view joins several catalogs
+    /// and costs about 3ms - seventeen times what the insert itself costs inside
+    /// a transaction, paid on every call.
+    ///
+    /// A stale entry is safe in the direction that matters: the statement it
+    /// guards is ADD COLUMN IF NOT EXISTS, so believing a column is missing when
+    /// it is not costs one redundant ALTER. Believing a column exists when it has
+    /// been dropped would not be safe, and nothing in this API drops columns.
+    schema_cache: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     process: Arc<Mutex<process::PostgresProcess>>,
     path: PathBuf,
     instance_id: String,
@@ -289,6 +301,7 @@ impl DBCenter {
         let db_center = Arc::new(DBCenter {
             config,
             client: Mutex::new(_client),
+            schema_cache: Mutex::new(HashMap::new()),
             process: Arc::new(Mutex::new(pg_process)),
             path: path_buf.clone(),
             instance_id: instance_id.clone(),
@@ -667,6 +680,23 @@ impl DBCenter {
     }
 
     /// Get internal client for advanced operations
+    /// Columns this table is known to have, if we have looked before.
+    pub(crate) fn cached_columns(&self, table: &str) -> Option<std::collections::HashSet<String>> {
+        self.schema_cache.lock().ok()?.get(table).cloned()
+    }
+
+    pub(crate) fn remember_columns(&self, table: &str, columns: std::collections::HashSet<String>) {
+        if let Ok(mut cache) = self.schema_cache.lock() {
+            cache.insert(table.to_string(), columns);
+        }
+    }
+
+    pub(crate) fn forget_columns(&self, table: &str) {
+        if let Ok(mut cache) = self.schema_cache.lock() {
+            cache.remove(table);
+        }
+    }
+
     pub(crate) fn get_client(&self) -> std::sync::MutexGuard<'_, Client> {
         self.client.lock().unwrap()
     }

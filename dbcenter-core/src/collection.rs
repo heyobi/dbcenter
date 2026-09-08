@@ -74,14 +74,25 @@ impl<'a> Collection<'a> {
 
         // We need to sync schema for ALL target tables
         for table in target_tables {
-            // 1. Get existing columns for this table
-            let sql_cols =
-                "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
-            let rows = client.query(sql_cols, &[&table]).map_err(|e| {
-                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
-            })?;
-            let existing_cols: std::collections::HashSet<String> =
-                rows.iter().map(|r| r.get(0)).collect();
+            // 1. Which columns the table has. Asking information_schema costs
+            //    about 3ms - seventeen times what the insert itself costs inside
+            //    a transaction - and the answer only changes when we change it.
+            let mut existing_cols = match self.db.cached_columns(&table) {
+                Some(cached) => cached,
+                None => {
+                    let sql_cols =
+                        "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
+                    let rows = client.query(sql_cols, &[&table]).map_err(|e| {
+                        crate::error::DBCenterError::QueryError(
+                            crate::utils::format_postgres_error(&e),
+                        )
+                    })?;
+                    let cols: std::collections::HashSet<String> =
+                        rows.iter().map(|r| r.get(0)).collect();
+                    self.db.remember_columns(&table, cols.clone());
+                    cols
+                }
+            };
 
             // 2. Identify new columns
             let mut alter_stmts = Vec::new();
@@ -125,12 +136,19 @@ impl<'a> Collection<'a> {
                     alter_stmts.join(", ")
                 );
                 tracing::info!("Evolving schema for {}: {}", table, sql_alter);
-                client.batch_execute(&sql_alter).map_err(|e| {
-                    crate::error::DBCenterError::QueryError(format!(
+                if let Err(e) = client.batch_execute(&sql_alter) {
+                    // What the cache believed is no longer reliable.
+                    self.db.forget_columns(&table);
+                    return Err(crate::error::DBCenterError::QueryError(format!(
                         "Schema evolution failed: {}",
-                        e
-                    ))
-                })?;
+                        crate::utils::format_postgres_error(&e)
+                    )));
+                }
+
+                for key in document.keys() {
+                    existing_cols.insert(key.clone());
+                }
+                self.db.remember_columns(&table, existing_cols);
             }
         }
 

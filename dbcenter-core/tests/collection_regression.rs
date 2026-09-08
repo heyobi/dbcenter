@@ -214,3 +214,52 @@ fn a_password_containing_a_quote_is_set_literally() {
     db.shutdown().unwrap();
     let _ = std::fs::remove_dir_all(&path);
 }
+
+#[test]
+fn a_field_introduced_later_still_gets_a_column() {
+    // The set of columns a table has is cached, because asking the catalogue on
+    // every insert cost more than the insert. This is the case that cache could
+    // break: a document with a field nothing has used before, after the cache
+    // has been filled.
+    let path = std::env::temp_dir().join("dbcenter_schema_cache");
+    let _ = std::fs::remove_dir_all(&path);
+    let db = DBCenter::builder()
+        .path(&path)
+        .persist(false)
+        .build()
+        .unwrap();
+
+    let c = db.collection("people");
+    c.insert_one(&json!({"name": "Ada"})).unwrap();
+    c.insert_one(&json!({"name": "Grace"})).unwrap(); // cache is warm now
+
+    c.insert_one(&json!({"name": "Katherine", "role": "mathematician"}))
+        .unwrap();
+    c.insert_one(&json!({"name": "Joan", "role": "engineer", "year": 1936}))
+        .unwrap();
+
+    let mut docs = c.find(None).unwrap();
+    docs.sort_by_key(|d| d["name"].as_str().unwrap().to_string());
+    assert_eq!(docs.len(), 4);
+    assert_eq!(docs[0]["name"], json!("Ada"));
+    assert_eq!(
+        docs[0]["role"],
+        json!(null),
+        "the earlier rows have no role"
+    );
+    // Sorted by name: Ada, Grace, Joan, Katherine.
+    assert_eq!(docs[2]["role"], json!("engineer"), "{:?}", docs[2]);
+    assert_eq!(docs[2]["year"], json!(1936), "{:?}", docs[2]);
+    assert_eq!(docs[3]["role"], json!("mathematician"), "{:?}", docs[3]);
+
+    // And querying by the new column works, so it is a real column rather than
+    // something that only looks right on the way out.
+    assert_eq!(
+        c.count(Some(&q(vec![("role", json!("engineer"))])))
+            .unwrap(),
+        1
+    );
+
+    db.shutdown().unwrap();
+    let _ = std::fs::remove_dir_all(&path);
+}
