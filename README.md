@@ -44,12 +44,168 @@ db.Collection("users").InsertOne(map[string]interface{}{
 
 ## Architecture
 
-- `dbcenter-core`: Core Rust library
-- `dbcenter-ffi`: C FFI bindings
-- `dbcenter-python`: Python bindings (PyO3)
-- `dbcenter-go`: Go bindings (cgo)
-- `dbcenter-serve`: the same engine as a container workload, with its durable
-  copy on object storage
+DBCenter starts a real `postgres` binary against a data directory and puts a
+MongoDB-shaped API in front of it. Storage, planning and transactions are
+PostgreSQL's; what DBCenter adds is the lifecycle, the delta layer, and a
+columnar copy on object storage that can be read without going through
+PostgreSQL at all.
+
+The whole point is that none of that is visible from outside. A client is handed
+an ordinary connection string.
+
+```mermaid
+flowchart TB
+    subgraph clients["Everything that connects"]
+        driver["psql, DBeaver, pgAdmin<br/>any PostgreSQL driver"]
+        api["Python, C, Go, Java, Node<br/>collection API"]
+    end
+
+    subgraph engine["DBCenter"]
+        pg[("PostgreSQL<br/>a real postmaster, started by DBCenter")]
+        duck["pg_duckdb<br/>optional, off by default"]
+    end
+
+    store[("Object storage<br/>S3, MinIO, or a local directory<br/>Parquet, one column per field")]
+
+    driver -->|"host=... port=... dbname=..."| pg
+    api -->|"same connection, pooled"| pg
+    pg <-->|"in-process"| duck
+    pg -->|"sync: rows out as Parquet"| store
+    duck -->|"reads columns directly,<br/>never through PostgreSQL"| store
+```
+
+The client sees PostgreSQL 18. It does not have to know that some of its data is
+in a table and some of it is Parquet on a bucket somewhere.
+
+### A collection is three tables and a view
+
+In delta mode, `db.collection("orders")` is not a table. It is a view over a
+base table, an additions table and a tombstone table, with `INSTEAD OF` triggers
+that make it writable. This is what lets a sync ship only what changed, and what
+lets two machines converge through a bucket neither of them owns.
+
+```mermaid
+flowchart TB
+    w["INSERT / UPDATE / DELETE<br/>on the view"]
+    adds["orders_adds<br/>rows written since the last sync"]
+    dels["orders_dels<br/>ids to hide from base"]
+    base["orders_base<br/>rows already synced"]
+    r["SELECT sees<br/>adds, plus base minus<br/>anything in adds or dels"]
+
+    w -->|"the new row of an INSERT or UPDATE"| adds
+    w -->|"the old row of an UPDATE, and any DELETE"| dels
+
+    adds --> r
+    base --> r
+    dels -.->|"subtracted"| r
+```
+
+A document's fields are ordinary columns. The first time a document carries a
+field the table grows a column for it, so `orders` has `id`, `created_at`,
+`updated_at` and then whatever the documents have made of it.
+
+### Where the data goes, and how it comes back
+
+```mermaid
+sequenceDiagram
+    participant App as Your code
+    participant PG as PostgreSQL
+    participant Sync as SyncEngine
+    participant S3 as Object storage
+
+    App->>PG: insert_many
+    PG->>PG: rows land in orders_adds
+    App->>Sync: sync_table
+    Sync->>PG: read orders_adds, one column per field
+    Sync->>S3: PUT orders_DELTA_<ts>.parquet
+    Sync->>PG: move those rows into orders_base, clear their tombstones
+
+    Note over Sync,S3: later, a compaction
+    App->>Sync: vacuum
+    Sync->>S3: PUT orders_BASE_<ts>.parquet
+    Sync->>S3: DELETE the deltas it replaces
+
+    Note over App,S3: on another machine, or after losing the local copy
+    App->>Sync: pull_and_apply
+    Sync->>S3: read base, then every delta after it
+    Sync->>PG: upsert into orders_base, newest updated_at wins
+```
+
+The Parquet is written with **one column per document field**, with the type the
+field had. That is not cosmetic. Serialising the document into a single JSON
+column - which is what this used to do - leaves Parquet nothing to be columnar
+about, and made reads off object storage *slower* than the PostgreSQL they were
+meant to beat. See [docs/columnar-reads.md](docs/columnar-reads.md).
+
+### Two read paths, deliberately not one
+
+Reading five million rows, measured on one machine:
+
+| | PostgreSQL | Parquet through DuckDB |
+|---|---|---|
+| `sum()` over a column | 586 ms | **46 ms** |
+| `GROUP BY` | 2336 ms | **17 ms** |
+| point lookup by id | **0.2 ms** | 38 ms |
+
+Neither wins at both, so DBCenter keeps both and gives them separate names.
+
+```mermaid
+flowchart TB
+    q["Your query"]
+
+    q -->|"a row, or a write"| a["orders<br/>the collection"]
+    q -->|"an aggregate over history"| b["orders_columnar<br/>published when columnar=True"]
+
+    a --> pg[("PostgreSQL tables<br/>indexed, transactional,<br/>current to this instant")]
+    b --> duck["pg_duckdb"]
+    duck --> s3[("Parquet on object storage<br/>as current as the last sync")]
+```
+
+They are not merged into one view, and that is a decision rather than an
+oversight. pg_duckdb takes a whole query or none of it, and DuckDB cannot use
+PostgreSQL's indexes - so a view unioning the two sends *every* query through
+DuckDB and turns a 0.1 ms point lookup into 55 ms. Measured, then discarded.
+
+Turning the columnar path on is one flag:
+
+```python
+db = dbcenter.DBCenter(path="/data", multi_user_sync=True, columnar=True)
+```
+
+pg_duckdb is put in place before PostgreSQL starts, so there is no restart, and
+`<name>_columnar` appears beside each collection as soon as there is something
+synced to read. It is off by default because it takes the resident set from
+about 128 MB to 250 MB, which a database that never runs an aggregate should not
+pay.
+
+### The crates
+
+```mermaid
+flowchart TB
+    subgraph bindings["Bindings"]
+        py["dbcenter-python<br/>PyO3, the one that is exercised"]
+        ffi["dbcenter-ffi<br/>C ABI"]
+        other["dbcenter-go / -java / -node / -r<br/>thin, treat as experimental"]
+    end
+
+    core["dbcenter-core<br/>process lifecycle, collections, query builder,<br/>delta layer, sync engine, storage adapters, extensions"]
+
+    subgraph runtime["Alongside the engine"]
+        watcher["dbcenter-watcher<br/>shuts PostgreSQL down<br/>if the parent process dies"]
+        serve["dbcenter-serve<br/>the same engine as a container workload"]
+    end
+
+    py --> core
+    ffi --> core
+    other --> ffi
+    core --> watcher
+    serve --> core
+```
+
+`dbcenter-watcher` exists because an embedded database whose host process is
+killed would otherwise leave a postmaster running against the data directory.
+It is compiled for the same target and embedded in the binding, then written out
+at run time.
 
 ## Extensions
 
