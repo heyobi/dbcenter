@@ -222,9 +222,12 @@ pub fn row_value_to_json(row: &Row, idx: usize) -> JsonValue {
             .try_get::<_, chrono::DateTime<chrono::Utc>>(idx)
             .map(|v| JsonValue::String(v.to_rfc3339()))
             .unwrap_or(JsonValue::Null),
+        // ISO 8601 with a T, which is what to_jsonb produces for a timestamp -
+        // find() used to go through to_jsonb, and callers parse what they were
+        // already given.
         Type::TIMESTAMP => row
             .try_get::<_, chrono::NaiveDateTime>(idx)
-            .map(|v| JsonValue::String(v.to_string()))
+            .map(|v| JsonValue::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string()))
             .unwrap_or(JsonValue::Null),
         Type::DATE => row
             .try_get::<_, chrono::NaiveDate>(idx)

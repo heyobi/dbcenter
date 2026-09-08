@@ -263,3 +263,28 @@ fn a_field_introduced_later_still_gets_a_column() {
     db.shutdown().unwrap();
     let _ = std::fs::remove_dir_all(&path);
 }
+
+#[test]
+fn a_custom_port_still_connects() {
+    // A Unix socket is named .s.PGSQL.<port>, but the connection string left the
+    // port out, so libpq looked for 5432. That was every port until a
+    // configurable one became possible - and then the server listened on one
+    // socket while the client knocked on another and startup timed out.
+    let path = std::env::temp_dir().join("dbcenter_custom_port");
+    let _ = std::fs::remove_dir_all(&path);
+
+    let db = DBCenter::builder()
+        .path(&path)
+        .persist(false)
+        .port(55_901)
+        .build()
+        .expect("a non-default port must not prevent startup");
+
+    let c = db.collection("t");
+    c.insert_one(&json!({"ok": 1})).unwrap();
+    assert_eq!(c.count(None).unwrap(), 1);
+    assert_eq!(db.get_port(), 55_901);
+
+    db.shutdown().unwrap();
+    let _ = std::fs::remove_dir_all(&path);
+}

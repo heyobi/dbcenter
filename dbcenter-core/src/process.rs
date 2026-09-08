@@ -123,6 +123,11 @@ impl PostgresProcess {
             cmd.arg("-c").arg("dynamic_shared_memory_type=windows");
         } else {
             cmd.arg("-k").arg(socket_dir.as_ref().unwrap());
+            // The port names the Unix socket file too, so it has to be passed
+            // whether or not TCP is on. Leaving it to the TCP branch left a
+            // socket-only server sitting on .s.PGSQL.5432 while every client
+            // built from this config knocked on the configured port.
+            cmd.arg("-p").arg(port.to_string());
             // The Unix socket is always there for local clients and the watcher.
             // TCP is off unless a host was configured: a database that is
             // embedded in a process has no business on the network by default,
@@ -131,7 +136,6 @@ impl PostgresProcess {
             match &config.host {
                 Some(tcp_host) if !tcp_host.is_empty() => {
                     cmd.arg("-h").arg(tcp_host);
-                    cmd.arg("-p").arg(port.to_string());
                     tracing::info!("Also listening on TCP {}:{}", tcp_host, port);
                 }
                 _ => {
@@ -182,27 +186,20 @@ impl PostgresProcess {
             self.host.clone()
         };
 
-        if cfg!(windows) {
-            if let Some(ref password) = config.password {
-                format!(
-                    "host={} port={} dbname={} user={} password={}",
-                    conn_host, self.port, dbname, user, password
-                )
-            } else {
-                format!(
-                    "host={} port={} dbname={} user={}",
-                    conn_host, self.port, dbname, user
-                )
-            }
+        // The port belongs in the string on Unix too. A Unix socket is named
+        // .s.PGSQL.<port>, so leaving it out makes libpq look for 5432 - which
+        // was every port until a configurable one became possible, and then the
+        // server listened on one socket while we knocked on another.
+        if let Some(ref password) = config.password {
+            format!(
+                "host={} port={} dbname={} user={} password={}",
+                conn_host, self.port, dbname, user, password
+            )
         } else {
-            if let Some(ref password) = config.password {
-                format!(
-                    "host={} dbname={} user={} password={}",
-                    conn_host, dbname, user, password
-                )
-            } else {
-                format!("host={} dbname={} user={}", conn_host, dbname, user)
-            }
+            format!(
+                "host={} port={} dbname={} user={}",
+                conn_host, self.port, dbname, user
+            )
         }
     }
 

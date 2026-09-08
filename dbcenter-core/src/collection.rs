@@ -329,15 +329,14 @@ impl<'a> Collection<'a> {
             (String::new(), Vec::new())
         };
 
-        // We need JSON rows back. Postgres can convert ROW to JSON.
+        // Select the columns and build the JSON here, rather than asking the
+        // server for to_jsonb(t). That serialised every row to JSONB inside
+        // PostgreSQL and then parsed it back in Rust; the serialisation alone
+        // accounted for all of find()'s cost over a plain select.
         let sql = if where_clause.is_empty() {
-            format!(r#"SELECT to_jsonb(t) FROM {} t"#, self.table())
+            format!(r#"SELECT * FROM {} t"#, self.table())
         } else {
-            format!(
-                r#"SELECT to_jsonb(t) FROM {} t WHERE {}"#,
-                self.table(),
-                where_clause
-            )
+            format!(r#"SELECT * FROM {} t WHERE {}"#, self.table(), where_clause)
         };
 
         let mut client = self.db.get_client();
@@ -348,19 +347,20 @@ impl<'a> Collection<'a> {
             ))
         })?;
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(rows.len());
         for row in rows {
-            // Postgres returns the whole row as a JSONB value in column 0
-            if let Some(mut val) = row.get::<_, Option<JsonValue>>(0) {
-                // Ensure _id is present (mapped from id)
-                if let JsonValue::Object(ref mut map) = val {
-                    if let Some(id_val) = map.get("id") {
-                        // Copy id to _id for compatibility
-                        map.insert("_id".to_string(), id_val.clone());
-                    }
-                }
-                results.push(val);
+            let mut map = serde_json::Map::with_capacity(row.columns().len() + 1);
+            for (idx, column) in row.columns().iter().enumerate() {
+                map.insert(
+                    column.name().to_string(),
+                    crate::utils::row_value_to_json(&row, idx),
+                );
             }
+            // _id alongside id, as before.
+            if let Some(id_val) = map.get("id").cloned() {
+                map.insert("_id".to_string(), id_val);
+            }
+            results.push(JsonValue::Object(map));
         }
 
         Ok(results)

@@ -42,9 +42,11 @@ fn every_common_type_survives_the_trip_into_json() {
         one("SELECT '2026-09-08'::date AS v")["v"],
         json!("2026-09-08")
     );
+    // ISO 8601 with a T, the same shape to_jsonb produces, so find() keeps
+    // returning what callers already parse.
     assert_eq!(
         one("SELECT '2026-09-08 14:30:00'::timestamp AS v")["v"],
-        json!("2026-09-08 14:30:00")
+        json!("2026-09-08T14:30:00")
     );
     assert!(one("SELECT now() AS v")["v"]
         .as_str()
