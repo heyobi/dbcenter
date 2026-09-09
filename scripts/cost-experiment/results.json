@@ -3,94 +3,94 @@
   "targets": {
     "postgres": {
       "load": {
-        "insert_s": 3.8,
-        "index_s": 0.4
+        "insert_s": 4.2,
+        "index_s": 1.3
       },
       "disk_bytes": 161279438,
-      "bucket_bytes": 71538,
+      "bucket_bytes": 100459,
       "cold_start_s": 2.1,
       "rows_held_locally": 200000,
       "aggregate_collection": {
-        "median_ms": 188.72,
-        "best_ms": 121.54,
+        "median_ms": 192.8,
+        "best_ms": 121.52,
         "rows": 5
       },
       "recent_window": {
-        "median_ms": 0.73,
-        "best_ms": 0.57,
+        "median_ms": 0.59,
+        "best_ms": 0.58,
         "rows": 100
       },
       "point_lookup": {
-        "median_ms": 0.43,
-        "best_ms": 0.34,
+        "median_ms": 0.36,
+        "best_ms": 0.3,
         "rows": 1
       },
-      "insert_200_rows_ms": 1664.2,
-      "inserts_per_second": 120,
-      "memory_bytes": 41796239
+      "insert_200_rows_ms": 1841.2,
+      "inserts_per_second": 109,
+      "memory_bytes": 41764782
     },
     "dbcenter": {
       "load": {
-        "insert_s": 6.7,
-        "index_s": 1.7,
-        "sync_s": 20.3,
-        "compact_s": 80.8,
+        "insert_s": 6.0,
+        "index_s": 1.4,
+        "sync_s": 20.1,
+        "compact_s": 90.9,
         "deltas_left": 0
       },
-      "disk_bytes": 417915088,
-      "bucket_bytes": 330475069,
-      "cold_start_s": 6.3,
+      "disk_bytes": 417906972,
+      "bucket_bytes": 330474885,
+      "cold_start_s": 6.4,
       "rows_held_locally": 200000,
       "aggregate_collection": {
-        "median_ms": 684.46,
-        "best_ms": 615.28,
+        "median_ms": 688.68,
+        "best_ms": 685.87,
         "rows": 5
       },
       "aggregate_columnar": {
-        "median_ms": 19.72,
-        "best_ms": 18.14,
+        "median_ms": 77.43,
+        "best_ms": 76.12,
         "rows": 5
       },
       "recent_window": {
-        "median_ms": 103.8,
-        "best_ms": 101.76,
+        "median_ms": 100.08,
+        "best_ms": 97.59,
         "rows": 100
       },
       "point_lookup": {
-        "median_ms": 0.86,
-        "best_ms": 0.83,
+        "median_ms": 0.92,
+        "best_ms": 0.89,
         "rows": 1
       },
-      "insert_200_rows_ms": 1831.6,
-      "inserts_per_second": 109,
-      "memory_bytes": 132854579
+      "insert_200_rows_ms": 2114.9,
+      "inserts_per_second": 95,
+      "memory_bytes": 132644864
     },
     "lazy": {
       "load": {
         "note": "restored from the bucket, deltas only"
       },
-      "disk_bytes": 41349022,
-      "bucket_bytes": 142291944,
+      "disk_bytes": 41349098,
+      "bucket_bytes": 142289814,
       "cold_start_s": 4.7,
       "rows_held_locally": 200,
       "aggregate_columnar": {
-        "median_ms": 46.0,
-        "best_ms": 45.89,
+        "median_ms": 225.52,
+        "best_ms": 224.32,
         "rows": 5
       },
       "recent_window": {
-        "median_ms": 45.32,
-        "best_ms": 41.67,
+        "median_ms": 222.29,
+        "best_ms": 221.56,
         "rows": 100
       },
       "point_lookup": {
-        "median_ms": 36.1,
-        "best_ms": 34.99,
+        "median_ms": 216.39,
+        "best_ms": 212.51,
         "rows": 1
       },
-      "insert_200_rows_ms": 1819.0,
-      "inserts_per_second": 110,
-      "memory_bytes": 83581992
+      "insert_200_rows_ms": 1683.5,
+      "inserts_per_second": 119,
+      "memory_bytes": 81537269
     }
   }
 }

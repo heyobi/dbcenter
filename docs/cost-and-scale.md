@@ -72,6 +72,52 @@ whether or not it syncs anything.
 **Writes are a wash.** 109 against 120 single-row inserts a second, both bounded
 by the round trip and the commit rather than by the engine.
 
+## The same thing again, with the network in it
+
+MinIO next door answers in about a tenth of a millisecond. R2 or Tigris from a
+Fly machine does not: it is tens of milliseconds, and every read the local
+tables cannot answer pays it. So the rig can hold the storage container's
+packets - `LATENCY_MS=10 docker compose --profile latency up -d latency` puts a
+netem delay of 10 ms each way on it, 20 ms per round trip, which is a fair
+stand-in for object storage in the same region.
+
+Everything else identical:
+
+```
+| | postgres | dbcenter | lazy |
+|---|---|---|---|
+| aggregate over all history, collection | 192.8 ms | 688.7 ms | - |
+| aggregate over all history, columnar view | - | 77.4 ms | 225.5 ms |
+| recent window, 100 rows by timestamp | 0.6 ms | 100.1 ms | 222.3 ms |
+| point lookup by indexed column | 0.4 ms | 0.9 ms | 216.4 ms |
+| cold start | 2.1 s | 6.4 s | 4.7 s |
+| compaction | - | 90.9 s | - |
+```
+
+Three things change, and one does not.
+
+**The columnar view still wins.** 77.4 ms against PostgreSQL's 192.8 ms - 2.5x
+rather than 9.6x, but still faster than the database that has the rows on its own
+disk. That is the result worth having: the analytical advantage is not an
+artefact of the bucket being local.
+
+**The lazy node stops being fast.** Its aggregate goes from 46.0 ms to 225.5 ms,
+which is slower than plain PostgreSQL. Holding none of the table is a disk and
+cost story, not a speed story, the moment the bucket is a network away.
+
+**A point lookup that reaches object storage becomes unusable for a request
+path.** 216.4 ms against 0.4 ms. At 20 ms a round trip that is about eleven round
+trips for one row - the footer, the metadata, the row group, and DuckDB's own
+back and forth. Nothing about a request path survives that.
+
+**Cold start barely moves** - 4.7 s either way - because it is dominated by
+starting PostgreSQL rather than by talking to the bucket.
+
+The practical reading: keep what a request path touches in the local delta
+tables, and let the bucket hold the history that gets aggregated rather than
+looked up one row at a time. `DBCENTER_LAZY_RESTORE` is for archival tables, not
+for the table your API reads.
+
 ## What did not fit
 
 At **1,000,000 rows the compaction did not survive 1 GB**. The container reached
@@ -129,10 +175,54 @@ part in a bucket and reading it as Parquet is the entire arbitrage. The columnar
 numbers above say that reading it that way is not a compromise for analytics -
 it is faster.
 
+## Can this be better than PostgreSQL, and how
+
+It already is at one thing and cannot be at another, and being clear about which
+is which is most of the strategy.
+
+**Where it wins, and can win by more.** Analytical reads: 2.5x over the network,
+9.6x when the bucket is close. That gap comes from reading five columns of
+Parquet instead of whole rows out of a heap, and it widens with the table rather
+than narrowing - a row group holds a fixed number of rows, so the same query
+against ten times the data reads the same fraction. Three things would widen it
+further: writing the Parquet sorted on the column people filter by, so row-group
+statistics prune more; keeping a small local cache of hot row groups, so a repeat
+query pays no round trip; and pushing projections down so a five-column query
+never fetches the sixth.
+
+**Where it wins structurally.** Scale to zero - PostgreSQL cannot be stopped and
+restarted in 4.7 s with its data intact, because its data is the thing on the
+disk you just released. And cost, which is not an optimisation but an arbitrage:
+managed disk is roughly eight times the price of object storage, billed on the
+whole table whether it is hot or cold.
+
+**Where it should aim for parity, not victory.** Point lookups and small writes
+on hot data. 0.9 ms against 0.4 ms, and 95 against 109 inserts a second, is
+PostgreSQL against PostgreSQL with a view in the way. The goal there is to get
+the overhead to zero, not to beat the engine we are running on.
+
+**The one thing standing in the way of parity is ours, not PostgreSQL's.** A
+hundred rows by timestamp: 0.6 ms against 100.1 ms, same index both sides. The
+collection is `adds UNION ALL (base minus adds minus dels)` and PostgreSQL will
+not push an ordering and a limit through that shape, so it sorts the whole table
+to return a hundred rows. Making `_base` and `_adds` partitions of one table
+instead of arms of a view would let the planner do a merge append and stop after
+a hundred rows. That single change is worth more than everything else on this
+list, because it is paid by every query in every deployment, synced or not.
+
+So: better than PostgreSQL on analytics and on cost, indistinguishable from it on
+hot reads once the view tax is gone, and never better on a single indexed row -
+that is the shape to aim for, and three of the four are already true.
+
 ## Re-running it
 
 ```sh
 docker compose -f scripts/cost-experiment/docker-compose.yml up -d storage storage-init
+
+# optional: put the bucket a network away, 10 ms each way
+LATENCY_MS=10 docker compose -f scripts/cost-experiment/docker-compose.yml \
+  --profile latency up latency
+
 python scripts/cost-experiment/run.py --rows 200000
 python scripts/cost-experiment/report.py
 ```

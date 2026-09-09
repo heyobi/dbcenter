@@ -162,6 +162,12 @@ table answers it in 46 ms on 39 MB of disk against PostgreSQL's 154 MB. On list
 prices that is about $7.69 a month against Supabase Pro's $36.50 for the same
 100 GB.
 
+With the bucket a network away - 20 ms a round trip, which is what R2 or Tigris
+costs from a Fly machine - the columnar view still wins, 77.4 ms against 192.8 ms,
+but the lazy node stops being fast (225.5 ms) and a point lookup that reaches
+object storage takes 216.4 ms against 0.4 ms. Lazy restore is for archival
+tables, not for the table an API reads.
+
 Two things came out of it that are not good news. A hundred rows by timestamp
 takes 0.7 ms against a plain table and **103.8 ms against the collection**, with
 the same index on both sides: the collection is a view over three tables and
@@ -176,7 +182,9 @@ stalls at its memory ceiling. The full write-up, with the rig, is in
 1. **Make the collection view answer an ordered, limited query without sorting
    everything.** 103.8 ms against 0.7 ms is the largest single gap between
    DBCenter and the PostgreSQL underneath it, and it is paid by every query that
-   is not a point lookup.
+   is not a point lookup, in every deployment, synced or not. Making `_base` and
+   `_adds` partitions of one table rather than arms of a `UNION ALL` view would
+   let the planner do a merge append and stop after the rows it was asked for.
 2. **Make compaction stream.** It reads the whole base snapshot into memory to
    rewrite it, so a 1 GB machine cannot compact a million-row table - which is
    the machine the whole argument rests on.

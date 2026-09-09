@@ -34,6 +34,28 @@ services:
       timeout: 2s
       retries: 20
 
+  # Object storage that is a network away, which is what it is in production.
+  #
+  # MinIO next door answers in about a tenth of a millisecond; R2 or Tigris from
+  # a Fly machine is tens of milliseconds, and that difference lands on every
+  # read the local tables cannot answer. This shares the storage container's
+  # network namespace and puts a netem delay on its interface, so every packet
+  # in both directions is held - LATENCY_MS each way, twice that per round trip.
+  #
+  #   LATENCY_MS=10 docker compose --profile latency up -d latency
+  latency:
+    image: debian:bookworm-slim
+    network_mode: "service:storage"
+    cap_add: ["NET_ADMIN"]
+    depends_on:
+      storage:
+        condition: service_healthy
+    command: >
+      sh -c "apt-get update -qq && apt-get install -y -qq iproute2 >/dev/null &&
+             tc qdisc replace dev eth0 root netem delay ${LATENCY_MS:-0}ms &&
+             tc qdisc show dev eth0"
+    profiles: ["latency"]
+
   storage-init:
     image: minio/minio:latest
     depends_on:
