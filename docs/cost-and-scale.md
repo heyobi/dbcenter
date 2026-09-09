@@ -175,13 +175,62 @@ part in a bucket and reading it as Parquet is the entire arbitrage. The columnar
 numbers above say that reading it that way is not a compromise for analytics -
 it is faster.
 
+## Adding a machine instead of a bigger one
+
+The read path is a bucket, and a bucket has no primary. So the question is
+whether a second machine adds read throughput the way a PostgreSQL replica would
+- except that a replica needs its own copy of the table and one of these needs
+39 MB.
+
+`scripts/cost-experiment/scale.py` runs the aggregate flat out from 1, 2, 4 and 8
+clients, against one PostgreSQL given **three cores** and against one, two and
+three DBCenter reader nodes given **one core each**. Same total compute at three
+nodes, so the comparison is about shape rather than hardware. The readers are
+lazy: none of them holds the table.
+
+```
+| clients | postgres, 3 cores | 1 node | 2 nodes | 3 nodes |
+|---|---|---|---|---|
+| 1 | 23.5 q/s, 41 ms | 25.5 q/s, 38 ms | 24.6 q/s, 38 ms | 25.7 q/s, 38 ms |
+| 2 | 21.1 q/s, 95 ms | 26.4 q/s, 83 ms | 41.4 q/s, 48 ms | 41.9 q/s, 47 ms |
+| 4 | 22.1 q/s, 176 ms | 22.5 q/s, 190 ms | 47.5 q/s, 88 ms | 54.3 q/s, 65 ms |
+| 8 | 24.7 q/s, 298 ms | 21.5 q/s, 382 ms | 44.5 q/s, 190 ms | 53.2 q/s, 136 ms |
+```
+
+**One core answers as many queries as PostgreSQL's three.** 26.4 against 24.7 at
+their respective peaks. Both saturate - the difference is that one of them
+saturates a third of the hardware.
+
+**Adding a machine adds throughput.** 26 to 47 to 54 queries a second, and the
+latency under eight clients falls from 382 ms on one node to 136 ms on three
+while PostgreSQL sits at 298 ms. Nothing coordinates: each node opens the same
+Parquet and reads it, and there is no primary to ask.
+
+**It is not linear, and the reason matters.** The second node gives 1.8x, the
+third only 2.1x. On this rig the bucket is one MinIO container on a host that was
+already running everything else, so the storage side is the ceiling rather than
+the nodes. R2 and Tigris do not have that ceiling; what they have instead is the
+latency measured above, which raises the cost of every query rather than capping
+the total.
+
+**What it does not scale.** Writes still go through one node - this is read
+scaling, not multi-master - and point lookups do not benefit, because they are
+fast locally and slow remotely whatever the node count.
+
+The money: three machines that hold no data are 3 x $5.92 = $17.76 a month and
+three volumes at $0.45. Three PostgreSQL read replicas each need a volume the
+size of the table, which at 100 GB is $11.50 a month each before compute. The
+read tier is where "the bucket is the durable copy" turns into a price
+difference rather than an architecture diagram.
+
 ## Can this be better than PostgreSQL, and how
 
 It already is at one thing and cannot be at another, and being clear about which
 is which is most of the strategy.
 
 **Where it wins, and can win by more.** Analytical reads: 2.5x over the network,
-9.6x when the bucket is close. That gap comes from reading five columns of
+9.6x when the bucket is close, and 2.2x against three times the hardware once
+three nodes share a bucket. That gap comes from reading five columns of
 Parquet instead of whole rows out of a heap, and it widens with the table rather
 than narrowing - a row group holds a fixed number of rows, so the same query
 against ten times the data reads the same fraction. Three things would widen it

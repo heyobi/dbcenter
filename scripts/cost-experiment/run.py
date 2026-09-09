@@ -113,9 +113,25 @@ def wait_for_collection(conn, name, timeout=900):
                 "SELECT count(*) FROM pg_trigger WHERE tgname = %s", (f"trg_insert_{name}",)
             )
             if cur.fetchone()[0]:
+                break
+        time.sleep(2)
+    else:
+        raise RuntimeError(f"{name} never got its write triggers")
+
+    # And the declared fields, which the server adds after creating the
+    # collection - a client that starts writing as soon as the tables exist
+    # races the ALTER TABLE that gives them columns.
+    while time.time() < deadline:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM information_schema.columns "
+                "WHERE table_name = %s AND column_name = 'user_id'",
+                (f"{name}_adds",),
+            )
+            if cur.fetchone()[0]:
                 return
         time.sleep(2)
-    raise RuntimeError(f"{name} never got its write triggers")
+    raise RuntimeError(f"{name} never got its declared columns")
 
 
 def timed(conn, sql, params=None, runs=5):

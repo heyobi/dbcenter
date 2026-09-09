@@ -168,6 +168,13 @@ but the lazy node stops being fast (225.5 ms) and a point lookup that reaches
 object storage takes 216.4 ms against 0.4 ms. Lazy restore is for archival
 tables, not for the table an API reads.
 
+Read load scales by adding machines rather than by buying a bigger one: one core
+answers as many queries as PostgreSQL's three (26.4 against 24.7 a second), and
+three one-core nodes sharing a bucket reach 54.3 - 2.2x the same total compute
+spent on one PostgreSQL, with less than half the latency at eight clients. The
+nodes hold no data, so the read tier costs machines rather than machines plus a
+volume each.
+
 Two things came out of it that are not good news. A hundred rows by timestamp
 takes 0.7 ms against a plain table and **103.8 ms against the collection**, with
 the same index on both sides: the collection is a view over three tables and

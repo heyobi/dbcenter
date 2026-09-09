@@ -133,7 +133,79 @@ services:
     volumes:
       - lazy-data:/data
 
+  # Read-only nodes against the same bucket, for the scaling question: does
+  # adding a machine add read throughput, the way adding a PostgreSQL replica
+  # would - but without giving each one a copy of the table?
+  #
+  # They restore from the deltas only and never push or compact. Each gets one
+  # core, so three of them is the same compute as one three-core PostgreSQL and
+  # the comparison is about shape rather than hardware.
+  reader1: &reader
+    image: dbcenter:bench
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    cpus: 1.0
+    mem_limit: 1g
+    environment: &reader-env
+      DBCENTER_STORAGE: s3
+      DBCENTER_BUCKET: events
+      DBCENTER_PREFIX: bench
+      AWS_ENDPOINT_URL_S3: http://storage:9000
+      AWS_ACCESS_KEY_ID: dbcenter
+      AWS_SECRET_ACCESS_KEY: dbcenter123
+      AWS_REGION: us-east-1
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      DBCENTER_PASSWORD: dbcenter123
+      DBCENTER_COLLECTIONS: events
+      DBCENTER_SCHEMA: >-
+        {"events":{"user_id":"int","region":"text","amount":"float",
+                   "ts_epoch":"int","payload":"text"}}
+      DBCENTER_COLUMNAR: "true"
+      DBCENTER_LAZY_RESTORE: "true"
+      DBCENTER_COMPACT_INTERVAL_SECS: "0"
+      DBCENTER_SYNC_INTERVAL_SECS: "3600"
+      DBCENTER_PULL: "false"
+      RUST_LOG: warn
+    ports:
+      - "25441:5432"
+    profiles: ["readers"]
+
+  reader2:
+    <<: *reader
+    environment:
+      <<: *reader-env
+      DBCENTER_NODE_ID: reader2
+    ports:
+      - "25442:5432"
+    profiles: ["readers"]
+
+  reader3:
+    <<: *reader
+    environment:
+      <<: *reader-env
+      DBCENTER_NODE_ID: reader3
+    ports:
+      - "25443:5432"
+    profiles: ["readers"]
+
+  # The same total compute in one PostgreSQL, which is how you would answer a
+  # read load without replicas: buy a bigger machine.
+  postgres-big:
+    image: postgres:18
+    environment:
+      POSTGRES_PASSWORD: dbcenter123
+    cpus: 3.0
+    mem_limit: 1g
+    shm_size: 256m
+    ports:
+      - "25444:5432"
+    volumes:
+      - pgbig-data:/var/lib/postgresql
+    profiles: ["readers"]
+
 volumes:
+  pgbig-data:
   minio-data:
   pg-data:
   dbcenter-data:
