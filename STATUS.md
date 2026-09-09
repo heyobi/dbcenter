@@ -192,6 +192,33 @@ stalls at its memory ceiling. The full write-up, with the rig, is in
    is not a point lookup, in every deployment, synced or not. Making `_base` and
    `_adds` partitions of one table rather than arms of a `UNION ALL` view would
    let the planner do a merge append and stop after the rows it was asked for.
+
+   `scripts/shape-experiment/run.sh` builds all three shapes of the same 200,000
+   rows in a throwaway PostgreSQL and times them, so the size of the prize is
+   measured rather than argued. Best of seven, 1 core and 1 GB:
+
+   | | plain table | view (today) | partitioned |
+   |---|---|---|---|
+   | 100 rows by timestamp | 0.09 ms | 256.9 ms | **0.16 ms** |
+   | count+avg over the table | 63.9 ms | 197.9 ms | **69.6 ms** |
+   | point lookup, indexed | 0.10 ms | 0.19 ms | **0.13 ms** |
+   | insert | - | 0.038 ms | 0.040 ms |
+   | update a row held in base | - | 0.083 ms | **0.069 ms** |
+   | delete | - | 0.068 ms | **0.034 ms** |
+
+   The plan confirms why: `Limit -> Merge Append -> Index Scan` over both
+   partitions, nine buffers, stopping at a hundred rows. Writes come out even or
+   better, because a partitioned update is one row movement where the trigger
+   does a delete, an upsert and an insert.
+
+   It is not free. The primary key of a partitioned table must contain the
+   partition key, so `id` alone is no longer globally unique: an id written into
+   `_adds` while the same id sits in `_base` shows up **twice**, where the view
+   shows the newer one once. The experiment provokes exactly that. `insert_one`
+   strips a caller's `id` so ordinary writes cannot reach it, but the restore
+   path writes explicit ids into `_base` and has to exclude anything already in
+   `_adds`. That guard is the correctness core of the change, and it wants a test
+   before any of the rest is written.
 2. **Make compaction stream.** It reads the whole base snapshot into memory to
    rewrite it, so a 1 GB machine cannot compact a million-row table - which is
    the machine the whole argument rests on.
