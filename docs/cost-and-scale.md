@@ -157,6 +157,36 @@ volumes at $0.15/GB-month, R2 at $0.015/GB-month with no egress charge:
     ------
      7.69  per month
 
+The same sum at four table sizes, and with self-managed PostgreSQL on the same
+provider added so that only the storage differs:
+
+```
+| table in PostgreSQL | Supabase Pro | PostgreSQL on Fly, yourself | DBCenter on Fly + R2 |
+|---|---|---|---|
+| 10 GB | $25.25 | $7.72 | $6.50 |
+| 100 GB | $36.50 | $23.92 | $7.69 |
+| 500 GB | $86.50 | $95.92 | $12.97 |
+| 1 TB | $152.00 | $190.24 | $19.89 |
+```
+
+Every column is one shared-cpu-1x/1GB machine at $5.92 where a machine is
+involved. What moves is the disk: Supabase bills $0.125/GB-month, a Fly volume
+$0.15/GB-month sized to the table plus 20% headroom, and R2 $0.015/GB-month for
+0.88x the bytes. The middle column is the one to look at - same provider, same
+machine, same PostgreSQL, and it crosses Supabase at half a terabyte purely on
+storage price. That is the arbitrage in one row.
+
+Two costs the table does not show:
+
+- **A node that compacts needs 2 GB**, at $11.11 instead of $5.92. Add $5.19 to
+  the last column if the same machine has to compact: $12.88 at 100 GB, $25.08
+  at a terabyte. Still under Supabase everywhere.
+- **R2 bills requests, not egress.** Class B reads are $0.36 per million. An
+  uncached query costs roughly ten of them, so a million queries a month is
+  about $4 - immaterial next to the disk saving, but not zero, and it grows with
+  traffic rather than with the table. A local cache of hot row groups removes
+  most of it.
+
 At a terabyte the gap widens: Supabase is about $152/month, this is about
 $20/month. Two things make the comparison honest rather than flattering:
 
@@ -262,6 +292,46 @@ list, because it is paid by every query in every deployment, synced or not.
 So: better than PostgreSQL on analytics and on cost, indistinguishable from it on
 hot reads once the view tax is gone, and never better on a single indexed row -
 that is the shape to aim for, and three of the four are already true.
+
+## Speed, price, and what you give up
+
+One table, the network case - 20 ms to the bucket, which is what a Fly machine
+and R2 in the same region actually look like. Money at a 100 GB table.
+
+```
+| | PostgreSQL | DBCenter | verdict |
+|---|---|---|---|
+| aggregate over the whole table | 192.8 ms | 77.4 ms | 2.5x ours - the reason to do this |
+| aggregate, bucket next door | 188.7 ms | 19.7 ms | 9.6x ours |
+| read throughput per core | 24.7 q/s on 3 cores | 26.4 q/s on 1 core | 3x per core, ours |
+| read scale-out | replica needs a full copy of the disk | +$5.92 and 39 MB per node | ours, structurally |
+| 100 rows by timestamp | 0.6 ms | 100.1 ms | 167x theirs - our view tax, fixable |
+| point lookup, row held locally | 0.4 ms | 0.9 ms | near parity |
+| point lookup, row only in the bucket | 0.4 ms | 216.4 ms | theirs, structurally |
+| single-row inserts | 120/s | 109/s | a wash |
+| cold start | 2.1 s | 4.7-6.4 s | theirs, and it stops mattering after the first request |
+| scale to zero | not possible | 4.7 s back, data intact | ours |
+| local disk for a 100 GB table | a 120 GB volume | a 3 GB volume + 88 GB in the bucket | ours |
+| cost at 100 GB | $23.92 self-managed, $36.50 Supabase | $7.69 | 3-5x cheaper |
+| cost at 1 TB | $190.24 self-managed, $152.00 Supabase | $19.89 | 8x cheaper |
+| compaction at 1M rows on 1 GB | n/a | does not fit | theirs, until compaction streams |
+```
+
+**Advantages**, in the order they are worth money: analytical reads are faster
+than the database that owns the disk; the read tier scales by adding $6 machines
+that hold nothing; storage costs an eighth of managed disk and is billed on cold
+bytes at cold prices; and a node can be switched off and back on in five seconds
+because the durable copy was never on it.
+
+**Disadvantages**, in the order they will bite: an ordered, limited query pays a
+100 ms tax that PostgreSQL does not, and every deployment pays it; a row that
+lives only in the bucket takes 216 ms to fetch, which no request path survives;
+compaction reads the whole snapshot into memory, so the cheap tier tops out
+around a few hundred thousand rows; writes go through one node; and the whole
+thing is one more moving part than `postgres`.
+
+The first two are ours to fix and are described below. The third is scheduled
+work. The fourth is a design choice. The fifth is the price of admission.
 
 ## Re-running it
 

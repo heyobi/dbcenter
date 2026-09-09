@@ -417,6 +417,22 @@ work, costs 103.8 ms against 0.7 ms on an ordered, limited query. All of it is i
 the document, with the rig that produced it, including how to put the latency
 back in.
 
+The bill, per month, for a table that occupies this much in PostgreSQL - one
+shared-cpu-1x/1GB machine in every column, so only the storage differs:
+
+| table | Supabase Pro | PostgreSQL on Fly, yourself | DBCenter on Fly + R2 |
+|---|---|---|---|
+| 10 GB | $25.25 | $7.72 | $6.50 |
+| 100 GB | $36.50 | $23.92 | $7.69 |
+| 500 GB | $86.50 | $95.92 | $12.97 |
+| 1 TB | $152.00 | $190.24 | $19.89 |
+
+Managed disk is roughly eight times the price of object storage and is billed on
+the whole table whether it is hot or cold. Keeping the cold part in a bucket is
+the entire arbitrage; the columnar numbers say reading it that way is faster
+rather than a compromise. `docs/cost-and-scale.md` has the speed, price and
+trade-off tables side by side.
+
 `docs/deploying.md` is how to run it: in a Python process, as a container, or on
 Fly.io against R2 or Tigris.
 
