@@ -595,6 +595,48 @@ impl DBCenter {
         Ok(results)
     }
 
+    /// Run SQL that PostgreSQL itself guarantees cannot change anything.
+    ///
+    /// The statement runs inside a `READ ONLY` transaction that is rolled back
+    /// afterwards, so an INSERT, UPDATE, DELETE, DDL or `nextval()` is refused
+    /// by the server ("cannot execute ... in a read-only transaction") however
+    /// it is spelled - inside a CTE, a function call or a comment trick. That
+    /// is the guarantee a caller handing SQL from somewhere it does not
+    /// control - a language model, say - needs; inspecting the text for
+    /// keywords is not one.
+    pub fn query_read_only(
+        &self,
+        sql: &str,
+        params: &[&(dyn postgres::types::ToSql + Sync)],
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut client = self.get_client();
+        let mut transaction = client
+            .transaction()
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+        transaction
+            .batch_execute("SET TRANSACTION READ ONLY")
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+        let rows = transaction
+            .query(sql, params)
+            .map_err(|e| DBCenterError::QueryError(utils::format_postgres_error(&e)))?;
+        // Dropping the transaction rolls it back; nothing it did can persist.
+        drop(transaction);
+
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let mut map = serde_json::Map::new();
+                for (idx, column) in row.columns().iter().enumerate() {
+                    map.insert(
+                        column.name().to_string(),
+                        utils::row_value_to_json(row, idx),
+                    );
+                }
+                serde_json::Value::Object(map)
+            })
+            .collect())
+    }
+
     /// List all collections (tables)
     pub fn list_collections(&self) -> Result<Vec<String>> {
         // In delta mode a collection is a table partitioned into <name>_base

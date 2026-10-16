@@ -32,6 +32,15 @@ Source = "https://github.com/heyobi/dbcenter"
 
 [project.optional-dependencies]
 dev = ["pytest", "pandas"]
+# The MCP server, for language-model clients. mcp itself needs Python 3.10.
+mcp = ["mcp>=2,<3"]
+
+[project.scripts]
+dbcenter-mcp = "dbcenter.mcp_server:main"
 
 [tool.maturin]
-module-name = "dbcenter"
+# Mixed layout: the native module is dbcenter.dbcenter, and python/dbcenter
+# holds the pure-Python parts (the MCP server) beside it. __init__.py re-exports
+# the native module, so `import dbcenter` is unchanged.
+python-source = "python"
+module-name = "dbcenter.dbcenter"
