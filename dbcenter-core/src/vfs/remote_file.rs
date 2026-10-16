@@ -7,11 +7,22 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// How much is pulled per request when streaming a range.
+/// The most pulled in one request when streaming a range.
 ///
 /// Small enough that a reader which stops early has not paid for the rest of
 /// the file; large enough that sequential reading is not one request per page.
 const STREAM_BLOCK: u64 = 512 * 1024;
+
+/// The first request of a stream, which then doubles up to `STREAM_BLOCK`.
+///
+/// Every stream used to start at the full 512 KB. That was invisible while
+/// files were uncompressed and column chunks were megabytes, but a compressed
+/// column chunk is tens of kilobytes: a lookup that wanted one page of each of
+/// a handful of columns pulled 512 KB per column, the same bytes over again
+/// for neighbouring chunks, and read more than twice the size of the file.
+/// Starting small costs one page's worth for a reader that stops early, and a
+/// reader that keeps going reaches full-size blocks within a few requests.
+const FIRST_BLOCK: u64 = 64 * 1024;
 
 /// Streams part of a remote object, fetching a block at a time.
 ///
@@ -30,6 +41,8 @@ pub(crate) struct StreamingRange {
     buf: Vec<u8>,
     /// Offset in the object that `buf[0]` corresponds to.
     buf_start: u64,
+    /// How much the next request asks for.
+    block: u64,
 }
 
 impl StreamingRange {
@@ -46,6 +59,7 @@ impl StreamingRange {
             end,
             buf: Vec::new(),
             buf_start: 0,
+            block: FIRST_BLOCK,
         }
     }
 
@@ -62,7 +76,8 @@ impl Read for StreamingRange {
         }
 
         if self.buffered().is_none() {
-            let want = STREAM_BLOCK.min(self.end - self.pos);
+            let want = self.block.min(self.end - self.pos);
+            self.block = (self.block * 2).min(STREAM_BLOCK);
             let block = self
                 .storage
                 .download_range(&self.key, self.pos, want)
@@ -82,13 +97,40 @@ impl Read for StreamingRange {
     }
 }
 
+/// A byte range fetched ahead of the reads that will want it.
+type Prefetched = Arc<Mutex<Option<(u64, Arc<Vec<u8>>)>>>;
+
+/// Reads out of a prefetched range, and from storage past its end.
+struct PrefetchedRead {
+    data: Arc<Vec<u8>>,
+    pos: usize,
+    rest: StreamingRange,
+}
+
+impl Read for PrefetchedRead {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos < self.data.len() {
+            let n = (self.data.len() - self.pos).min(out.len());
+            out[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            return Ok(n);
+        }
+        self.rest.read(out)
+    }
+}
+
 /// RemoteFile that implements ChunkReader with LRU Caching and Metadata Persistence.
+///
+/// Clones share their caches and the prefetched range, so a reader can keep a
+/// handle to prefetch through while the Parquet reader owns another.
+#[derive(Clone)]
 pub struct RemoteFile {
     storage: Arc<Box<dyn StorageAdapter + Send + Sync>>,
     key: String,
     length: u64,
     cache: Arc<Mutex<LruCache<u64, Vec<u8>>>>, // Offset -> Data chunk
     metadata_cache_path: Option<PathBuf>,
+    prefetched: Prefetched,
 }
 
 impl RemoteFile {
@@ -106,7 +148,29 @@ impl RemoteFile {
             length,
             cache: Arc::new(Mutex::new(LruCache::new(cap))),
             metadata_cache_path,
+            prefetched: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Fetch `[start, start + length)` in one request, for the reads to come.
+    ///
+    /// The Parquet reader asks for a column chunk a page at a time, through a
+    /// stream with no length, so it cannot say up front how much it wants -
+    /// and guessing costs either bytes (large blocks past the chunk's end) or
+    /// requests (small ones). The caller can say: a row group's column chunks
+    /// are listed in the footer with their exact byte ranges.
+    pub fn prefetch(&self, start: u64, length: u64) -> crate::error::Result<()> {
+        let data = self.storage.download_range(&self.key, start, length)?;
+        *self.prefetched.lock().unwrap() = Some((start, Arc::new(data)));
+        Ok(())
+    }
+
+    /// The prefetched bytes from `start` on, if the prefetch covers it.
+    fn prefetched_from(&self, start: u64) -> Option<(u64, Arc<Vec<u8>>)> {
+        let guard = self.prefetched.lock().unwrap();
+        let (p_start, data) = guard.as_ref()?;
+        let p_end = p_start + data.len() as u64;
+        (start >= *p_start && start < p_end).then(|| (*p_start, Arc::clone(data)))
     }
 
     /// Serve a read out of the on-disk footer cache, if it covers the range.
@@ -176,6 +240,19 @@ impl ChunkReader for RemoteFile {
     type T = Box<dyn Read + Send>;
 
     fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        if let Some((p_start, data)) = self.prefetched_from(start) {
+            let p_end = p_start + data.len() as u64;
+            return Ok(Box::new(PrefetchedRead {
+                data,
+                pos: (start - p_start) as usize,
+                rest: StreamingRange::new(
+                    self.storage.clone(),
+                    self.key.clone(),
+                    p_end,
+                    self.length,
+                ),
+            }));
+        }
         Ok(Box::new(StreamingRange::new(
             self.storage.clone(),
             self.key.clone(),
@@ -185,6 +262,14 @@ impl ChunkReader for RemoteFile {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
+        // 0. A prefetched range that covers it.
+        if let Some((p_start, data)) = self.prefetched_from(start) {
+            let offset = (start - p_start) as usize;
+            if offset + length <= data.len() {
+                return Ok(Bytes::copy_from_slice(&data[offset..offset + length]));
+            }
+        }
+
         // 1. Check Metadata Cache (Disk)
         if let Some(data) = self.try_read_local_metadata(start, length) {
             tracing::debug!(

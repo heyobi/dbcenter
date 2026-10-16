@@ -751,10 +751,18 @@ impl SyncEngine {
             // in the row's own columns and `data` is null, so a compaction
             // replaced every delta with a base file holding ids and timestamps
             // and no document at all.
+            //
+            // In chunks, through a cursor. This read the whole base back into
+            // memory, copied it to sort it by id, and built one Arrow batch from
+            // the copy: three times the table, and a million-row compaction
+            // peaked at 1.5 GB - more than the 1 GB machine this is meant to run
+            // on. PostgreSQL sorts by id now, from the primary key, and each
+            // chunk is written out and dropped before the next is fetched, so
+            // what stays in memory is one chunk and the compressed file.
             let base_table = format!("{}_base", table_name);
             let base_columns = self.sync_columns(&base_table)?;
             let sql_base = format!(
-                r#"SELECT {} FROM "{}" ORDER BY created_at ASC"#,
+                r#"SELECT {} FROM "{}" t ORDER BY t.id"#,
                 base_columns
                     .iter()
                     .map(|c| c.select.as_str())
@@ -762,33 +770,18 @@ impl SyncEngine {
                     .join(", "),
                 base_table
             );
-            let rows = {
-                let mut client = self.db.get_client();
-                client.query(&sql_base, &[]).map_err(|e| {
-                    crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
-                })?
-            };
-
-            if rows.is_empty() {
-                tracing::info!("Vacuum: Base is empty, nothing to export.");
-            }
-
-            // Task 5.2: Optimized Parquet Storage (Sorting)
-            // Sort rows by ID to enable efficient Predicate Pushdown (Min/Max pruning)
-            let mut sorted_rows = rows.clone();
-            sorted_rows.sort_by(|a, b| {
-                let id_a: String = a.get("id");
-                let id_b: String = b.get("id");
-                id_a.cmp(&id_b)
-            });
-
-            let batch = self.rows_to_record_batch(&base_columns, sorted_rows)?;
 
             let mut buffer = Vec::new();
             // Task 5.2: Enable Statistics & Bloom Filters
             let props = WriterProperties::builder()
                 .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Chunk)
-                .set_bloom_filter_enabled(true)
+                // On id only: a lookup by id is what consults them. One on every
+                // column cost a filter per column per row group - most of the
+                // bytes a single-row lookup read - for columns nothing looks up.
+                .set_column_bloom_filter_enabled(
+                    parquet::schema::types::ColumnPath::from("id"),
+                    true,
+                )
                 // Rows, not bytes. This was 100 * 1024 * 1024, which reads as
                 // "100MB" but means 104 million rows - so every realistic file
                 // was a single row group, there was nothing for the reader to
@@ -796,25 +789,59 @@ impl SyncEngine {
                 // written in id order, so smaller groups give the statistics
                 // something to prune on.
                 .set_max_row_group_size(20_000)
+                // Sized for a row group, not left at the default of a million
+                // distinct values. Each filter was about a megabyte - one per
+                // column per 20,000-row group, nearly all of it empty - and they
+                // are held until the file is closed: 450 MB of a 586 MB base
+                // file for a million rows, all of it in memory at the end.
+                .set_column_bloom_filter_ndv(parquet::schema::types::ColumnPath::from("id"), 20_000)
+                // The base is the bulk of what a bucket holds and what a cold
+                // node downloads. Every reader here - arrow-rs and DuckDB -
+                // decompresses it transparently.
+                .set_compression(parquet::basic::Compression::ZSTD(
+                    parquet::basic::ZstdLevel::default(),
+                ))
                 .build();
 
-            let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))
-                .map_err(|e| {
-                    crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
-                        e.to_string(),
-                    ))
-                })?;
+            const EXPORT_CHUNK: i32 = 50_000;
+            let parquet_error = |e: parquet::errors::ParquetError| {
+                crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
+                    e.to_string(),
+                ))
+            };
+            let query_error = |e: postgres::Error| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            };
+            let mut exported = 0usize;
+            {
+                // The schema comes from the columns, not from a first chunk, so
+                // an empty base still produces a valid, empty file.
+                let empty = self.rows_to_record_batch(&base_columns, Vec::new())?;
+                let mut writer = ArrowWriter::try_new(&mut buffer, empty.schema(), Some(props))
+                    .map_err(parquet_error)?;
 
-            writer.write(&batch).map_err(|e| {
-                crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
-                    e.to_string(),
-                ))
-            })?;
-            writer.close().map_err(|e| {
-                crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
-                    e.to_string(),
-                ))
-            })?;
+                // Nothing here takes a second connection while this one is held.
+                let mut client = self.db.get_client();
+                let mut transaction = client.transaction().map_err(query_error)?;
+                let statement = transaction.prepare(&sql_base).map_err(query_error)?;
+                let portal = transaction.bind(&statement, &[]).map_err(query_error)?;
+                loop {
+                    let rows = transaction
+                        .query_portal(&portal, EXPORT_CHUNK)
+                        .map_err(query_error)?;
+                    if rows.is_empty() {
+                        break;
+                    }
+                    exported += rows.len();
+                    let batch = self.rows_to_record_batch(&base_columns, rows)?;
+                    writer.write(&batch).map_err(parquet_error)?;
+                }
+                transaction.commit().map_err(query_error)?;
+                writer.close().map_err(parquet_error)?;
+            }
+            if exported == 0 {
+                tracing::info!("Vacuum: Base is empty, nothing to export.");
+            }
 
             // CRITICAL CHECK: Before uploading/swapping, verify lock one last time
             if lock_lost.load(std::sync::atomic::Ordering::SeqCst) {
