@@ -292,12 +292,19 @@ impl DBCenter {
     ///
     /// Args:
     ///     sql: SQL query string
-    ///     params: Query parameters (optional)
+    ///     params: Query parameters (optional), bound to $1, $2, ...
+    ///     read_only: Run in a READ ONLY transaction that is rolled back, so
+    ///         PostgreSQL refuses any write however the SQL is written
     ///
     /// Returns:
     ///     List of results
-    #[pyo3(signature = (sql, params=None))]
-    fn query(&self, sql: &str, params: Option<Vec<PyObject>>) -> PyResult<Vec<PyObject>> {
+    #[pyo3(signature = (sql, params=None, read_only=false))]
+    fn query(
+        &self,
+        sql: &str,
+        params: Option<Vec<PyObject>>,
+        read_only: bool,
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             // Bind the parameters rather than ignoring them. Silently dropping
             // them left callers writing "WHERE id = $1" with a value that never
@@ -312,10 +319,14 @@ impl DBCenter {
             let refs: Vec<&(dyn ToSql + Sync)> =
                 bound.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
 
-            let results = self
-                .inner
-                .query(sql, &refs)
-                .map_err(|e| PyException::new_err(e.to_string()))?;
+            // read_only: PostgreSQL refuses any write, in a transaction that
+            // is rolled back afterwards. See DBCenter::query_read_only.
+            let results = if read_only {
+                self.inner.query_read_only(sql, &refs)
+            } else {
+                self.inner.query(sql, &refs)
+            }
+            .map_err(|e| PyException::new_err(e.to_string()))?;
 
             let py_results: Vec<PyObject> = results.iter().map(|v| json_to_py(py, v)).collect();
 
