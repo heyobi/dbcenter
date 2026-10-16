@@ -602,10 +602,12 @@ impl<'a> Collection<'a> {
 
     /// Does this collection's table have the given column?
     ///
-    /// Two physical layouts are in play. A plain collection is relational: every
-    /// document field becomes its own column. Delta-sync and geo collections keep
-    /// the document body in a reserved `data` JSONB column. Index and similarity
-    /// expressions have to address whichever layout the table actually has.
+    /// A field can live in a column of its own or inside the `data` JSONB
+    /// column, and index and similarity expressions have to address whichever
+    /// it is. A relational collection has only the former; a geo collection
+    /// keeps the body in `data`; a synced collection has both - a `data`
+    /// column, and a column per field for everything written through
+    /// `insert_one`.
     fn has_column(&self, column: &str) -> Result<bool> {
         let mut client = self.db.get_client();
         let row = client
@@ -626,8 +628,15 @@ impl<'a> Collection<'a> {
     }
 
     /// SQL expression that yields `field` as text under either layout.
+    ///
+    /// The field's own column first. Asking only whether the table had a `data`
+    /// column sent every synced collection to `data->>'field'`, which is null
+    /// for any document written through `insert_one`: fuzzy_search found
+    /// nothing and create_index indexed nulls, and neither said so.
     fn field_as_text(&self, field: &str) -> Result<String> {
-        if self.has_column("data")? {
+        if self.has_column(field)? {
+            Ok(format!("{}::text", quote_ident(field)))
+        } else if self.has_column("data")? {
             Ok(format!(
                 "data->>{}",
                 QueryBuilder::json_to_sql_literal(&JsonValue::String(field.to_string()))
@@ -781,6 +790,10 @@ impl<'a> Collection<'a> {
             let score: f32 = row.get(1);
 
             if let JsonValue::Object(ref mut map) = data {
+                // Which partition a row sits in is bookkeeping, as in find().
+                if self.db.config().multi_user_sync_mode {
+                    map.remove(crate::delta_manager::LAYER_COLUMN);
+                }
                 if let Some(id_val) = map.get("id").cloned() {
                     map.insert("_id".to_string(), id_val);
                 }
