@@ -848,7 +848,7 @@ impl DBCenter {
                     #[cfg(windows)]
                     {
                         let _ = std::process::Command::new("taskkill")
-                            .args(&["/F", "/T", "/PID", &pid.to_string()])
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
                             .output();
                     }
 
