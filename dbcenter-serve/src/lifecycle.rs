@@ -285,12 +285,11 @@ fn compact_all(engine: &SyncEngine, db: &Arc<DBCenter>) {
     }
 }
 
-/// Collection names, derived from their delta tables.
+/// Collection names, as the core lists them.
 ///
-/// In delta mode a collection is a view over `<name>_base`, `<name>_adds` and
-/// `<name>_dels`, and list_collections reads pg_tables, which does not include
-/// views - so the view name never appears. The `_adds` table is both present in
-/// that list and exactly where pending rows live.
+/// In delta mode a collection is a table partitioned into `<name>_base` and
+/// `<name>_adds`, with `<name>_dels` beside it. `list_collections` leaves that
+/// machinery out and names the collection.
 fn collection_names(db: &Arc<DBCenter>) -> Result<Vec<String>, String> {
     // `list_collections` already names collections rather than the tables
     // behind them. It used to return the raw table list, so this looked for an

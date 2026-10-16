@@ -509,6 +509,14 @@ impl DBCenter {
                 })?;
         }
 
+        // A database written before collections were partitioned still holds
+        // them as views. Convert them on opening rather than on first use: a
+        // client on the wire protocol never goes through `Collection::new`, so
+        // its collections would otherwise stay views for good.
+        if db_center.config.multi_user_sync_mode {
+            delta_manager::DeltaManager::convert_view_collections(&db_center);
+        }
+
         // Register instance in global registry for force_shutdown capability
         let mut instances = INSTANCES.lock().map_err(|_| DBCenterError::LockError)?;
         instances.insert(path_buf, Arc::clone(&db_center));
@@ -589,11 +597,12 @@ impl DBCenter {
 
     /// List all collections (tables)
     pub fn list_collections(&self) -> Result<Vec<String>> {
-        // In delta mode a collection is a view over <name>_base, _adds and
-        // _dels, so listing tables alone listed the machinery and left out
-        // every collection it belongs to. The suffixes below are DBCenter's
-        // own: _conflicts holds versions a pull discarded, _columnar is the
-        // Parquet view.
+        // In delta mode a collection is a table partitioned into <name>_base
+        // and _adds, with _dels beside it; listing every table lists that
+        // machinery too. The suffixes below are DBCenter's own: _conflicts
+        // holds versions a pull discarded, _columnar is the Parquet view.
+        // Views are included because the columnar one is a view, and so was
+        // every delta collection before it was partitioned.
         const INTERNAL: [&str; 5] = ["_base", "_adds", "_dels", "_conflicts", "_columnar"];
 
         let sql = "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' \

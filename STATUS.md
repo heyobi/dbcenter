@@ -1,9 +1,8 @@
 # Where things stand
 
-Last updated 8 September 2026.
+Last updated 16 October 2026.
 
-Merged to `main` on 8 September 2026. Each commit says what was wrong and how
-it was checked.
+Each commit says what was wrong and how it was checked.
 
 ## What was broken and now is not
 
@@ -37,7 +36,64 @@ Fixed and verified against a real server:
 - The workspace compiles: the Java and Node bindings had drifted out of sync with
   `DBCenter::new` and nothing built them.
 
+**A synced collection reads like a table now.** It was a view, `_adds UNION ALL
+(_base minus _adds minus _dels)`, and PostgreSQL cannot push an ORDER BY ...
+LIMIT through the anti-join, so a hundred rows by timestamp sorted the whole
+collection. It is now one table partitioned on a `_layer` column into `_base` and
+`_adds`, and the same query is `Limit -> Merge Append` over two index scans.
+
+Measured on the same 200,000 rows (180,000 synced) built by 0.3.0 from PyPI and
+then opened by this build, server-side, best of seven, 4 cores and no memory
+limit - so not comparable with the 1-core rig below:
+
+| | 0.3.0 (view) | now (partitioned) |
+|---|---|---|
+| 100 rows by timestamp | 46.7 ms | **0.07 ms** |
+| count+avg over the table | 110.4 ms | **18.9 ms** |
+| point lookup by id | 0.027 ms | 0.019 ms |
+
+Both builds return the same 200,000 rows, the same sum and the same newest
+hundred ids. The aggregate gets faster as well, as `scripts/shape-experiment`
+predicted: the anti-join was costing every scan, not only the ordered ones.
+
+The cost is that a partitioned table's key must include the partition column,
+so nothing stops an id from being in both partitions, and then the collection
+shows it twice. That is guarded where it can happen, and
+`tests/delta_layout.rs` provokes each case. Each of the four guards was removed
+in turn, and each time exactly its own test failed:
+
+- an update through the collection moves a synced row from `_base` to `_adds`
+  (a trigger sets `_layer`; PostgreSQL moves the row), so it is synced again -
+  updated in place it would have stayed in `_base` and never been sent;
+- an insert through the collection with an id already in `_base` takes that row
+  out, as the view used to by preferring `_adds`;
+- a pull skips an id with a pending local edit, recording the incoming version
+  in `_conflicts`, and skips an id deleted here. The view hid a deleted row
+  while leaving it in `_base`; now the row is really gone and its id in `_dels`
+  is the only thing stopping a pull from bringing it back.
+
+The insert guard is a statement trigger on the collection only. As a row
+trigger it doubled the cost of an insert; `insert_one` writes to `_adds` by name
+and never passes an id, so it now pays nothing (18.2 us a row on the server). A
+client inserting through the collection over SQL pays one trigger call a
+statement: 36.0 us against 19.5 for a single row, 267 ms against 209 for 20,000.
+
+Existing databases convert themselves when they open, one transaction per
+collection: 112 ms for 200,000 rows. On opening rather than on first use,
+because a wire-protocol client never goes through `collection()`. Checked on
+PostgreSQL 18 and 12, the newest and oldest majors offered.
+
 ## What is still wrong
+
+**`fuzzy_search` finds nothing on a synced collection, and `create_index`
+indexes nothing.** `field_as_text` sees the `data` column and addresses
+`data->>'field'`, but `insert_one` stores fields in their own columns, so `data`
+is null. Verified: the same document is found with sync off and not with it on.
+Not new - it was the same through the view.
+
+**Delta mode on PostgreSQL 12 needs pgcrypto** for `gen_random_uuid()`, which
+became built-in in 13. Nothing installs it. Not new either; found while checking
+the partitioned shape on 12.
 
 **PyPI is at 0.3.0**, published 8 September 2026, with wheels for five
 platforms. Verified from a real `pip install` in a clean environment: the sync
@@ -153,9 +209,8 @@ OAuth client they belong to has been deleted upstream, so they are inert, but
 purging them means rewriting history and force-pushing, which nobody has approved.
 A PyPI API token also sits in the owner's Drive as `dbcenter_archive/pypi-*.txt`.
 
-**A small machine and a bucket are cheaper, and the read path is faster - but the
-delta view taxes ordinary queries.** Measured on one core and 1 GB against a
-plain PostgreSQL 18 with the same limits and the same indexes, 200,000 rows:
+**A small machine and a bucket are cheaper, and the read path is faster.**
+Measured on one core and 1 GB against a plain PostgreSQL 18 with the same limits and the same indexes, 200,000 rows:
 an aggregate over the whole table is 188.7 ms against PostgreSQL's storage and
 19.7 ms against the same rows as Parquet, and a lazy node holding none of the
 table answers it in 46 ms on 39 MB of disk against PostgreSQL's 154 MB. On list
@@ -175,70 +230,37 @@ spent on one PostgreSQL, with less than half the latency at eight clients. The
 nodes hold no data, so the read tier costs machines rather than machines plus a
 volume each.
 
-Two things came out of it that are not good news. A hundred rows by timestamp
-takes 0.7 ms against a plain table and **103.8 ms against the collection**, with
-the same index on both sides: the collection is a view over three tables and
-PostgreSQL will not push the ordering and the limit through it. Every DBCenter
-deployment pays that, synced or not. And at a million rows **a compaction does
-not fit in 1 GB** - it reads the whole base back to rewrite it, and the container
+Two things came out of it that were not good news. A hundred rows by timestamp
+took 0.7 ms against a plain table and 103.8 ms against the collection, with
+the same index on both sides, because the collection was a view - fixed since,
+above, though this rig has not been re-run. And at a million rows **a compaction
+does not fit in 1 GB** - it reads the whole base back to rewrite it, and the container
 stalls at its memory ceiling. The full write-up, with the rig, is in
 `docs/cost-and-scale.md`.
 
 ## Next, in order
 
-1. **Make the collection view answer an ordered, limited query without sorting
-   everything.** 103.8 ms against 0.7 ms is the largest single gap between
-   DBCenter and the PostgreSQL underneath it, and it is paid by every query that
-   is not a point lookup, in every deployment, synced or not. Making `_base` and
-   `_adds` partitions of one table rather than arms of a `UNION ALL` view would
-   let the planner do a merge append and stop after the rows it was asked for.
-
-   `scripts/shape-experiment/run.sh` builds all three shapes of the same 200,000
-   rows in a throwaway PostgreSQL and times them, so the size of the prize is
-   measured rather than argued. Best of seven, 1 core and 1 GB:
-
-   | | plain table | view (today) | partitioned |
-   |---|---|---|---|
-   | 100 rows by timestamp | 0.09 ms | 256.9 ms | **0.16 ms** |
-   | count+avg over the table | 63.9 ms | 197.9 ms | **69.6 ms** |
-   | point lookup, indexed | 0.10 ms | 0.19 ms | **0.13 ms** |
-   | insert | - | 0.038 ms | 0.040 ms |
-   | update a row held in base | - | 0.083 ms | **0.069 ms** |
-   | delete | - | 0.068 ms | **0.034 ms** |
-
-   The plan confirms why: `Limit -> Merge Append -> Index Scan` over both
-   partitions, nine buffers, stopping at a hundred rows. Writes come out even or
-   better, because a partitioned update is one row movement where the trigger
-   does a delete, an upsert and an insert.
-
-   It is not free. The primary key of a partitioned table must contain the
-   partition key, so `id` alone is no longer globally unique: an id written into
-   `_adds` while the same id sits in `_base` shows up **twice**, where the view
-   shows the newer one once. The experiment provokes exactly that. `insert_one`
-   strips a caller's `id` so ordinary writes cannot reach it, but the restore
-   path writes explicit ids into `_base` and has to exclude anything already in
-   `_adds`. That guard is the correctness core of the change, and it wants a test
-   before any of the rest is written.
-2. **Make compaction stream.** It reads the whole base snapshot into memory to
+1. **Make compaction stream.** It reads the whole base snapshot into memory to
    rewrite it, so a 1 GB machine cannot compact a million-row table - which is
    the machine the whole argument rests on.
-3. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
+2. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
    Marked experimental is honest; it is not a resting place.
-4. Build pg_duckdb from source rather than repackaging upstream's binary.
+3. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
    compile than this machine has spare.
-5. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
+4. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
    the base snapshot, which is what `SyncMode::Partial` has always done. It is
    written down now, in the enum and in the README, so it stops being a phrase
    that means whatever the reader assumes.
-6. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
+5. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
    PostgreSQL 15 silently gets pgvector 0.8.0 instead.
 
 ## How the two read paths fit together
 
 This is the thing to understand before changing anything about storage.
 
-`<name>` is the collection: an ordinary PostgreSQL view over `_base` and `_adds`.
+`<name>` is the collection: an ordinary PostgreSQL table partitioned into `_base`
+and `_adds`.
 Writes go here, point lookups go here - 0.2 ms against 38 ms off object storage -
 and it is what a client connected with a plain connection string sees.
 

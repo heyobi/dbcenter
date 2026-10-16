@@ -65,9 +65,13 @@ by timestamp takes 0.7 ms against a plain table and **103.8 ms** against the
 collection, with the same index on both sides. The collection is a view -
 `adds UNION ALL (base minus anything in adds or dels)` - and PostgreSQL will not
 push the ordering and the limit through it, so it sorts everything. This is the
-most valuable thing the experiment found and it is not fixed: it is a tax on
-every query that is not a point lookup, paid by every DBCenter deployment
-whether or not it syncs anything.
+most valuable thing the experiment found. It was a tax on every query that is
+not a point lookup, paid by every DBCenter deployment whether or not it synced
+anything.
+
+*Since fixed:* the collection is now one table partitioned into `_base` and
+`_adds`, and the same query is a merge append over two index scans. See STATUS
+for the before-and-after on one set of rows; this rig has not been re-run.
 
 **Writes are a wash.** 109 against 120 single-row inserts a second, both bounded
 by the round trip and the commit rather than by the engine.

@@ -123,15 +123,16 @@ class ColumnarView(unittest.TestCase):
 
     def test_the_collection_itself_never_goes_through_duckdb(self):
         # Routing point lookups through DuckDB costs about 55ms against 0.1ms,
-        # so the collection stays a plain PostgreSQL view over the delta tables.
-        kind = self.db.query(
-            "SELECT table_type FROM information_schema.tables WHERE table_name = 'sales'"
+        # so the collection stays ordinary PostgreSQL storage: a partitioned
+        # table whose partitions are heap tables, with no view in the way that
+        # could reach for read_parquet.
+        kinds = self.db.query(
+            "SELECT relkind::text AS k FROM pg_class WHERE oid = 'sales'::regclass "
+            "UNION ALL "
+            "SELECT c.relkind::text FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
+            "WHERE i.inhparent = 'sales'::regclass"
         )
-        self.assertEqual(kind[0]["table_type"], "VIEW")
-        definition = self.db.query(
-            "SELECT pg_get_viewdef('sales'::regclass) AS d"
-        )[0]["d"]
-        self.assertNotIn("read_parquet", definition)
+        self.assertEqual(sorted(k["k"] for k in kinds), ["p", "r", "r"])
 
 
 class ColumnarIsOff(unittest.TestCase):

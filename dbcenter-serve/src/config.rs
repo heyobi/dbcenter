@@ -70,10 +70,11 @@ pub struct ServeConfig {
     pub schema: Vec<CollectionSchema>,
     /// Collections to create at boot, comma separated.
     ///
-    /// A collection is not a plain table: in delta mode it is a view over
-    /// `<name>_base`, `<name>_adds` and `<name>_dels` with triggers routing
-    /// writes. A client connecting over the wire protocol cannot conjure that
-    /// with CREATE TABLE, so a container declares its schema here.
+    /// A collection is not a plain table: in delta mode it is a table
+    /// partitioned into `<name>_base` and `<name>_adds`, with `<name>_dels`
+    /// beside it and triggers keeping an id in one partition. A client
+    /// connecting over the wire protocol cannot conjure that with CREATE
+    /// TABLE, so a container declares its schema here.
     pub collections: Vec<String>,
 }
 
