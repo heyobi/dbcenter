@@ -127,7 +127,9 @@ jobs:
       - name: Build the extension module
         run: |
           python -m venv .venv
-          .venv/bin/pip install --quiet maturin
+          # mcp so test_mcp.py runs rather than skipping; it is the optional
+          # extra that provides the MCP server.
+          .venv/bin/pip install --quiet maturin "mcp>=2,<3"
           .venv/bin/maturin develop --manifest-path dbcenter-python/Cargo.toml
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/.venv
