@@ -46,6 +46,20 @@ pub struct DBCenterConfig {
     /// should not pay that. When it is on, the extension is put in place before
     /// PostgreSQL starts, so there is no restart to absorb.
     pub columnar: bool,
+
+    /// Build a synced collection as a table its `_base` and `_adds` inherit
+    /// from, rather than as a view that unions them.
+    ///
+    /// The view has to be read in full before an `ORDER BY ... LIMIT` can be
+    /// answered, because PostgreSQL will not push the ordering through the
+    /// anti-joins that hide superseded rows: 256.9 ms against 0.09 ms for a
+    /// plain table, over 200,000 rows. With the two tables as children of one
+    /// parent the planner merges their indexes and stops early - 0.16 ms.
+    ///
+    /// Only new collections are affected. One that already exists keeps the
+    /// shape it was created with until `DeltaManager::migrate_to_inherited`
+    /// converts it, so a database written by an older release still opens.
+    pub inherited_delta: bool,
 }
 
 impl Default for DBCenterConfig {
@@ -64,6 +78,7 @@ impl Default for DBCenterConfig {
             postgres_version: DEFAULT_POSTGRES_VERSION.to_string(),
             multi_user_sync_mode: false,
             columnar: false,
+            inherited_delta: false,
         }
     }
 }

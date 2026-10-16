@@ -178,6 +178,11 @@ pub struct DBCenter {
     /// it is not costs one redundant ALTER. Believing a column exists when it has
     /// been dropped would not be safe, and nothing in this API drops columns.
     schema_cache: Mutex<HashMap<String, std::collections::HashSet<String>>>,
+
+    /// Which shape each synced collection has on disk. Asking the catalog
+    /// costs a query, and the answer only changes when this process migrates
+    /// the collection.
+    shape_cache: Mutex<HashMap<String, crate::delta_manager::Shape>>,
     process: Arc<Mutex<process::PostgresProcess>>,
     path: PathBuf,
     instance_id: String,
@@ -208,6 +213,7 @@ pub struct DBCenterBuilder {
     postgres_version: Option<String>,
     multi_user_sync_mode: bool,
     columnar: bool,
+    inherited_delta: bool,
 }
 
 impl DBCenterBuilder {
@@ -223,6 +229,7 @@ impl DBCenterBuilder {
             postgres_version: None,
             multi_user_sync_mode: false,
             columnar: false,
+            inherited_delta: false,
         }
     }
 
@@ -293,6 +300,22 @@ impl DBCenterBuilder {
         self
     }
 
+    /// Build synced collections as a table their `_base` and `_adds` inherit
+    /// from, instead of as a view over the two.
+    ///
+    /// What it buys is an ordered, limited read that stops early: the planner
+    /// merges one index scan per child rather than sorting the collection to
+    /// return a hundred rows. Over 200,000 rows that is 0.16 ms against 256.9
+    /// ms, and it is paid by every query that is not a point lookup.
+    ///
+    /// Collections that already exist are left alone -
+    /// `DeltaManager::migrate_to_inherited` converts one when asked - so a
+    /// database written before this existed still opens.
+    pub fn inherited_delta(mut self, enabled: bool) -> Self {
+        self.inherited_delta = enabled;
+        self
+    }
+
     /// Build the DBCenter instance
     pub fn build(self) -> Result<Arc<DBCenter>> {
         DBCenter::new_inner(
@@ -305,6 +328,7 @@ impl DBCenterBuilder {
             self.postgres_version,
             self.multi_user_sync_mode,
             self.columnar,
+            self.inherited_delta,
         )
     }
 }
@@ -351,6 +375,7 @@ impl DBCenter {
             postgres_version,
             multi_user_sync_mode,
             false,
+            false,
         )
     }
 
@@ -368,6 +393,7 @@ impl DBCenter {
         postgres_version: Option<String>,
         multi_user_sync_mode: bool,
         columnar: bool,
+        inherited_delta: bool,
     ) -> Result<Arc<Self>> {
         // Validation: service mode requires persist
         if daemon_mode && !persist {
@@ -447,6 +473,16 @@ impl DBCenter {
             password,
             multi_user_sync_mode,
             columnar,
+            // The environment can force the shape either way. It is how the
+            // test suite runs the same assertions against both, how the cost
+            // rig switches shapes without a rebuild, and - the reason it stays
+            // after those - how a deployment that finds trouble in the new
+            // shape goes back to the old one without a new binary.
+            inherited_delta: match std::env::var("DBCENTER_INHERITED_DELTA").as_deref() {
+                Ok("1") | Ok("true") | Ok("yes") | Ok("on") => true,
+                Ok("0") | Ok("false") | Ok("no") | Ok("off") => false,
+                _ => inherited_delta,
+            },
             ..DBCenterConfig::default()
         };
 
@@ -490,6 +526,7 @@ impl DBCenter {
             config,
             pool: ClientPool::new(clients),
             schema_cache: Mutex::new(HashMap::new()),
+            shape_cache: Mutex::new(HashMap::new()),
             process: Arc::new(Mutex::new(pg_process)),
             path: path_buf.clone(),
             instance_id: instance_id.clone(),
@@ -896,6 +933,17 @@ impl DBCenter {
     }
 
     /// Get internal client for advanced operations
+    /// The shape this collection was found to have, if it has been looked up.
+    pub(crate) fn cached_shape(&self, table: &str) -> Option<crate::delta_manager::Shape> {
+        self.shape_cache.lock().ok()?.get(table).copied()
+    }
+
+    pub(crate) fn remember_shape(&self, table: &str, shape: crate::delta_manager::Shape) {
+        if let Ok(mut cache) = self.shape_cache.lock() {
+            cache.insert(table.to_string(), shape);
+        }
+    }
+
     /// Columns this table is known to have, if we have looked before.
     pub(crate) fn cached_columns(&self, table: &str) -> Option<std::collections::HashSet<String>> {
         self.schema_cache.lock().ok()?.get(table).cloned()

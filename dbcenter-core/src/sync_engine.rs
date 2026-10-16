@@ -166,6 +166,7 @@ fn ensure_restored_column(
     column: &str,
     value: &serde_json::Value,
     ensured: &mut std::collections::HashSet<String>,
+    inherited: bool,
 ) -> crate::error::Result<bool> {
     // Every row of a Parquet file has the same columns, and this used to run two
     // `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements for each field of
@@ -185,9 +186,18 @@ fn ensure_restored_column(
         _ => "TEXT",
     };
 
-    // Both delta tables, because the view unions them and a UNION ALL needs the
-    // same shape on each side.
-    for target in [format!("{}_base", table), format!("{}_adds", table)] {
+    // Where the column has to land depends on the shape. When `_base` and
+    // `_adds` inherit from the collection, altering the parent adds it to both
+    // and - the part that matters - to the table every read goes through;
+    // altering the children would leave the parent without it. When they are
+    // arms of a view, each one has to be altered, because a UNION ALL needs the
+    // same shape on both sides.
+    let targets: Vec<String> = if inherited {
+        vec![table.to_string()]
+    } else {
+        vec![format!("{}_base", table), format!("{}_adds", table)]
+    };
+    for target in targets {
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {}",
             crate::query::quote_ident(&target),
@@ -204,6 +214,30 @@ fn ensure_restored_column(
         })?;
     }
     Ok(true)
+}
+
+/// Tell PostgreSQL that what follows is replication, not somebody typing.
+///
+/// In the inherited shape `_base` carries two triggers: one moves a row into
+/// `_adds` when it is updated, because an edit made here has to be in the set
+/// the next push reads, and one leaves a tombstone when a row is deleted, so a
+/// later pull does not bring it back. Both are right for a caller and wrong for
+/// the sync engine, which writes rows that came from the bucket in the first
+/// place - `ON CONFLICT (id) DO UPDATE` is an UPDATE, and it was promoting
+/// every restored row straight back out of `_base`.
+///
+/// `session_replication_role` is the switch PostgreSQL provides for exactly
+/// this, and `SET LOCAL` puts it back at commit. It is a no-op in view shape,
+/// where neither trigger exists.
+fn writing_as_replication(transaction: &mut postgres::Transaction<'_>) -> crate::error::Result<()> {
+    transaction
+        .batch_execute("SET LOCAL session_replication_role = 'replica'")
+        .map_err(|e| {
+            crate::error::DBCenterError::QueryError(format!(
+                "Could not enter replication mode: {}",
+                crate::utils::format_postgres_error(&e)
+            ))
+        })
 }
 
 /// Turn one row of an Arrow batch into the document it came from.
@@ -510,6 +544,7 @@ impl SyncEngine {
         let mut transaction = client.transaction().map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
+        writing_as_replication(&mut transaction)?;
 
         // _base and _adds are created together and altered together, so their
         // column lists match and the names can be reused for both sides.
@@ -917,6 +952,12 @@ impl SyncEngine {
 
         self.ensure_conflict_table(table_name)?;
 
+        // Which shape this collection has decides where a restored column goes.
+        let inherited = matches!(
+            DeltaManager::shape_on_disk(&self.db, table_name)?,
+            Some(crate::delta_manager::Shape::Inherited)
+        );
+
         let files = self.storage.list(table_name)?;
 
         let mut sorted_files = files.clone();
@@ -964,6 +1005,7 @@ impl SyncEngine {
             let mut transaction = client.transaction().map_err(|e| {
                 crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
             })?;
+            writing_as_replication(&mut transaction)?;
 
             for batch_result in reader {
                 let batch = batch_result.map_err(|e| {
@@ -1024,6 +1066,7 @@ impl SyncEngine {
                         name,
                         &sample,
                         &mut ensured_columns,
+                        inherited,
                     )? {
                         added_columns = true;
                     }
@@ -1085,11 +1128,31 @@ impl SyncEngine {
                         SELECT {select_list}
                     ),
                     before AS (
+                        -- The version this node holds, whichever table it is
+                        -- in, with the same precedence a read would give it:
+                        -- an unpushed edit in _adds hides the row in _base.
+                        --
+                        -- Read from the tables rather than through the
+                        -- collection, because in view shape the view freezes
+                        -- its column list when it is created and this restore
+                        -- may be adding columns as it goes.
                         SELECT * FROM "{base}" WHERE id = $1::uuid
+                          AND NOT EXISTS (SELECT 1 FROM "{adds}" a WHERE a.id = $1::uuid)
+                        UNION ALL
+                        SELECT * FROM "{adds}" WHERE id = $1::uuid
                     ),
                     applied AS (
                         INSERT INTO "{base}" ({cols})
                         SELECT {cols} FROM incoming
+                        -- Two things this node knows that the file does not.
+                        -- A row in _adds is an edit made here and not pushed
+                        -- yet, so it is newer than anything in the bucket; a
+                        -- row in _dels was deleted here. Writing either into
+                        -- _base put a second copy of the row in the collection
+                        -- once _base and _adds stopped being arms of a view
+                        -- that could hide one of them.
+                        WHERE NOT EXISTS (SELECT 1 FROM "{adds}" a WHERE a.id = $1::uuid)
+                          AND NOT EXISTS (SELECT 1 FROM "{dels}" d WHERE d.id = $1::uuid)
                         ON CONFLICT (id) DO UPDATE SET {assignments}
                         WHERE EXCLUDED.updated_at > "{base}".updated_at
                            OR (EXCLUDED.updated_at = "{base}".updated_at
@@ -1111,6 +1174,8 @@ impl SyncEngine {
                         .collect::<Vec<_>>()
                         .join(", "),
                     base = base_table,
+                    adds = format!("{}_adds", table_name),
+                    dels = format!("{}_dels", table_name),
                     cols = columns.join(", "),
                     assignments = assignments.join(", "),
                     conflicts = conflict_table,

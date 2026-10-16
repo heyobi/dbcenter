@@ -34,6 +34,18 @@ impl<'a> Collection<'a> {
         }
     }
 
+    /// Which shape the delta layer has, for the paths that have to care.
+    ///
+    /// Only two do: adding a column, which cascades from the parent when the
+    /// tables inherit and has to be repeated per table when they do not, and
+    /// creating an index, which never cascades and always has to be repeated.
+    fn delta_shape(&self) -> Option<crate::delta_manager::Shape> {
+        if !self.db.config().multi_user_sync_mode {
+            return None;
+        }
+        crate::delta_manager::DeltaManager::shape_on_disk(self.db, &self.name).unwrap_or(None)
+    }
+
     pub fn new(db: &'a DBCenter, name: &str) -> Self {
         let collection = Self {
             db,
@@ -82,10 +94,15 @@ impl<'a> Collection<'a> {
         // Delta Logic: Apply to _base and _adds
         let delta_mode = self.db.config().multi_user_sync_mode;
 
-        let target_tables = if delta_mode {
-            vec![format!("{}_base", self.name), format!("{}_adds", self.name)]
-        } else {
-            vec![self.name.clone()]
+        // One ALTER when the tables inherit: the column arrives in both
+        // children with the parent, and doing it per child would leave the
+        // parent without it - which is the table every read goes through.
+        let target_tables = match self.delta_shape() {
+            Some(crate::delta_manager::Shape::Inherited) => vec![self.name.clone()],
+            Some(crate::delta_manager::Shape::View) => {
+                vec![format!("{}_base", self.name), format!("{}_adds", self.name)]
+            }
+            None => vec![self.name.clone()],
         };
 
         let mut client = self.db.get_client();
@@ -677,22 +694,52 @@ impl<'a> Collection<'a> {
         }
 
         let expr = self.field_as_text(field)?;
-        let idx_name = format!("idx_{}_{}_{}", self.name, field, method);
-        let sql = format!(
-            r#"CREATE INDEX IF NOT EXISTS {} ON {} USING {} (({}){})"#,
-            quote_ident(&idx_name),
-            self.table(),
-            method,
-            expr,
-            opclass
-        );
+
+        // An index belongs to a table, and in delta mode the collection is not
+        // one: a view cannot carry an index at all, and an inheritance parent
+        // carries one that its children do not use. Either way the index has to
+        // be built on `_base` and `_adds` themselves, which is also where the
+        // planner needs it - a merge append reads one index per child.
+        let targets: Vec<(String, String)> = match self.delta_shape() {
+            Some(_) => vec![
+                (
+                    format!("idx_{}_base_{}_{}", self.name, field, method),
+                    format!("{}_base", self.name),
+                ),
+                (
+                    format!("idx_{}_adds_{}_{}", self.name, field, method),
+                    format!("{}_adds", self.name),
+                ),
+            ],
+            None => vec![(
+                format!("idx_{}_{}_{}", self.name, field, method),
+                self.name.clone(),
+            )],
+        };
+
+        let sql = targets
+            .iter()
+            .map(|(idx, table)| {
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS {} ON {} USING {} (({}){});"#,
+                    quote_ident(idx),
+                    quote_ident(table),
+                    method,
+                    expr,
+                    opclass
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let mut client = self.db.get_client();
-        client.execute(&sql, &[]).map_err(|e| {
+        client.batch_execute(&sql).map_err(|e| {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
 
-        tracing::info!("Created index: {}", idx_name);
+        for (idx, table) in &targets {
+            tracing::info!("Created index {} on {}", idx, table);
+        }
         Ok(())
     }
 

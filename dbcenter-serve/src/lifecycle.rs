@@ -39,7 +39,8 @@ pub fn run(config: ServeConfig) -> Result<(), String> {
         .host(&config.listen_host)
         .port(config.port)
         .multi_user_sync_mode(true)
-        .columnar(config.columnar);
+        .columnar(config.columnar)
+        .inherited_delta(config.inherited_delta);
 
     // The password has to be part of the initial configuration, not applied
     // afterwards: it is what makes the engine write a scram rule into
@@ -62,6 +63,19 @@ pub fn run(config: ServeConfig) -> Result<(), String> {
     if let Some(password) = &config.password {
         db.set_user_password("postgres", password)
             .map_err(|e| format!("Could not set the postgres password: {}", e))?;
+    }
+
+    // A collection built by an earlier release is a view over its deltas, and
+    // it keeps working as one. Converting it is asked for explicitly, before
+    // anything else touches the collection, because it drops the view.
+    if config.migrate_delta {
+        for name in collection_names(&db)? {
+            match dbcenter_core::delta_manager::DeltaManager::migrate_to_inherited(&db, &name) {
+                Ok(true) => tracing::info!("Collection '{}' converted to a table", name),
+                Ok(false) => {}
+                Err(e) => return Err(format!("Could not convert '{}': {}", name, e)),
+            }
+        }
     }
 
     // Declared collections have to exist before the first client connects, and

@@ -49,6 +49,19 @@ pub struct ServeConfig {
     /// over history never touches the local tables. Costs about 120 MB of
     /// resident set, which is why it is not the default on a small machine.
     pub columnar: bool,
+
+    /// Build collections as a table their `_base` and `_adds` inherit from.
+    ///
+    /// Without it a collection is a view over the two, and PostgreSQL sorts the
+    /// whole thing to answer `ORDER BY ... LIMIT` - 256.9 ms against 0.16 ms
+    /// over 200,000 rows. Existing collections keep the shape they were made
+    /// with; `DBCENTER_MIGRATE_DELTA=1` converts them on startup.
+    pub inherited_delta: bool,
+
+    /// Convert view-shaped collections to the inherited shape when the server
+    /// starts. Off by default: it takes a lock on each collection and drops the
+    /// view, which is not something to do to a running deployment by surprise.
+    pub migrate_delta: bool,
     /// Restore from the deltas only, leaving the base snapshot in the bucket.
     ///
     /// The machine comes up current on recent changes without downloading the
@@ -179,6 +192,8 @@ impl ServeConfig {
             )?),
             schema: parse_schema(var("DBCENTER_SCHEMA").as_deref())?,
             columnar: flag("DBCENTER_COLUMNAR"),
+            inherited_delta: flag("DBCENTER_INHERITED_DELTA"),
+            migrate_delta: flag("DBCENTER_MIGRATE_DELTA"),
             lazy_restore: flag("DBCENTER_LAZY_RESTORE"),
             // Fly sets FLY_MACHINE_ID; anywhere else a random id is fine, since
             // it only has to be unique among the writers sharing the bucket.
