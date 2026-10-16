@@ -95,13 +95,25 @@ Not new - it was the same through the view.
 became built-in in 13. Nothing installs it. Not new either; found while checking
 the partitioned shape on 12.
 
-**PyPI is at 0.3.0**, published 8 September 2026, with wheels for five
-platforms. Verified from a real `pip install` in a clean environment: the sync
-round trip keeps the document, a synced update does not lose the row, the
-Parquet has a column per field, and `install_extension("pg_duckdb")` downloads
-from the public release in about five seconds and gives a columnar view 19x
-faster than the collection on a 200,000-row aggregate. 0.1.0 and 0.2.0 are still
-on PyPI; 0.2.0 loses rows on sync and 0.1.0 cannot load any extension on Linux.
+**PyPI is at 0.4.0**, published 16 October 2026, with wheels for five
+platforms: the partitioned collection. Verified from a real `pip install` in a
+clean environment, outside the repository: a synced collection is partitioned,
+an ordered `LIMIT` plans as a merge append, an update to a synced row - over SQL
+and through the API - is pending again and synced again, `find` does not show
+`_layer`, and no row is lost on the way.
+
+0.3.0, published 8 September, was verified the same way for the sync round trip
+and the columnar view (19x on a 200,000-row aggregate); it is the view-shaped
+collection, and a database it wrote converts itself when 0.4.0 opens it. 0.1.0
+and 0.2.0 are still on PyPI; 0.2.0 loses rows on sync and 0.1.0 cannot load any
+extension on Linux.
+
+**Windows CI is red, and the bug it found is real.** PostgreSQL refuses to run
+under an administrator token, and the engine starts `postgres.exe` directly
+instead of through `pg_ctl`, which drops to a restricted token on Windows - so a
+Windows user running as administrator cannot start a database. 0.3.0 has it too.
+The job had been failing at clippy since at least September, so its tests never
+got far enough to show it. Left for the next release.
 
 **Linux PostGIS bundles its dependencies on every major.** Checked against the
 published release: PostGIS 3.5.0 for PostgreSQL 12 through 17 and 3.6.1 for 18 -
