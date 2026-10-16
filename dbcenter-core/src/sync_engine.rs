@@ -1112,6 +1112,9 @@ impl SyncEngine {
                 // version. The text rendering is null-safe and identical on
                 // every node. `created_at` is deliberately left out: the row
                 // being inserted takes the column default, which is local time.
+                let adds_table = format!("{}_adds", table_name);
+                let dels_table = format!("{}_dels", table_name);
+
                 let compared: Vec<String> = columns
                     .iter()
                     .filter(|c| c.as_str() != "id" && c.as_str() != "updated_at")
@@ -1174,8 +1177,8 @@ impl SyncEngine {
                         .collect::<Vec<_>>()
                         .join(", "),
                     base = base_table,
-                    adds = format!("{}_adds", table_name),
-                    dels = format!("{}_dels", table_name),
+                    adds = adds_table,
+                    dels = dels_table,
                     cols = columns.join(", "),
                     assignments = assignments.join(", "),
                     conflicts = conflict_table,

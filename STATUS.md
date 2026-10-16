@@ -255,36 +255,35 @@ with the same precedence a read would give them.
 
 ### What is verified and what is not
 
-- Full `dbcenter-core` suite in the **old** shape: green, except
+- **Full `dbcenter-core` suite in the new shape: green.** 55 tests, every file -
+  `lib`, `collection_regression`, `concurrency`, `conflicts`, `geo_lookup`,
+  `lazy_frame`, `lazy_read`, `offline_start`, `shape`, `value_mapping`. The S3
+  tests self-skip without `DBCENTER_S3_TEST_ENDPOINT`, as always.
+- Full suite in the **old** shape: green, except
   `shape.rs::an_ordered_limited_query_stops_when_it_has_enough_rows`, which is
-  the test that describes the new shape and is expected to fail there.
-- Full suite in the **new** shape: `lib`, `columnar`, `concurrency` green;
-  `conflicts` was red, the replication-role fix went in, **and the re-run was
-  cut off before it finished**. Start here.
-- Python suite, `dbcenter-serve`, the cost rig: not run in the new shape at all.
+  the test that describes the new shape and is meant to fail there. Decide
+  whether to gate it on the flag or let flipping the default fix it.
+- `cargo clippy -D warnings` and `cargo fmt`: clean.
+- An unlooked-for result: `lazy_read` runs in **70.9 s** against 98.5 s in the
+  old shape. The view tax was being paid inside the test suite too.
+- Not run in the new shape at all: the Python suite, `dbcenter-serve`, the cost
+  rig, and `migrate_to_inherited`, which has no test of any kind.
 
 ### Next, on a machine that stays up
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# 1. the thing that was interrupted
-DBCENTER_INHERITED_DELTA=1 cargo test -p dbcenter-core -- --test-threads=1
-cargo test -p dbcenter-core -- --test-threads=1          # and the old shape still
-
-# 2. clippy, which has not been run on this branch at all
-cargo clippy -p dbcenter-core -p dbcenter-serve --all-targets -- -D warnings
-
-# 3. the Python bindings, both ways
+# 1. the Python bindings, both ways
 VIRTUAL_ENV=<venv> maturin develop
 cd python_tests && python -m pytest
 DBCENTER_INHERITED_DELTA=1 python -m pytest
 
-# 4. a migration test that does not exist yet: build a collection in view
+# 2. a migration test that does not exist yet: build a collection in view
 #    shape, put rows in all three tables, migrate, assert the same rows come
 #    back exactly once. `migrate_to_inherited` is written and unexercised.
 
-# 5. the fly.io rig, in the new shape, which is the number the change is for
+# 3. the fly.io rig, in the new shape, which is the number the change is for
 docker compose -f scripts/cost-experiment/docker-compose.yml up -d storage storage-init
 python scripts/cost-experiment/run.py --rows 200000      # old shape, for the baseline
 DBCENTER_INHERITED_DELTA=1 python scripts/cost-experiment/run.py --rows 200000
@@ -292,7 +291,7 @@ DBCENTER_INHERITED_DELTA=1 python scripts/cost-experiment/run.py --rows 200000
 #    experiment says it should land near PostgreSQL's 0.7 ms.
 #    Then the 20 ms latency profile, then scale.py for the read tier.
 
-# 6. only then flip the default to true in DBCenterConfig::default and
+# 4. only then flip the default to true in DBCenterConfig::default and
 #    DBCenterBuilder::new, update README/CLAUDE.md/docs, and merge.
 ```
 
