@@ -85,6 +85,16 @@ jobs:
           DBCENTER_S3_TEST_SECRET: dbcenter123
         run: cargo test -p dbcenter-core --test s3_storage
 
+      # The release build inside the image no longer fits beside the debug
+      # build the tests left behind: "No space left on device". The runner
+      # ships SDKs this project never uses; removing them frees about 20 GB.
+      - name: Free disk for the image build
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Container image
         if: runner.os == 'Linux'
         run: docker build -t dbcenter:ci .
