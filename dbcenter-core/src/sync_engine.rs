@@ -1127,9 +1127,9 @@ impl SyncEngine {
                         RETURNING id
                     )
                     INSERT INTO "{conflicts}" (id, incoming_won, incoming, existing)
-                    SELECT i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(i),
-                           to_jsonb(b) - '{layer}'
-                    FROM before b, incoming i
+                    SELECT dbc_i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(dbc_i.*),
+                           to_jsonb(dbc_b.*) - '{layer}'
+                    FROM before AS dbc_b, incoming AS dbc_i
                     WHERE ({b_tuple}) IS DISTINCT FROM ({i_tuple})
                     "#,
                     select_list = columns
@@ -1148,8 +1148,12 @@ impl SyncEngine {
                     conflicts = conflict_table,
                     excluded_tuple = qualified(&compared, "EXCLUDED"),
                     base_tuple = qualified(&compared, &format!("\"{}\"", base_table)),
-                    b_tuple = qualified(&compared, "b"),
-                    i_tuple = qualified(&compared, "i"),
+                    // Not `b` and `i`: a whole-row `to_jsonb(b)` was ambiguous
+                    // with a document field named b, and the restore failed
+                    // for any collection that had one. `alias.*` is always the
+                    // row, and these aliases are not names a field gets.
+                    b_tuple = qualified(&compared, "dbc_b"),
+                    i_tuple = qualified(&compared, "dbc_i"),
                 );
 
                 // Prepared explicitly, once. `execute` with a `&str` prepares
