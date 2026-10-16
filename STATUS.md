@@ -100,8 +100,15 @@ PostgreSQL 18 and 12, the newest and oldest majors offered.
 became built-in in 13. Nothing installs it. Not new either; found while checking
 the partitioned shape on 12.
 
-**PyPI is at 0.4.0**, published 16 October 2026, with wheels for five
-platforms: the partitioned collection. Verified from a real `pip install` in a
+**PyPI is at 0.4.1**, published 16 October 2026: Windows as administrator,
+fuzzy search on synced collections, the MCP server (`pip install
+"dbcenter[mcp]"`), the S3 lock race and the streaming compaction. Verified from
+a real `pip install "dbcenter[mcp]==0.4.1"` in a clean environment, outside the
+repository, as an unprivileged user: a synced collection syncs, updates and
+compacts with no row lost, `find` hides `_layer`, `fuzzy_search` finds on a
+synced collection, `read_only=True` refuses a write, and `dbcenter-mcp` runs.
+
+0.4.0, published the same day, is the partitioned collection. Verified from a real `pip install` in a
 clean environment, outside the repository: a synced collection is partitioned,
 an ordered `LIMIT` plans as a merge append, an update to a synced row - over SQL
 and through the API - is pending again and synced again, `find` does not show
@@ -113,12 +120,12 @@ collection, and a database it wrote converts itself when 0.4.0 opens it. 0.1.0
 and 0.2.0 are still on PyPI; 0.2.0 loses rows on sync and 0.1.0 cannot load any
 extension on Linux.
 
-**Windows CI is red, and the bug it found is real.** PostgreSQL refuses to run
-under an administrator token, and the engine starts `postgres.exe` directly
-instead of through `pg_ctl`, which drops to a restricted token on Windows - so a
-Windows user running as administrator cannot start a database. 0.3.0 has it too.
-The job had been failing at clippy since at least September, so its tests never
-got far enough to show it. Left for the next release.
+**Windows CI is green, for the first time.** It had failed at clippy since at
+least September, so its tests never ran; once they did, they found that an
+administrator could not start a database at all - PostgreSQL refuses an
+administrator's token and the engine launched `postgres.exe` directly. It starts
+through `pg_ctl` on Windows now, which drops the token's privileges. 0.4.0 and
+earlier have the bug; 0.4.1 does not.
 
 **Linux PostGIS bundles its dependencies on every major.** Checked against the
 published release: PostGIS 3.5.0 for PostgreSQL 12 through 17 and 3.6.1 for 18 -
