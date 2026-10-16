@@ -35,6 +35,13 @@ Fixed and verified against a real server:
 - TCP listening works on Unix, auth fails closed, and the engine starts offline.
 - The workspace compiles: the Java and Node bindings had drifted out of sync with
   `DBCenter::new` and nothing built them.
+- A compaction streams. It read the whole base into memory, copied it to sort it
+  and built one Arrow batch from the copy, so a million rows peaked at 1,563 MB;
+  it reads 50,000 rows at a time through a cursor now, sorted by PostgreSQL, and
+  peaks at 215 MB. Its bloom filters were sized for a million values per
+  20,000-row group and it wrote no compression, so the base file for those rows
+  was 586 MB, 450 MB of it empty filters; it is 68 MB. A lookup against it reads
+  the footer and the one row group that can hold the id, in three requests.
 - `fuzzy_search` and `create_index` work on a synced collection. They addressed
   `data->>'field'` whenever the table had a `data` column, which a synced one
   always has, while `insert_one` keeps each field in a column of its own - so
@@ -243,26 +250,24 @@ volume each.
 Two things came out of it that were not good news. A hundred rows by timestamp
 took 0.7 ms against a plain table and 103.8 ms against the collection, with
 the same index on both sides, because the collection was a view - fixed since,
-above, though this rig has not been re-run. And at a million rows **a compaction
-does not fit in 1 GB** - it reads the whole base back to rewrite it, and the container
-stalls at its memory ceiling. The full write-up, with the rig, is in
-`docs/cost-and-scale.md`.
+above, though this rig has not been re-run. And at a million rows a compaction
+did not fit in 1 GB - it read the whole base back to rewrite it - fixed since as
+well: it streams the base through a cursor now, and peaked at 215 MB where it
+took 1,563 MB, measured on the same million rows. The full write-up, with the
+rig, is in `docs/cost-and-scale.md`.
 
 ## Next, in order
 
-1. **Make compaction stream.** It reads the whole base snapshot into memory to
-   rewrite it, so a 1 GB machine cannot compact a million-row table - which is
-   the machine the whole argument rests on.
-2. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
+1. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
    Marked experimental is honest; it is not a resting place.
-3. Build pg_duckdb from source rather than repackaging upstream's binary.
+2. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to
    compile than this machine has spare.
-4. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
+3. Nothing more on "lazy sync": it means a pull that reads the deltas and skips
    the base snapshot, which is what `SyncMode::Partial` has always done. It is
    written down now, in the enum and in the README, so it stops being a phrase
    that means whatever the reader assumes.
-5. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
+4. `vector-0.8.1-windows-amd64-pg15` is still quarantined, and Windows
    PostgreSQL 15 silently gets pgvector 0.8.0 instead.
 
 ## How the two read paths fit together

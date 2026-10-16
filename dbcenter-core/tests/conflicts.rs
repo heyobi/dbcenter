@@ -205,3 +205,33 @@ fn two_edits_in_the_same_tick_leave_both_nodes_holding_the_same_row() {
     a.db.shutdown().unwrap();
     b.db.shutdown().unwrap();
 }
+
+#[test]
+fn a_document_with_fields_named_b_and_i_still_restores() {
+    // The restore statement called its two rows `b` and `i` and wrote
+    // `to_jsonb(b)`, which PostgreSQL could not tell apart from a column named
+    // b: "column reference "b" is ambiguous". Any collection with a field
+    // called b or i could neither be pulled nor compacted.
+    let dir = workspace("aliases");
+    let store = dir.join("store");
+    std::fs::create_dir_all(&store).unwrap();
+
+    let a = node(&dir, "a", &store);
+    a.db.collection("pairs")
+        .insert_one(&json!({"b": 1, "i": 2}))
+        .unwrap();
+    a.engine.sync_table("pairs", 100).unwrap();
+
+    let b = node(&dir, "b", &store);
+    b.engine.pull_and_apply("pairs", SyncMode::Full).unwrap();
+    // A second pull reaches the conflict check with a row already in place.
+    b.engine.pull_and_apply("pairs", SyncMode::Full).unwrap();
+
+    let rows = b.db.query("SELECT b, i FROM pairs", &[]).unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["b"], json!(1));
+    assert_eq!(rows[0]["i"], json!(2));
+
+    a.db.shutdown().unwrap();
+    b.db.shutdown().unwrap();
+}

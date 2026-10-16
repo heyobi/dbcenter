@@ -7,19 +7,22 @@ use parquet::record::Row;
 /// Smart Reader demonstrating Predicate Pushdown on Remote VFS
 pub struct SmartParquetReader {
     reader: SerializedFileReader<RemoteFile>,
+    /// A handle on the same file, to prefetch a row group through.
+    file: RemoteFile,
 }
 
 impl SmartParquetReader {
     pub fn new(remote_file: RemoteFile) -> Result<Self> {
         // SerializedFileReader automatically reads the Footer (Metadata)
         // using the underlying RemoteFile which caches it to disk/LRU.
+        let file = remote_file.clone();
         let reader = SerializedFileReader::new(remote_file).map_err(|e| {
             crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
                 e.to_string(),
             ))
         })?;
 
-        Ok(Self { reader })
+        Ok(Self { reader, file })
     }
 
     /// Return list of Row Group indices that MIGHT contain the given ID.
@@ -74,6 +77,21 @@ impl SmartParquetReader {
         //    matching_groups.len(), self.reader.metadata().num_row_groups(), target_id);
 
         for rg_idx in matching_groups {
+            // The whole row group in one request: the footer says exactly where
+            // its column chunks are. Read page by page instead, a lookup either
+            // made a request per page or fetched well past each chunk's end -
+            // with compressed columns, more than the file's own size.
+            let row_group = self.reader.metadata().row_group(rg_idx);
+            let (mut low, mut high) = (u64::MAX, 0u64);
+            for column in row_group.columns() {
+                let (start, length) = column.byte_range();
+                low = low.min(start);
+                high = high.max(start + length);
+            }
+            if low < high {
+                self.file.prefetch(low, high - low)?;
+            }
+
             // This triggers download ONLY for this RG's columns due to RemoteFile
             let row_group_reader = self
                 .reader
