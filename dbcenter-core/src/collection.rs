@@ -18,14 +18,9 @@ impl<'a> Collection<'a> {
 
     /// Where writes go.
     ///
-    /// In delta mode the collection is a view with an INSTEAD OF trigger that
-    /// routes inserts into `<name>_adds`. Going through it costs a plpgsql call
-    /// per row - over half the time of a delta insert, measured - and lands in
-    /// exactly the same place. Writing straight to `_adds` skips that; the
-    /// trigger stays for anyone inserting into the view with their own SQL.
-    ///
-    /// The defaults the trigger fills in are column defaults on `_adds` too, so
-    /// the row comes out the same.
+    /// In delta mode the collection is partitioned and new rows belong in the
+    /// `<name>_adds` partition, which is where an insert into the collection
+    /// lands too. Naming the partition saves PostgreSQL routing each row.
     fn write_table(&self) -> String {
         if self.db.config().multi_user_sync_mode {
             quote_ident(&format!("{}_adds", self.name))
@@ -79,111 +74,96 @@ impl<'a> Collection<'a> {
 
     /// Check and create missing columns based on the document structure
     fn ensure_columns(&self, document: &HashMap<String, JsonValue>) -> Result<()> {
-        // Delta Logic: Apply to _base and _adds
         let delta_mode = self.db.config().multi_user_sync_mode;
 
-        let target_tables = if delta_mode {
-            vec![format!("{}_base", self.name), format!("{}_adds", self.name)]
-        } else {
-            vec![self.name.clone()]
-        };
+        // In delta mode too this is the collection itself: it is partitioned,
+        // and a column added to it is added to both partitions. PostgreSQL
+        // refuses to add one to a partition directly.
+        let table = &self.name;
 
         let mut client = self.db.get_client();
-        let mut schema_changed = false;
 
-        // We need to sync schema for ALL target tables
-        for table in target_tables {
-            // 1. Which columns the table has. Asking information_schema costs
-            //    about 3ms - seventeen times what the insert itself costs inside
-            //    a transaction - and the answer only changes when we change it.
-            let mut existing_cols = match self.db.cached_columns(&table) {
-                Some(cached) => cached,
-                None => {
-                    let sql_cols =
-                        "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
-                    let rows = client.query(sql_cols, &[&table]).map_err(|e| {
-                        crate::error::DBCenterError::QueryError(
-                            crate::utils::format_postgres_error(&e),
-                        )
-                    })?;
-                    let cols: std::collections::HashSet<String> =
-                        rows.iter().map(|r| r.get(0)).collect();
-                    self.db.remember_columns(&table, cols.clone());
-                    cols
-                }
-            };
+        // 1. Which columns the table has. Asking information_schema costs
+        //    about 3ms - seventeen times what the insert itself costs inside
+        //    a transaction - and the answer only changes when we change it.
+        let mut existing_cols = match self.db.cached_columns(table) {
+            Some(cached) => cached,
+            None => {
+                let sql_cols =
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
+                let rows = client.query(sql_cols, &[table]).map_err(|e| {
+                    crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+                })?;
+                let cols: std::collections::HashSet<String> =
+                    rows.iter().map(|r| r.get(0)).collect();
+                self.db.remember_columns(table, cols.clone());
+                cols
+            }
+        };
 
-            // 2. Identify new columns
-            let mut alter_stmts = Vec::new();
-            for (key, value) in document {
-                if key == "_id" || key == "id" || key == "created_at" || key == "updated_at" {
-                    continue;
-                }
-                // In delta mode the row body lives in a reserved `data` JSONB column,
-                // so a user field of that name would collide. In relational mode a
-                // field named "data" is an ordinary column like any other.
-                if delta_mode && key == "data" {
-                    continue;
-                }
-
-                if !existing_cols.contains(key) {
-                    let col_type = match value {
-                        JsonValue::Bool(_) => "BOOLEAN",
-                        JsonValue::Number(n) => {
-                            if n.is_i64() {
-                                "BIGINT"
-                            } else {
-                                "DOUBLE PRECISION"
-                            }
-                        }
-                        JsonValue::String(_) => "TEXT",
-                        JsonValue::Array(_) | JsonValue::Object(_) => "JSONB",
-                        JsonValue::Null => "TEXT", // Default to text for nulls
-                    };
-                    alter_stmts.push(format!(
-                        "ADD COLUMN IF NOT EXISTS {} {}",
-                        quote_ident(key),
-                        col_type
-                    ));
-                }
+        // 2. Identify new columns
+        let mut alter_stmts = Vec::new();
+        for (key, value) in document {
+            if key == "_id" || key == "id" || key == "created_at" || key == "updated_at" {
+                continue;
+            }
+            // The partition column says whether a row has been synced; a
+            // document setting it would put itself in the wrong partition.
+            if delta_mode && key == crate::delta_manager::LAYER_COLUMN {
+                return Err(crate::error::DBCenterError::ValidationError(format!(
+                    "'{}' is reserved in a synced collection",
+                    key
+                )));
+            }
+            // In delta mode the row body lives in a reserved `data` JSONB column,
+            // so a user field of that name would collide. In relational mode a
+            // field named "data" is an ordinary column like any other.
+            if delta_mode && key == "data" {
+                continue;
             }
 
-            if !alter_stmts.is_empty() {
-                let sql_alter = format!(
-                    "ALTER TABLE {} {}",
-                    quote_ident(&table),
-                    alter_stmts.join(", ")
-                );
-                tracing::info!("Evolving schema for {}: {}", table, sql_alter);
-                if let Err(e) = client.batch_execute(&sql_alter) {
-                    // What the cache believed is no longer reliable.
-                    self.db.forget_columns(&table);
-                    return Err(crate::error::DBCenterError::QueryError(format!(
-                        "Schema evolution failed: {}",
-                        crate::utils::format_postgres_error(&e)
-                    )));
-                }
-
-                for key in document.keys() {
-                    existing_cols.insert(key.clone());
-                }
-                self.db.remember_columns(&table, existing_cols);
-                schema_changed = true;
+            if !existing_cols.contains(key) {
+                let col_type = match value {
+                    JsonValue::Bool(_) => "BOOLEAN",
+                    JsonValue::Number(n) => {
+                        if n.is_i64() {
+                            "BIGINT"
+                        } else {
+                            "DOUBLE PRECISION"
+                        }
+                    }
+                    JsonValue::String(_) => "TEXT",
+                    JsonValue::Array(_) | JsonValue::Object(_) => "JSONB",
+                    JsonValue::Null => "TEXT", // Default to text for nulls
+                };
+                alter_stmts.push(format!(
+                    "ADD COLUMN IF NOT EXISTS {} {}",
+                    quote_ident(key),
+                    col_type
+                ));
             }
         }
 
-        // PostgreSQL freezes `SELECT *` when a view is created, so a column added
-        // to the delta tables is invisible through the view until it is rebuilt.
-        //
-        // Only when one actually was. This ran on every insert, and rebuilding
-        // means about a dozen DDL statements - three tables, two GIN indexes, the
-        // view and three trigger functions - each taking catalogue locks. On a
-        // collection with a two-million-row base it cost 3.3 of the 4.0 seconds a
-        // twenty-thousand-row insert took.
-        drop(client);
+        if !alter_stmts.is_empty() {
+            let sql_alter = format!(
+                "ALTER TABLE {} {}",
+                quote_ident(table),
+                alter_stmts.join(", ")
+            );
+            tracing::info!("Evolving schema for {}: {}", table, sql_alter);
+            if let Err(e) = client.batch_execute(&sql_alter) {
+                // What the cache believed is no longer reliable.
+                self.db.forget_columns(table);
+                return Err(crate::error::DBCenterError::QueryError(format!(
+                    "Schema evolution failed: {}",
+                    crate::utils::format_postgres_error(&e)
+                )));
+            }
 
-        if delta_mode && schema_changed {
-            crate::delta_manager::DeltaManager::ensure_delta_tables(self.db, &self.name)?;
+            for key in document.keys() {
+                existing_cols.insert(key.clone());
+            }
+            self.db.remember_columns(table, existing_cols);
         }
 
         Ok(())
@@ -368,10 +348,20 @@ impl<'a> Collection<'a> {
             ))
         })?;
 
+        // Which partition a row sits in is bookkeeping, not a field.
+        let hidden = if self.db.config().multi_user_sync_mode {
+            Some(crate::delta_manager::LAYER_COLUMN)
+        } else {
+            None
+        };
+
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
             let mut map = serde_json::Map::with_capacity(row.columns().len() + 1);
             for (idx, column) in row.columns().iter().enumerate() {
+                if Some(column.name()) == hidden {
+                    continue;
+                }
                 map.insert(
                     column.name().to_string(),
                     crate::utils::row_value_to_json(&row, idx),

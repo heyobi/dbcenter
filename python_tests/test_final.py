@@ -230,13 +230,10 @@ class TestDBCenterDelta(unittest.TestCase):
         self.assertIn(f"{coll_name}_adds", table_names, "Adds table missing")
         self.assertIn(f"{coll_name}_dels", table_names, "Dels table missing")
         
-        # The main name 'products' should NOT be in pg_tables (it's a view), unless pg_tables includes views?
-        # pg_tables does NOT include views. pg_views does.
-        # Let's verify it is a view.
-        views = self.db.query("SELECT viewname FROM pg_views WHERE schemaname = 'public'")
-        view_names = [v['viewname'] for v in views]
-        print(f"Found views: {view_names}")
-        self.assertIn(coll_name, view_names, "Main view missing")
+        # The collection itself is the table _base and _adds are partitions of.
+        self.assertIn(coll_name, table_names, "Partitioned collection missing")
+        kind = self.db.query("SELECT relkind::text AS k FROM pg_class WHERE relname = $1", [coll_name])
+        self.assertEqual(kind[0]["k"], "p", "the collection is not partitioned")
 
     def test_02_delta_crud_logic(self):
         """Verify Insert/Update/Delete logic routed to delta tables."""

@@ -30,14 +30,23 @@ class DeltaLayer(DBTestCase):
     def objects(self):
         return sorted(os.path.basename(p) for p in glob.glob(os.path.join(self.storage_dir, "**", "*.parquet"), recursive=True))
 
-    def test_the_collection_reads_through_the_three_delta_tables(self):
+    def test_the_collection_is_partitioned_into_base_and_adds(self):
         self.orders.insert_one({"ref": "A-1", "total": 10.5})
-        # A view over base/adds/dels, not a table.
+        # One table partitioned into synced and pending rows. It used to be a
+        # view, which made every ORDER BY ... LIMIT sort the whole collection.
         kind = self.db.query(
-            "SELECT table_type FROM information_schema.tables WHERE table_name = $1",
+            "SELECT relkind::text AS k FROM pg_class WHERE relname = $1", [self.table]
+        )
+        self.assertEqual(kind[0]["k"], "p")
+        partitions = self.db.query(
+            "SELECT c.relname AS name FROM pg_inherits i "
+            "JOIN pg_class c ON c.oid = i.inhrelid "
+            "WHERE i.inhparent = $1::text::regclass ORDER BY 1",
             [self.table],
         )
-        self.assertEqual(kind[0]["table_type"], "VIEW")
+        self.assertEqual(
+            [p["name"] for p in partitions], [f"{self.table}_adds", f"{self.table}_base"]
+        )
         for suffix in ("base", "adds", "dels"):
             rows = self.db.query(
                 "SELECT count(*) AS n FROM information_schema.tables WHERE table_name = $1",

@@ -89,31 +89,39 @@ flowchart TB
 The client sees PostgreSQL 18. It does not have to know that some of its data is
 in a table and some of it is Parquet on a bucket somewhere.
 
-### A collection is three tables and a view
+### A collection is one table in two partitions
 
-In delta mode, `db.collection("orders")` is not a table. It is a view over a
-base table, an additions table and a tombstone table, with `INSTEAD OF` triggers
-that make it writable. This is what lets a sync ship only what changed, and what
-lets two machines converge through a bucket neither of them owns.
+In delta mode, `db.collection("orders")` is a table partitioned in two:
+`orders_base` holds rows already synced, `orders_adds` rows written since. This
+is what lets a sync ship only what changed, and what lets two machines converge
+through a bucket neither of them owns. Being one table, it reads like one: an
+`ORDER BY ... LIMIT` merges the two partitions' indexes and stops after the rows
+it was asked for.
 
 ```mermaid
 flowchart TB
-    w["INSERT / UPDATE / DELETE<br/>on the view"]
+    w["INSERT / UPDATE / DELETE<br/>on orders"]
     adds["orders_adds<br/>rows written since the last sync"]
-    dels["orders_dels<br/>ids to hide from base"]
     base["orders_base<br/>rows already synced"]
-    r["SELECT sees<br/>adds, plus base minus<br/>anything in adds or dels"]
+    dels["orders_dels<br/>ids deleted here"]
+    r["SELECT reads both partitions<br/>like one table"]
 
-    w -->|"the new row of an INSERT or UPDATE"| adds
-    w -->|"the old row of an UPDATE, and any DELETE"| dels
+    w -->|"a new row, or a synced row being updated"| adds
+    w -->|"a DELETE leaves its id"| dels
+    adds -->|"sync"| base
 
     adds --> r
     base --> r
-    dels -.->|"subtracted"| r
 
+    pull["a pull from the bucket"]
+    pull -->|"into base, unless the id is<br/>pending in adds or deleted here"| base
     conf["orders_conflicts<br/>versions a pull discarded"]
-    base -.->|"a pull overwrote a row<br/>that differed"| conf
+    pull -.->|"the version that lost"| conf
 ```
+
+An id is only ever in one partition. Updating a synced row moves it from base
+to adds, so the next sync sends it; and a pull never writes an id that has a
+pending edit or was deleted here.
 
 A document's fields are ordinary columns. The first time a document carries a
 field the table grows a column for it, so `orders` has `id`, `created_at`,

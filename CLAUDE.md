@@ -27,11 +27,23 @@ column. Anything writing SQL against a collection must resolve which it is -
 `Collection::field_as_text` does this. Assuming one layout is how `fuzzy_search`
 and `create_index` came to be broken for every ordinary collection.
 
-**In delta mode a collection is a view**, over `<name>_base`, `<name>_adds` and
-`<name>_dels`, with INSTEAD OF triggers. `list_collections` reads `pg_tables`,
-which does not include views, so the collection name never appears in it. Derive
-names from the `_adds` tables instead. This is why the sync loop once found
-nothing to push and the bucket silently stayed empty.
+**In delta mode a collection is a partitioned table**, `<name>`, with
+`<name>_base` (synced) and `<name>_adds` (pending) as its partitions on a
+`_layer` column, and `<name>_dels` beside it. It used to be a view, which made
+every `ORDER BY ... LIMIT` sort the whole collection. Derive collection names from
+the `_adds` tables: that worked for the view and still does, and the sync loop
+once found nothing to push because it went looking elsewhere.
+
+**An id must be in only one partition.** A partitioned table's key has to include
+the partition column, so nothing in PostgreSQL stops an id from being in both -
+and then the collection shows the row twice. Triggers keep it out of both for an
+update or an insert through `<name>`, and the restore skips any id pending in
+`_adds` or deleted here (`_dels`). Anything new that writes to `_base` or `_adds`
+directly has to do the same; the sync engine sets `dbcenter.replicating` so the
+triggers stand aside for its own moves. `tests/delta_layout.rs` provokes each case.
+
+**Columns are added to `<name>`, never to a partition.** PostgreSQL refuses the
+latter and propagates the former.
 
 **There are two read paths and they are separate on purpose.** `<name>` is the
 collection - ordinary PostgreSQL, where writes and point lookups go.
@@ -139,6 +151,11 @@ Python bindings, for testing a change end to end:
 
 ## Traps in the environment, not the code
 
+- `initdb` and `postgres` refuse to run as root, and a cloud container runs you as
+  root: every integration test then fails with "cannot be run as root". Build as
+  root, run the test binaries as `nobody` (`setpriv --reuid=nobody
+  --regid=nogroup --clear-groups`) with a `HOME` it can write to, and copy the
+  proxy's CA bundle somewhere it can read, or downloads fail.
 - `pkill -f <pattern>` matches the shell running it. Use `ps -eo pid,args | grep '[p]attern'`.
 - A Unix socket path cannot exceed 107 bytes. The engine falls back to a short
   temp directory now, but deep paths are still worth avoiding for scratch data.

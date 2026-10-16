@@ -146,11 +146,6 @@ fn row_to_document(row: &parquet::record::Row) -> serde_json::Value {
     Value::Object(doc)
 }
 
-/// Add a column for a restored document field if the table has not got one.
-///
-/// The synced schema is only (id, data, created_at, updated_at); the fields a
-/// document carries are whatever it happened to have. A database restoring a
-/// table it has never seen has to grow the columns as it reads them.
 /// `a.col1, a.col2, ...` - the columns of a row comparison, qualified.
 fn qualified(columns: &[String], alias: &str) -> String {
     columns
@@ -160,20 +155,25 @@ fn qualified(columns: &[String], alias: &str) -> String {
         .join(", ")
 }
 
+/// Add a column for a restored document field if the table has not got one.
+///
+/// The synced schema is only (id, data, created_at, updated_at); the fields a
+/// document carries are whatever it happened to have. A database restoring a
+/// table it has never seen has to grow the columns as it reads them.
 fn ensure_restored_column(
     transaction: &mut postgres::Transaction<'_>,
     table: &str,
     column: &str,
     value: &serde_json::Value,
     ensured: &mut std::collections::HashSet<String>,
-) -> crate::error::Result<bool> {
+) -> crate::error::Result<()> {
     // Every row of a Parquet file has the same columns, and this used to run two
     // `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements for each field of
     // each row: a five-field table of 200,000 rows meant two million no-op DDL
     // statements, each taking a catalog lock, and a restore spent almost all of
     // its time there. Once per column per restore is enough.
     if !ensured.insert(column.to_string()) {
-        return Ok(false);
+        return Ok(());
     }
 
     let sql_type = match value {
@@ -185,25 +185,23 @@ fn ensure_restored_column(
         _ => "TEXT",
     };
 
-    // Both delta tables, because the view unions them and a UNION ALL needs the
-    // same shape on each side.
-    for target in [format!("{}_base", table), format!("{}_adds", table)] {
-        let sql = format!(
-            "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {}",
-            crate::query::quote_ident(&target),
-            crate::query::quote_ident(column),
-            sql_type
-        );
-        transaction.batch_execute(&sql).map_err(|e| {
-            crate::error::DBCenterError::QueryError(format!(
-                "Could not add column '{}' while restoring '{}': {}",
-                column,
-                target,
-                crate::utils::format_postgres_error(&e)
-            ))
-        })?;
-    }
-    Ok(true)
+    // The collection, not its partitions: PostgreSQL adds the column to both
+    // and refuses to add one to a partition on its own.
+    let sql = format!(
+        "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {}",
+        crate::query::quote_ident(table),
+        crate::query::quote_ident(column),
+        sql_type
+    );
+    transaction.batch_execute(&sql).map_err(|e| {
+        crate::error::DBCenterError::QueryError(format!(
+            "Could not add column '{}' while restoring '{}': {}",
+            column,
+            table,
+            crate::utils::format_postgres_error(&e)
+        ))
+    })?;
+    Ok(())
 }
 
 /// Turn one row of an Arrow batch into the document it came from.
@@ -319,8 +317,11 @@ impl SyncEngine {
                 crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
             })?;
 
+        // The partition column records whether a row has been synced here. It
+        // is local bookkeeping and means nothing to another node.
         let columns: Vec<SyncColumn> = rows
             .iter()
+            .filter(|r| r.get::<_, &str>("column_name") != crate::delta_manager::LAYER_COLUMN)
             .map(|r| {
                 let name: String = r.get("column_name");
                 let udt: String = r.get("udt_name");
@@ -511,8 +512,16 @@ impl SyncEngine {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
 
-        // _base and _adds are created together and altered together, so their
-        // column lists match and the names can be reused for both sides.
+        // Moving a row out of _adds is not a local edit, and the triggers that
+        // record local edits must not see it as one.
+        transaction
+            .batch_execute(crate::delta_manager::REPLICATING)
+            .map_err(|e| {
+                crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+            })?;
+
+        // _base and _adds are partitions of one table, so their column lists
+        // match and the names can be reused for both sides.
         let names: Vec<String> = columns
             .iter()
             .map(|c| crate::query::quote_ident(&c.name))
@@ -542,11 +551,10 @@ impl SyncEngine {
         // PostgreSQL ran out of memory building it ("Failed on request of size
         // 40 in memory context MessageContext"). One statement per batch is
         // still far fewer than the two per row this replaced.
-        // Updating a row marks its id in _dels, because that is how the view
-        // hides the version still sitting in _base. Once the new version has
-        // been moved into _base the marker has to go with it, or the view goes
-        // on hiding a row that is now the current one - an update followed by a
-        // sync made the row disappear from the collection entirely.
+        // Updating a synced row moves it out of _base, which leaves its id in
+        // _dels. Once the new version is back in _base the marker has to go,
+        // or a restore would treat the row as deleted here and refuse every
+        // later version of it.
         //
         // Only for the ids being moved. An id in _dels with nothing in _adds is
         // a genuine deletion and must stay.
@@ -921,7 +929,6 @@ impl SyncEngine {
 
         let mut sorted_files = files.clone();
         sorted_files.sort();
-        let mut added_columns = false;
         // Which columns this restore has already made sure of.
         let mut ensured_columns: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -964,6 +971,12 @@ impl SyncEngine {
             let mut transaction = client.transaction().map_err(|e| {
                 crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
             })?;
+            // These rows come from another node; they are not edits made here.
+            transaction
+                .batch_execute(crate::delta_manager::REPLICATING)
+                .map_err(|e| {
+                    crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
+                })?;
 
             for batch_result in reader {
                 let batch = batch_result.map_err(|e| {
@@ -993,7 +1006,7 @@ impl SyncEngine {
                         !matches!(
                             f.name().as_str(),
                             "id" | "data" | "created_at" | "updated_at"
-                        )
+                        ) && f.name() != crate::delta_manager::LAYER_COLUMN
                     })
                     .map(|f| {
                         // `quote_sql_literal` escapes the quotes inside; the
@@ -1018,18 +1031,18 @@ impl SyncEngine {
                         Ok(DataType::Boolean) => serde_json::Value::from(false),
                         _ => serde_json::Value::from(""),
                     };
-                    if ensure_restored_column(
+                    ensure_restored_column(
                         &mut transaction,
                         table_name,
                         name,
                         &sample,
                         &mut ensured_columns,
-                    )? {
-                        added_columns = true;
-                    }
+                    )?;
                 }
 
                 let base_table = format!("{}_base", table_name);
+                let adds_table = format!("{}_adds", table_name);
+                let dels_table = format!("{}_dels", table_name);
                 let conflict_table = format!("{}_conflicts", table_name);
 
                 let mut columns = vec![
@@ -1079,17 +1092,31 @@ impl SyncEngine {
                 // `<table>_conflicts` rather than dropped. `before` is read in
                 // the same statement, so it holds the row as it was before the
                 // upsert touched it.
+                //
+                // Except against an edit made here and not yet synced. The
+                // collection is partitioned and an id may only be in one
+                // partition: written into _base beside its pending version in
+                // _adds, the row would show up twice. The pending edit is what
+                // the collection shows and what the next sync sends, so the
+                // incoming version is recorded as the loser. Likewise a row
+                // deleted here is not brought back - the deletion only
+                // survives as its id in _dels.
+                //
+                // `before` reads the collection rather than _base so that it
+                // finds the pending version too.
                 let upsert_base = format!(
                     r#"
                     WITH incoming AS (
                         SELECT {select_list}
                     ),
                     before AS (
-                        SELECT * FROM "{base}" WHERE id = $1::uuid
+                        SELECT * FROM "{coll}" WHERE id = $1::uuid
                     ),
                     applied AS (
                         INSERT INTO "{base}" ({cols})
                         SELECT {cols} FROM incoming
+                        WHERE NOT EXISTS (SELECT 1 FROM "{adds}" WHERE id = $1::uuid)
+                          AND NOT EXISTS (SELECT 1 FROM "{dels}" WHERE id = $1::uuid)
                         ON CONFLICT (id) DO UPDATE SET {assignments}
                         WHERE EXCLUDED.updated_at > "{base}".updated_at
                            OR (EXCLUDED.updated_at = "{base}".updated_at
@@ -1100,7 +1127,8 @@ impl SyncEngine {
                         RETURNING id
                     )
                     INSERT INTO "{conflicts}" (id, incoming_won, incoming, existing)
-                    SELECT i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(i), to_jsonb(b)
+                    SELECT i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(i),
+                           to_jsonb(b) - '{layer}'
                     FROM before b, incoming i
                     WHERE ({b_tuple}) IS DISTINCT FROM ({i_tuple})
                     "#,
@@ -1111,6 +1139,10 @@ impl SyncEngine {
                         .collect::<Vec<_>>()
                         .join(", "),
                     base = base_table,
+                    coll = table_name,
+                    adds = adds_table,
+                    dels = dels_table,
+                    layer = crate::delta_manager::LAYER_COLUMN,
                     cols = columns.join(", "),
                     assignments = assignments.join(", "),
                     conflicts = conflict_table,
@@ -1187,14 +1219,6 @@ impl SyncEngine {
             transaction.commit().map_err(|e| {
                 crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
             })?;
-        }
-
-        // PostgreSQL freezes `SELECT *` when a view is created, so columns added
-        // during the restore are invisible through the collection until the view
-        // is rebuilt. Do it after the client lock is released - ensure_delta_tables
-        // takes it itself.
-        if added_columns {
-            DeltaManager::ensure_delta_tables(&self.db, table_name)?;
         }
 
         Ok(())
