@@ -115,7 +115,6 @@ impl PostgresProcess {
         };
         // Start PostgreSQL
         let log_path = config.data_dir.join("server.log");
-        let log_file = fs::File::create(&log_path)?;
 
         let mut cmd = Command::new(&postgres_path);
 
@@ -179,6 +178,11 @@ impl PostgresProcess {
         #[cfg(windows)]
         let started_by_pg_ctl = match pg_ctl_path(&postgres_path).filter(|p| p.exists()) {
             Some(pg_ctl) => {
+                // Truncate the log and let go of it. pg_ctl has cmd.exe open it
+                // for appending, and an open handle of ours here made that open
+                // fail: postgres never ran, the log stayed empty, and pg_ctl -W
+                // still reported success.
+                fs::File::create(&log_path)?;
                 start_with_pg_ctl(&pg_ctl, &cmd, &config.data_dir, &log_path)?;
                 true
             }
@@ -195,6 +199,7 @@ impl PostgresProcess {
 
         let mut pid = None;
         if !started_by_pg_ctl {
+            let log_file = fs::File::create(&log_path)?;
             cmd.stdout(Stdio::from(log_file.try_clone()?));
             cmd.stderr(Stdio::from(log_file));
             let child = cmd.spawn().map_err(|e| {
@@ -792,8 +797,10 @@ fn update_pg_hba_for_password(data_dir: &std::path::Path) -> Result<()> {
 ///
 /// `cmd` is the `postgres` invocation already built for a direct start; its
 /// arguments other than `-D` become pg_ctl's `-o` options and its environment
-/// (the PATH that lets extensions find their DLLs) is carried over. `-W`: the
-/// caller waits for the server itself, the same way for both start paths.
+/// (the PATH that lets extensions find their DLLs) is carried over.
+///
+/// `-w`, so pg_ctl confirms the server came up and says what went wrong if it
+/// did not, instead of reporting success for a launch that failed.
 #[cfg(windows)]
 fn start_with_pg_ctl(pg_ctl: &Path, cmd: &Command, data_dir: &Path, log_path: &Path) -> Result<()> {
     let mut options: Vec<String> = Vec::new();
@@ -820,24 +827,32 @@ fn start_with_pg_ctl(pg_ctl: &Path, cmd: &Command, data_dir: &Path, log_path: &P
             None => pg_ctl_cmd.env_remove(key),
         };
     }
-    let output = pg_ctl_cmd
+    // No pipes: the server pg_ctl leaves running inherits its handles, so
+    // capturing its output would wait for an end-of-file that never comes.
+    // Why a start failed is in the server log, which is reported instead.
+    let status = pg_ctl_cmd
         .arg("start")
-        .arg("-W")
+        .arg("-w")
+        .arg("-t")
+        .arg("60")
         .arg("-D")
         .arg(data_dir)
         .arg("-l")
         .arg(log_path)
         .arg("-o")
         .arg(options.join(" "))
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
         .map_err(|e| {
             DBCenterError::ProcessError(format!("Failed to run pg_ctl to start PostgreSQL: {}", e))
         })?;
-    if !output.status.success() {
+    if !status.success() {
+        let log = fs::read_to_string(log_path).unwrap_or_default();
         return Err(DBCenterError::ProcessError(format!(
-            "pg_ctl could not start PostgreSQL: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            "pg_ctl could not start PostgreSQL ({}). Server log:\n{}",
+            status, log
         )));
     }
     Ok(())
