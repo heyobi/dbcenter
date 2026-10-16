@@ -302,7 +302,7 @@ impl PostgresProcess {
                 {
                     // Kill all postgres child processes first
                     let _ = Command::new("taskkill")
-                        .args(&["/F", "/T", "/PID", &pid.to_string()])
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
                         .output();
 
                     // Wait for process to actually terminate by polling
@@ -390,7 +390,7 @@ impl PostgresProcess {
         #[cfg(windows)]
         {
             let output = Command::new("tasklist")
-                .args(&["/FI", &format!("PID eq {}", pid), "/NH"])
+                .args(["/FI", &format!("PID eq {}", pid), "/NH"])
                 .output()
                 .map_err(|e| {
                     DBCenterError::ProcessError(format!("Failed to check process: {}", e))
@@ -798,7 +798,7 @@ pub fn is_process_running_global(pid: u32) -> bool {
     #[cfg(windows)]
     {
         Command::new("tasklist")
-            .args(&["/FI", &format!("PID eq {}", pid), "/NH"])
+            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
             .output()
             .map(|output| {
                 let output_str = String::from_utf8_lossy(&output.stdout);
