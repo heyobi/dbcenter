@@ -57,16 +57,24 @@ jobs:
       # quietly mean they never run. Give them one.
       - name: Object storage
         if: runner.os == 'Linux'
+        # minio/minio is no longer on Docker Hub, so pulling it fails the job.
+        # Bitnami's archived build is frozen, which is fine for a test server,
+        # and creates the bucket itself.
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=dbcenter -e MINIO_ROOT_PASSWORD=dbcenter123 \
-            minio/minio:latest server /data
-          for _ in $(seq 1 30); do
-            curl -sf http://127.0.0.1:9000/minio/health/live && break
+            -e MINIO_DEFAULT_BUCKETS=dbcenter-test \
+            bitnamilegacy/minio:2025.7.23-debian-12-r5
+          # Ready means the bucket exists, not only the server: an anonymous
+          # request is refused (403) once it does and answers 404 until then.
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/dbcenter-test/ || true)
+            [ "$code" = 403 ] && exit 0
             sleep 2
           done
-          docker exec minio mc alias set local http://127.0.0.1:9000 dbcenter dbcenter123
-          docker exec minio mc mb local/dbcenter-test
+          docker logs minio
+          echo "MinIO or its bucket did not become ready (last answer: $code)" >&2
+          exit 1
 
       - name: Test object storage
         if: runner.os == 'Linux'
