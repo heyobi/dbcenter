@@ -1,0 +1,66 @@
+# DBCenter
+
+> Real PostgreSQL 18 inside a Python process, with a MongoDB-style collection API, optional sync of each collection to storage as columnar Parquet, and optional DuckDB-backed columnar reads. `pip install dbcenter`. MIT licensed.
+
+DBCenter starts an actual `postgres` server as a child process against a data directory and talks to it over a local socket. Everything is ordinary PostgreSQL underneath: any SQL works through `db.query`, and any PostgreSQL client can connect. Python is the supported binding; the C, Go, Java, Node and R bindings are experimental.
+
+## Quick start
+
+```python
+import dbcenter
+
+db = dbcenter.DBCenter(path="./data")          # persist=True by default: data survives restarts
+users = db.collection("users")
+users.insert_many([{"name": "Ali", "age": 25}, {"name": "Ayşe", "age": 31}])
+users.update_one({"name": "Ali"}, {"$set": {"age": 26}})
+adults = users.find({"age": {"$gte": 18}})       # list of dicts; each has "id" and "_id"
+rows = db.query("SELECT name FROM users WHERE age > $1 ORDER BY age DESC LIMIT 10", [20])
+db.shutdown()
+```
+
+## API (Python)
+
+- `dbcenter.DBCenter(path=None, persist=True, service=False, host=None, port=None, password=None, postgresql=None, multi_user_sync=False, columnar=False)` - starts the server. `path=None` uses a temporary directory. `postgresql` pins a major version (default 18). `host` opens TCP; otherwise only a local socket listens.
+- `db.collection(name)` -> `Collection`; the table is created on first use.
+- `db.query(sql, params=None)` -> list of dicts. Placeholders are `$1, $2, ...`; params are bound, never interpolated.
+- `db.list_collections()`, `db.drop_collection(name)`, `db.install_extension(name, version=None)`, `db.shutdown()`, `db.port`, `db.path`.
+- `Collection`: `insert_one(doc) -> id`, `insert_many(docs) -> [id]`, `find(query=None) -> [doc]`, `find_one(query=None)`, `count(query=None)`, `update_one(query, update) -> int`, `update_many(query, update) -> int`, `delete_one(query) -> int`, `delete_many(query=None) -> int`, `create_index(field, index_type)` (`btree`, `hash`, `gin`, `gist`, `spgist`, `brin`), `fuzzy_search(query, field, mode=None, threshold=None)` (`mode` is `"substring"` or `"exact"`; uses pg_trgm), `similarity(a, b)`, `to_pandas()`, `to_polars()`, `to_arrow()`.
+- Query operators: `$eq $ne $gt $gte $lt $lte $in $nin $exists $regex`. Update: `{"$set": {...}}`, or a plain `{field: value}` map, which sets those fields. No other update operator exists yet (`$inc`, `$unset`, `$push` raise).
+- `db.geo_collection(name)`: documents with `lat` and `lon` fields; `find_within_radius(lat, lon, radius_km)`, `distance_between(id_a, id_b)` (metres), `contains_point(polygon_id, lat, lon)`. Installs PostGIS on first use.
+- `db.vector_store(name, dimension)`: pgvector; `add(ids, embeddings, metadatas=None)`, `query(query_embeddings, n_results=10, where=None)`.
+- Extensions: `install_extension("postgis")`, `"pgvector"`, `"pg_trgm"`, `"pg_duckdb"`. Archives are checked against pinned SHA-256 digests; a PostgreSQL major with no published build is an error, not a fallback.
+
+## Sync and columnar reads
+
+```python
+import dbcenter
+
+db = dbcenter.DBCenter(path="./data", multi_user_sync=True)
+sync = dbcenter.SyncEngine(db, dbcenter.LocalStorageAdapter("./bucket"))
+db.collection("orders").insert_one({"ref": "A-1", "total": 10.5})
+sync.sync_table("orders", 10_000)        # pending rows -> one Parquet file, returns the count
+db.shutdown()
+```
+
+- In `multi_user_sync` mode a collection `orders` is a table partitioned into `orders_base` (synced) and `orders_adds` (pending), with `orders_dels` (ids deleted here) and `orders_conflicts` (versions a pull discarded) beside it. Read and write `orders`; never write the other tables directly.
+- `SyncEngine(db, storage)`: `sync_table(name, limit)`, `pull_and_apply(name, partial=False)` (rebuild from storage; `partial=True` skips the base snapshot), `vacuum(name)` (compact deltas into a new base), `ensure_columnar_view(name)`, `smart_query(name, id)` (a point lookup straight from Parquet, no extension needed).
+- Storage adapters in Python: `LocalStorageAdapter(path)` and `GoogleDriveAdapter(credential_path, root_folder_name)`. S3 is used from Rust and from the `dbcenter-serve` container, not from the Python package.
+- Conflicts are last-write-wins on `updated_at`; ties break identically on every node; the losing version goes to `<name>_conflicts`. Two nodes incrementing one counter still end at one increment.
+- `columnar=True` (with `multi_user_sync=True`) publishes `<name>_columnar`, the synced Parquet read through DuckDB: use it for aggregates. Use the collection itself for writes and point lookups - DuckDB cannot use PostgreSQL's indexes.
+
+## Gotchas
+
+- PostgreSQL refuses to run as root (and, on Windows up to 0.4.0, as administrator). Run as an ordinary user, including inside containers.
+- `Collection.find()` has no limit, skip or sort; the extra parameters are accepted and ignored. Use `db.query("SELECT ... ORDER BY ... LIMIT ...")`.
+- Attribute access on a `Collection` reads a column: `coll.name` returns the values of a field called `name`, not the collection's name. `db.users` is the same as `db.collection("users")`.
+- `delete_many()` with no query deletes every document. An unknown operator such as `{"age": {"$typo": 1}}` raises rather than matching everything.
+- Each document field becomes a column, typed from the first value seen (`BIGINT`, `DOUBLE PRECISION`, `TEXT`, `BOOLEAN`, `JSONB`). In sync mode the field names `data` and `_layer` are reserved.
+- A client connected over the wire protocol cannot add columns; fields it writes that have no column land in `data`. Insert through the Python API, or declare the schema (`DBCENTER_SCHEMA` for `dbcenter-serve`).
+
+## Docs
+
+- [README](https://github.com/heyobi/dbcenter/blob/main/README.md): architecture, diagrams, the container, extensions
+- [STATUS.md](https://github.com/heyobi/dbcenter/blob/main/STATUS.md): what works, what is broken, what is next
+- [docs/cost-and-scale.md](https://github.com/heyobi/dbcenter/blob/main/docs/cost-and-scale.md): speed and price against PostgreSQL, measured
+- [docs/columnar-reads.md](https://github.com/heyobi/dbcenter/blob/main/docs/columnar-reads.md): why there are two read paths
+- [docs/deploying.md](https://github.com/heyobi/dbcenter/blob/main/docs/deploying.md): in a process, as a container, on Fly.io

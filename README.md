@@ -1,30 +1,78 @@
-# DBCenter - Rust Edition
+# DBCenter
 
-**PostgreSQL as a SQLite/MongoDB** - Embedded PostgreSQL with MongoDB-style API, now written in Rust for maximum performance and safety.
+**Real PostgreSQL inside your Python process, with a MongoDB-style API - and an
+optional sync of every collection to object storage as columnar Parquet.**
+
+`pip install dbcenter` brings a PostgreSQL 18 server with it. There is nothing
+to install or run separately: `DBCenter(path=...)` starts it against a data
+directory, and `shutdown()` stops it. Under the API it is ordinary PostgreSQL,
+so psql, pgAdmin and every PostgreSQL driver can connect to the same database.
+
+```bash
+pip install dbcenter
+```
+
+```python
+import dbcenter
+
+db = dbcenter.DBCenter(path="./data")      # starts PostgreSQL; the data stays in ./data
+users = db.collection("users")
+
+users.insert_many([{"name": "Ali", "age": 25}, {"name": "Ayşe", "age": 31}])
+users.update_one({"name": "Ali"}, {"$set": {"age": 26}})
+
+print(users.find({"age": {"$gt": 18}}))    # documents, as dicts
+print(db.query("SELECT name, age FROM users WHERE age > $1 ORDER BY age", [20]))
+
+db.shutdown()
+```
+
+Turn on sync and each collection keeps track of what changed since the last
+sync, so it can ship just that to storage and rebuild from it on another machine:
+
+```python
+import dbcenter
+
+db = dbcenter.DBCenter(path="./data", multi_user_sync=True)
+sync = dbcenter.SyncEngine(db, dbcenter.LocalStorageAdapter("./bucket"))
+
+orders = db.collection("orders")
+orders.insert_one({"ref": "A-1", "total": 10.5})
+print(sync.sync_table("orders", 10_000))   # rows written out as Parquet: 1
+
+db.shutdown()
+```
+
+PostgreSQL refuses to run as root, so run as an ordinary user - inside a
+container too.
 
 ## Features
 
-- 🚀 **Embedded PostgreSQL** - No external dependencies, runs locally
-- 🔥 **MongoDB-style API** - Familiar NoSQL interface with PostgreSQL power
-- 🌍 **Python bindings**, with C, Go, Java, Node and R as experimental extras
-- 📊 **PostGIS** - Full geospatial database support
-- ⚡ **High Performance** - Rust's zero-cost abstractions
-- 🔒 **Memory Safe** - No segfaults, no data races
-- 🎯 **Type Safe** - Compile-time guarantees
+- **Embedded PostgreSQL 18**, downloaded once and cached; no server to install.
+- **MongoDB-style collections**: `insert_one/many`, `find`, `update_one/many`,
+  `delete_one/many`, `count`, with `$eq $ne $gt $gte $lt $lte $in $nin $exists
+  $regex`, and `$set` for updates. Each document field becomes a real column, so SQL sees
+  an ordinary table. An unknown operator is an error, never a silently dropped
+  condition.
+- **Sync to storage** in `multi_user_sync` mode: changes go out as Parquet with
+  one column per field, and another machine can rebuild the collection from
+  them. Conflicts are last-write-wins, and the losing version is kept in
+  `<collection>_conflicts`.
+- **Columnar reads** with `columnar=True`: `<collection>_columnar` reads the
+  synced Parquet through DuckDB (pg_duckdb) - about 10x PostgreSQL on an
+  aggregate - while the collection itself stays plain PostgreSQL for writes and
+  lookups.
+- **Extensions**: `install_extension("postgis")`, `"pgvector"`,
+  `"pg_trgm"`, `"pg_duckdb"`, verified against pinned checksums. Geo and vector
+  helpers: `geo_collection`, `vector_store`, `fuzzy_search`.
+- **The PostgreSQL wire protocol**, so any language can connect with its normal
+  driver; `dbcenter-serve` runs it as a container with S3 behind it.
 
 ## Language Bindings
 
 **Python is the supported binding.** It is the one with a test suite
 (`python_tests/`, run on every push), the one published to PyPI, and the one
 every feature lands in first.
-
-```python
-from dbcenter import DBCenter
-
-db = DBCenter(path="./data")
-db.users.insert_one({"name": "Ali", "age": 25})
-users = db.users.find({"age": {"$gt": 18}})
-```
 
 The C, Go, Java, Node and R bindings are **experimental**. They are thin
 wrappers over the same `dbcenter-ffi` surface and CI keeps them compiling, but
@@ -40,7 +88,9 @@ dbcenter_insert_one(db, "users", "{\"name\":\"Ali\",\"age\":25}");
 ```
 
 ```go
-import "github.com/heyobi/dbcenter-go"
+// Built from a checkout: the module is `dbcenter` (dbcenter-go/go.mod) and is
+// not published, so point a `replace` directive at dbcenter-go.
+import "dbcenter"
 
 db := dbcenter.New("./data")
 db.Collection("users").InsertOne(map[string]interface{}{
@@ -458,14 +508,26 @@ maturin build --release
 cargo build --release -p dbcenter-ffi
 ```
 
-## Performance
+## Measured
 
-Rust implementation provides:
-- **3-5x faster** startup time
-- **2x lower** memory footprint
-- **Zero-cost** abstractions
-- **Safe concurrency** with no data races
+Every number in this repository was measured, and the method is written down
+beside it. The headline ones:
 
-## Original Python Version
+| | DBCenter | PostgreSQL |
+|---|---|---|
+| aggregate over 200,000 rows, 1 core and 1 GB | 19.7 ms (columnar) | 188.7 ms |
+| aggregate over 1,000,000 rows | 45.7x faster (columnar) | baseline |
+| 100 GB, on list prices | about $7.69 a month | $36.50 (Supabase Pro) |
 
-This is a Rust rewrite of the original Python dbcenter library, maintaining API compatibility while adding performance and safety.
+A synced collection answers an ordered `LIMIT` from its indexes, like a plain
+table: the newest 100 of 200,000 rows in 0.07 ms, where 0.3.0 took 46.7 ms.
+
+And where it is weaker: a point lookup that has to reach object storage costs
+216 ms against 0.4 ms, so lazy restore is for archival tables, not the one an
+API reads; and compacting a million-row table does not yet fit in 1 GB.
+[docs/cost-and-scale.md](docs/cost-and-scale.md) and
+[docs/columnar-reads.md](docs/columnar-reads.md) have the rigs and the rest.
+
+## License
+
+MIT - see [LICENSE](LICENSE).

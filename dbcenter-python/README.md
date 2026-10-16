@@ -43,9 +43,11 @@ db.collection("cities").fuzzy_search("Istanbu", "name")
   its own GEOS and PROJ, so it works on a machine with nothing installed.
 - **A collection API** over ordinary relational tables. Columns are added as
   documents introduce fields.
-- **Sync to object storage**, optionally: S3, anything S3-compatible, or Google
-  Drive. Tables are written as Parquet, and a lookup reads the row groups it
-  needs rather than the whole file.
+- **Sync to storage**, optionally, with `multi_user_sync=True` and a
+  `SyncEngine`: a local directory or Google Drive from Python, and S3 or anything
+  S3-compatible through the `dbcenter-serve` container. Tables are written as
+  Parquet with a column per field, and `columnar=True` reads them back through
+  DuckDB for aggregates.
 
 ## Notes
 
