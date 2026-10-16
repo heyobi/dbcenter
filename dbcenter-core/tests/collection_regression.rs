@@ -155,6 +155,52 @@ fn fuzzy_search_works_on_the_relational_layout() {
 }
 
 #[test]
+fn fuzzy_search_and_create_index_work_on_a_synced_collection() {
+    // A synced collection has a `data` JSONB column, so field_as_text used to
+    // address `data->>'name'` - but insert_one puts each field in a column of
+    // its own and leaves `data` null. fuzzy_search found nothing and
+    // create_index indexed a column of nulls, with no error from either.
+    let path = std::env::temp_dir().join("dbcenter_fuzzy_synced");
+    let _ = std::fs::remove_dir_all(&path);
+    let db = DBCenter::builder()
+        .path(&path)
+        .persist(false)
+        .multi_user_sync_mode(true)
+        .build()
+        .expect("embedded postgres should start");
+
+    let c = db.collection("cities");
+    c.insert_many(&[
+        json!({"name": "Istanbul"}),
+        json!({"name": "Ankara"}),
+        json!({"name": "Izmir"}),
+    ])
+    .unwrap();
+
+    let hits = c.fuzzy_search("Istanbu", "name", None, None).unwrap();
+    assert!(!hits.is_empty(), "expected a fuzzy match for 'Istanbu'");
+    assert_eq!(hits[0]["name"], json!("Istanbul"));
+    // The partition column is bookkeeping, as in find().
+    assert!(hits[0].get("_layer").is_none(), "{:?}", hits[0]);
+
+    c.create_index("name", "btree").unwrap();
+    let def = db
+        .query(
+            "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_cities_name_btree'",
+            &[],
+        )
+        .unwrap();
+    let def = def[0]["indexdef"].as_str().unwrap().to_string();
+    assert!(
+        // PostgreSQL drops the ::text on a column that is already text.
+        def.contains("(name)") && !def.contains("data"),
+        "the index is not on the field's column: {def}"
+    );
+
+    db.shutdown().unwrap();
+}
+
+#[test]
 #[cfg(unix)]
 fn starts_from_a_data_directory_too_deep_for_a_unix_socket() {
     // sockaddr_un.sun_path holds 108 bytes, so a data directory much more than

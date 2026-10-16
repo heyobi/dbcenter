@@ -35,6 +35,10 @@ Fixed and verified against a real server:
 - TCP listening works on Unix, auth fails closed, and the engine starts offline.
 - The workspace compiles: the Java and Node bindings had drifted out of sync with
   `DBCenter::new` and nothing built them.
+- `fuzzy_search` and `create_index` work on a synced collection. They addressed
+  `data->>'field'` whenever the table had a `data` column, which a synced one
+  always has, while `insert_one` keeps each field in a column of its own - so
+  the search found nothing and the index held nulls, silently.
 
 **A synced collection reads like a table now.** It was a view, `_adds UNION ALL
 (_base minus _adds minus _dels)`, and PostgreSQL cannot push an ORDER BY ...
@@ -84,12 +88,6 @@ because a wire-protocol client never goes through `collection()`. Checked on
 PostgreSQL 18 and 12, the newest and oldest majors offered.
 
 ## What is still wrong
-
-**`fuzzy_search` finds nothing on a synced collection, and `create_index`
-indexes nothing.** `field_as_text` sees the `data` column and addresses
-`data->>'field'`, but `insert_one` stores fields in their own columns, so `data`
-is null. Verified: the same document is found with sync off and not with it on.
-Not new - it was the same through the view.
 
 **Delta mode on PostgreSQL 12 needs pgcrypto** for `gen_random_uuid()`, which
 became built-in in 13. Nothing installs it. Not new either; found while checking
