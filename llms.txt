@@ -22,7 +22,7 @@ db.shutdown()
 
 - `dbcenter.DBCenter(path=None, persist=True, service=False, host=None, port=None, password=None, postgresql=None, multi_user_sync=False, columnar=False)` - starts the server. `path=None` uses a temporary directory. `postgresql` pins a major version (default 18). `host` opens TCP; otherwise only a local socket listens.
 - `db.collection(name)` -> `Collection`; the table is created on first use.
-- `db.query(sql, params=None)` -> list of dicts. Placeholders are `$1, $2, ...`; params are bound, never interpolated.
+- `db.query(sql, params=None, read_only=False)` -> list of dicts. Placeholders are `$1, $2, ...`; params are bound, never interpolated. `read_only=True` runs it in a READ ONLY transaction that is rolled back, so PostgreSQL refuses any write.
 - `db.list_collections()`, `db.drop_collection(name)`, `db.install_extension(name, version=None)`, `db.shutdown()`, `db.port`, `db.path`.
 - `Collection`: `insert_one(doc) -> id`, `insert_many(docs) -> [id]`, `find(query=None) -> [doc]`, `find_one(query=None)`, `count(query=None)`, `update_one(query, update) -> int`, `update_many(query, update) -> int`, `delete_one(query) -> int`, `delete_many(query=None) -> int`, `create_index(field, index_type)` (`btree`, `hash`, `gin`, `gist`, `spgist`, `brin`), `fuzzy_search(query, field, mode=None, threshold=None)` (`mode` is `"substring"` or `"exact"`; uses pg_trgm), `similarity(a, b)`, `to_pandas()`, `to_polars()`, `to_arrow()`.
 - Query operators: `$eq $ne $gt $gte $lt $lte $in $nin $exists $regex`. Update: `{"$set": {...}}`, or a plain `{field: value}` map, which sets those fields. No other update operator exists yet (`$inc`, `$unset`, `$push` raise).
@@ -48,6 +48,10 @@ db.shutdown()
 - Conflicts are last-write-wins on `updated_at`; ties break identically on every node; the losing version goes to `<name>_conflicts`. Two nodes incrementing one counter still end at one increment.
 - `columnar=True` (with `multi_user_sync=True`) publishes `<name>_columnar`, the synced Parquet read through DuckDB: use it for aggregates. Use the collection itself for writes and point lookups - DuckDB cannot use PostgreSQL's indexes.
 
+## MCP
+
+`pip install "dbcenter[mcp]"` (Python 3.10+), then `dbcenter-mcp --path /absolute/path/to/data` serves the database over stdio. Tools: `list_collections`, `describe_collection`, `find`, `count`, `sql` (read-only: each statement runs in a READ ONLY transaction that is rolled back), and with `--allow-writes` also `insert`, `update`, `delete` (refuses an empty query) and `execute`. From Python, `db.query(sql, params, read_only=True)` gives the same guarantee.
+
 ## Gotchas
 
 - PostgreSQL refuses to run as root (and, on Windows up to 0.4.0, as administrator). Run as an ordinary user, including inside containers.
@@ -64,3 +68,4 @@ db.shutdown()
 - [docs/cost-and-scale.md](https://github.com/heyobi/dbcenter/blob/main/docs/cost-and-scale.md): speed and price against PostgreSQL, measured
 - [docs/columnar-reads.md](https://github.com/heyobi/dbcenter/blob/main/docs/columnar-reads.md): why there are two read paths
 - [docs/deploying.md](https://github.com/heyobi/dbcenter/blob/main/docs/deploying.md): in a process, as a container, on Fly.io
+- [docs/mcp.md](https://github.com/heyobi/dbcenter/blob/main/docs/mcp.md): the MCP server, its tools, and what read-only guarantees

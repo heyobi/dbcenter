@@ -67,6 +67,10 @@ container too.
   helpers: `geo_collection`, `vector_store`, `fuzzy_search`.
 - **The PostgreSQL wire protocol**, so any language can connect with its normal
   driver; `dbcenter-serve` runs it as a container with S3 behind it.
+- **An MCP server for language models**: `pip install "dbcenter[mcp]"`, then
+  `dbcenter-mcp --path ./data`. Read-only unless started with `--allow-writes`,
+  and read-only means PostgreSQL refuses the write, not that the SQL was
+  inspected. See [docs/mcp.md](docs/mcp.md).
 
 ## Language Bindings
 
