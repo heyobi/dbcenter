@@ -4,11 +4,14 @@ use crate::error::{DBCenterError, Result};
 use crate::utils;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub struct PostgresProcess {
-    child: Option<Child>,
+    /// The postmaster's PID. On Windows the server is started by `pg_ctl`,
+    /// which exits once it has launched it, so this comes from `postmaster.pid`
+    /// rather than from a child handle.
+    pid: Option<u32>,
     host: String,
     port: u16,
     /// Unix socket directory, kept so callers can locate the socket and so the
@@ -63,6 +66,28 @@ fn choose_socket_dir(data_dir: &Path, port: u16) -> Result<PathBuf> {
     Ok(fallback)
 }
 
+/// `pg_ctl`, which sits beside `postgres` in the distribution's `bin`.
+fn pg_ctl_path(postgres_path: &Path) -> Option<PathBuf> {
+    postgres_path.parent().and_then(|p| p.parent()).map(|p| {
+        p.join("bin").join(if cfg!(windows) {
+            "pg_ctl.exe"
+        } else {
+            "pg_ctl"
+        })
+    })
+}
+
+/// The postmaster's PID, from the first line of `postmaster.pid`.
+fn postmaster_pid(data_dir: &Path) -> Option<u32> {
+    fs::read_to_string(data_dir.join("postmaster.pid"))
+        .ok()?
+        .lines()
+        .next()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 impl PostgresProcess {
     /// Start PostgreSQL server
     pub fn start(config: &DBCenterConfig) -> Result<Self> {
@@ -90,7 +115,6 @@ impl PostgresProcess {
         };
         // Start PostgreSQL
         let log_path = config.data_dir.join("server.log");
-        let log_file = fs::File::create(&log_path)?;
 
         let mut cmd = Command::new(&postgres_path);
 
@@ -144,15 +168,48 @@ impl PostgresProcess {
             }
         }
 
-        cmd.stdout(Stdio::from(log_file.try_clone()?));
-        cmd.stderr(Stdio::from(log_file));
+        // On Windows, through pg_ctl. PostgreSQL refuses to run under an
+        // administrator's token ("Execution of PostgreSQL by a user with
+        // administrative permissions is not permitted"), and starting
+        // postgres.exe directly meant anyone running Python as administrator -
+        // GitHub's Windows runners included - could not open a database at all.
+        // pg_ctl launches the server with that token's privileges dropped, which
+        // is PostgreSQL's own answer to it, and is harmless for everyone else.
+        #[cfg(windows)]
+        let started_by_pg_ctl = match pg_ctl_path(&postgres_path).filter(|p| p.exists()) {
+            Some(pg_ctl) => {
+                // Truncate the log and let go of it. pg_ctl has cmd.exe open it
+                // for appending, and an open handle of ours here made that open
+                // fail: postgres never ran, the log stayed empty, and pg_ctl -W
+                // still reported success.
+                fs::File::create(&log_path)?;
+                start_with_pg_ctl(&pg_ctl, &cmd, &config.data_dir, &log_path)?;
+                true
+            }
+            None => {
+                tracing::warn!(
+                    "pg_ctl.exe not found beside postgres.exe; starting the server \
+                     directly, which fails under an administrator account"
+                );
+                false
+            }
+        };
+        #[cfg(not(windows))]
+        let started_by_pg_ctl = false;
 
-        let child = cmd.spawn().map_err(|e| {
-            DBCenterError::ProcessError(format!("Failed to start PostgreSQL: {}", e))
-        })?;
+        let mut pid = None;
+        if !started_by_pg_ctl {
+            let log_file = fs::File::create(&log_path)?;
+            cmd.stdout(Stdio::from(log_file.try_clone()?));
+            cmd.stderr(Stdio::from(log_file));
+            let child = cmd.spawn().map_err(|e| {
+                DBCenterError::ProcessError(format!("Failed to start PostgreSQL: {}", e))
+            })?;
+            pid = Some(child.id());
+        }
 
-        let process = PostgresProcess {
-            child: Some(child),
+        let mut process = PostgresProcess {
+            pid,
             host: listen_host.clone(),
             port,
             socket_dir,
@@ -162,13 +219,17 @@ impl PostgresProcess {
         let conn_str = process.connection_string(config);
         wait_for_ready(&conn_str, &config.data_dir)?;
 
+        if process.pid.is_none() {
+            process.pid = postmaster_pid(&config.data_dir);
+        }
+
         tracing::info!("PostgreSQL listening on {}:{}", listen_host, port);
 
         Ok(process)
     }
 
     pub fn pid(&self) -> Option<u32> {
-        self.child.as_ref().map(|child| child.id())
+        self.pid
     }
 
     pub fn get_port(&self) -> u16 {
@@ -243,13 +304,7 @@ impl PostgresProcess {
 
         // First, try graceful shutdown with pg_ctl
         let pg_ctl_result = if let Ok((_, postgres_path)) = binary::ensure_binaries(config) {
-            let pg_ctl_path = postgres_path.parent().and_then(|p| p.parent()).map(|p| {
-                p.join("bin").join(if cfg!(windows) {
-                    "pg_ctl.exe"
-                } else {
-                    "pg_ctl"
-                })
-            });
+            let pg_ctl_path = pg_ctl_path(&postgres_path);
 
             if let Some(pg_ctl) = pg_ctl_path {
                 if pg_ctl.exists() {
@@ -294,8 +349,7 @@ impl PostgresProcess {
 
         // If pg_ctl didn't work, fall back to process termination
         if pg_ctl_result.is_none() {
-            if let Some(child_ref) = self.child.as_ref() {
-                let pid = child_ref.id();
+            if let Some(pid) = self.pid {
                 tracing::info!("Falling back to process termination for PID {}", pid);
 
                 #[cfg(windows)]
@@ -739,6 +793,71 @@ fn update_pg_hba_for_password(data_dir: &std::path::Path) -> Result<()> {
 }
 
 /// Wait for PostgreSQL to be ready
+/// Start the server the way `cmd` would, but through `pg_ctl start`.
+///
+/// `cmd` is the `postgres` invocation already built for a direct start; its
+/// arguments other than `-D` become pg_ctl's `-o` options and its environment
+/// (the PATH that lets extensions find their DLLs) is carried over.
+///
+/// `-w`, so pg_ctl confirms the server came up and says what went wrong if it
+/// did not, instead of reporting success for a launch that failed.
+#[cfg(windows)]
+fn start_with_pg_ctl(pg_ctl: &Path, cmd: &Command, data_dir: &Path, log_path: &Path) -> Result<()> {
+    let mut options: Vec<String> = Vec::new();
+    let mut args = cmd.get_args();
+    while let Some(arg) = args.next() {
+        if arg == "-D" {
+            args.next();
+            continue;
+        }
+        let arg = arg.to_string_lossy();
+        // pg_ctl splices the options into a command line, so an argument
+        // containing a space has to arrive quoted.
+        options.push(if arg.contains(' ') {
+            format!("\"{}\"", arg)
+        } else {
+            arg.into_owned()
+        });
+    }
+
+    let mut pg_ctl_cmd = Command::new(pg_ctl);
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => pg_ctl_cmd.env(key, value),
+            None => pg_ctl_cmd.env_remove(key),
+        };
+    }
+    // No pipes: the server pg_ctl leaves running inherits its handles, so
+    // capturing its output would wait for an end-of-file that never comes.
+    // Why a start failed is in the server log, which is reported instead.
+    let status = pg_ctl_cmd
+        .arg("start")
+        .arg("-w")
+        .arg("-t")
+        .arg("60")
+        .arg("-D")
+        .arg(data_dir)
+        .arg("-l")
+        .arg(log_path)
+        .arg("-o")
+        .arg(options.join(" "))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| {
+            DBCenterError::ProcessError(format!("Failed to run pg_ctl to start PostgreSQL: {}", e))
+        })?;
+    if !status.success() {
+        let log = fs::read_to_string(log_path).unwrap_or_default();
+        return Err(DBCenterError::ProcessError(format!(
+            "pg_ctl could not start PostgreSQL ({}). Server log:\n{}",
+            status, log
+        )));
+    }
+    Ok(())
+}
+
 fn wait_for_ready(conn_str: &str, data_dir: &std::path::Path) -> Result<()> {
     use postgres::{Client, NoTls};
 

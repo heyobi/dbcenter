@@ -12,6 +12,13 @@
 
 use crate::error::{DBCenterError, Result};
 use crate::storage::{LockFile, StorageAdapter};
+
+/// What a lock key holds. See `S3StorageAdapter::read_lock`.
+enum LockState {
+    Held(LockFile),
+    Absent,
+    Corrupt,
+}
 use hmac::{Hmac, Mac};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -301,14 +308,41 @@ impl S3StorageAdapter {
         )))
     }
 
-    fn read_lock(&self, key: &str) -> Option<LockFile> {
-        let response = self
-            .send("GET", &self.object_key(key), &[], None, &[])
-            .ok()?;
-        if !response.status().is_success() {
-            return None;
+    /// What is at a lock key.
+    ///
+    /// This used to be an Option, with None for absent, corrupt and "the
+    /// request failed" alike - and `lock` overwrites on None, so a GET that
+    /// failed in transit handed a live lease to a second worker. Under the S3
+    /// tests' parallel load that happened about once in fifty runs against
+    /// MinIO ("error sending request" on a pooled connection): two workers
+    /// holding the vacuum lock, which is the one thing the lock is for.
+    fn read_lock(&self, key: &str) -> Result<LockState> {
+        // Once more on a failure in transit: a pooled connection the server
+        // has already closed fails the first request and not the second.
+        let response = match self.send("GET", &self.object_key(key), &[], None, &[]) {
+            Ok(response) => response,
+            Err(first) => {
+                tracing::debug!("Lock read failed, retrying once: {}", first);
+                self.send("GET", &self.object_key(key), &[], None, &[])?
+            }
+        };
+        let status = response.status();
+        if status == StatusCode::NOT_FOUND {
+            return Ok(LockState::Absent);
         }
-        serde_json::from_slice(&response.bytes().ok()?).ok()
+        if !status.is_success() {
+            return Err(DBCenterError::StorageError(format!(
+                "Reading lock '{}' failed with {}",
+                key, status
+            )));
+        }
+        let body = response
+            .bytes()
+            .map_err(|e| DBCenterError::StorageError(format!("Reading lock '{}': {}", key, e)))?;
+        Ok(match serde_json::from_slice(&body) {
+            Ok(lock) => LockState::Held(lock),
+            Err(_) => LockState::Corrupt,
+        })
     }
 
     fn write_lock(&self, key: &str, lock: &LockFile, only_if_absent: bool) -> Result<bool> {
@@ -509,8 +543,8 @@ impl StorageAdapter for S3StorageAdapter {
 
         // Someone holds it. Take it over only if their lease has run out.
         match self.read_lock(key) {
-            Some(existing) if existing.expires_at > now_millis() => Ok(false),
-            Some(existing) => {
+            Ok(LockState::Held(existing)) if existing.expires_at > now_millis() => Ok(false),
+            Ok(LockState::Held(existing)) => {
                 tracing::warn!(
                     "Recovering stale lock: {} (held by {}, expired at {})",
                     key,
@@ -519,17 +553,25 @@ impl StorageAdapter for S3StorageAdapter {
                 );
                 self.write_lock(key, &lock, false)
             }
-            None => {
-                // Unreadable or corrupt. Overwrite rather than deadlock forever.
-                tracing::error!("Lock {} is unreadable; overwriting", key);
+            // Released between the two requests: the atomic create again.
+            Ok(LockState::Absent) => self.write_lock(key, &lock, true),
+            Ok(LockState::Corrupt) => {
+                // Garbage at the key. Overwrite rather than deadlock forever.
+                tracing::error!("Lock {} is corrupt; overwriting", key);
                 self.write_lock(key, &lock, false)
+            }
+            // Could not see who holds it, so it is not ours to take: report
+            // it held, and the caller tries again later.
+            Err(e) => {
+                tracing::warn!("Could not read lock {}; treating it as held: {}", key, e);
+                Ok(false)
             }
         }
     }
 
     fn refresh_lock(&self, key: &str, ttl_ms: u64, worker_id: &str) -> Result<bool> {
         match self.read_lock(key) {
-            Some(existing) if existing.worker_id == worker_id => {
+            Ok(LockState::Held(existing)) if existing.worker_id == worker_id => {
                 let lock = LockFile {
                     expires_at: now_millis() + ttl_ms,
                     worker_id: worker_id.to_string(),
@@ -544,7 +586,7 @@ impl StorageAdapter for S3StorageAdapter {
         // Only release a lock we still hold, so a slow worker cannot delete the
         // lease that has since been handed to someone else.
         match self.read_lock(key) {
-            Some(existing) if existing.worker_id == worker_id => self.delete(key),
+            Ok(LockState::Held(existing)) if existing.worker_id == worker_id => self.delete(key),
             _ => Ok(()),
         }
     }
