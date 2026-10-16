@@ -184,41 +184,154 @@ not fit in 1 GB** - it reads the whole base back to rewrite it, and the containe
 stalls at its memory ceiling. The full write-up, with the rig, is in
 `docs/cost-and-scale.md`.
 
+## Handover: the `delta-inheritance` branch
+
+Picked up on 16 October 2026 and left unfinished because the machine it was
+being built on shuts itself down. Everything is pushed to
+`origin/delta-inheritance`. It builds, `cargo fmt` is clean, and nothing is
+merged to `main`.
+
+### What the branch does
+
+Item 1 below, built. A synced collection stops being a `UNION ALL` view over
+`_base`, `_adds` and `_dels` and becomes a **table those two inherit from**, so
+an ordered, limited read is a `Merge Append` over one index per child that stops
+when it has enough rows.
+
+**Inheritance, not declarative partitioning**, and the reason is worth keeping:
+a partitioned table's key has to be a real column, which would put a `part_key`
+into every `SELECT *` a caller writes, and its primary key has to contain that
+key, so `ON CONFLICT (id)` - which the restore and the compaction both lean on -
+would stop meaning what it says. Children of an inherited parent have exactly
+the parent's columns and a primary key on `id` alone, which is why almost every
+existing `INSERT INTO x_adds` / `SELECT FROM x_base` statement needed no change
+at all. Measured side by side in `scripts/shape-experiment/run.sh`: inheritance
+0.152 ms on the ordered read against partitioning's 0.134 ms and the view's
+295.7 ms, and inheritance was the faster of the two on the aggregate.
+
+### Where to turn it on
+
+Off by default, so `main`'s behaviour is untouched until it is flipped.
+
+| | |
+|---|---|
+| `DBCenter::builder().inherited_delta(true)` | per instance |
+| `DBCENTER_INHERITED_DELTA=1` / `=0` | forces either way, overrides the builder |
+| `DBCENTER_MIGRATE_DELTA=1` | `dbcenter-serve` converts existing collections at startup |
+
+A collection keeps the shape it was created with. `DeltaManager::shape_on_disk`
+reads the catalog, caches the answer, and `migrate_to_inherited` is the only
+thing that changes it - so a data directory written by an older release still
+opens and still works.
+
+### The four things that had to change, and why
+
+1. **The restore refuses rows the local node knows better about.** A row in
+   `_adds` is an edit made here and not pushed; a row in `_dels` was deleted
+   here. The view hid both of those behind its anti-joins. Nothing hides them
+   now, so the upsert into `_base` carries `NOT EXISTS (_adds) AND NOT EXISTS
+   (_dels)` and the discarded incoming version is written to `_conflicts`
+   instead of silently appearing as a second copy of the row.
+2. **Sync writes run as replication.** `ON CONFLICT (id) DO UPDATE` on `_base`
+   is an UPDATE, so it fired the trigger that promotes an edited row into
+   `_adds` - and the restore moved every row it touched straight back out of
+   `_base`. Both sync transactions now `SET LOCAL session_replication_role =
+   'replica'`. This cost two red tests in `conflicts.rs` to find and is the
+   single least obvious thing on the branch.
+3. **Columns go on the parent.** `ALTER TABLE parent ADD COLUMN` cascades to
+   both children; altering the children would leave the parent - the table every
+   read goes through - without the column. `Collection::ensure_columns` and
+   `sync_engine::ensure_restored_column` both branch on the shape.
+4. **Indexes go on the children.** An index never cascades, and in the old shape
+   `create_index` aimed at the collection, which was a view - so it had simply
+   been broken in delta mode. It now builds one index per child, which is also
+   where the merge append needs it.
+
+A latent bug in the **old** shape turned up on the way and is fixed on this
+branch too: `before` in the restore's conflict CTE read the collection, and a
+view freezes its column list when it is created, so a restore that was adding
+columns tripped over its own view. It reads `_base` and `_adds` directly now,
+with the same precedence a read would give them.
+
+### What is verified and what is not
+
+- Full `dbcenter-core` suite in the **old** shape: green, except
+  `shape.rs::an_ordered_limited_query_stops_when_it_has_enough_rows`, which is
+  the test that describes the new shape and is expected to fail there.
+- Full suite in the **new** shape: `lib`, `columnar`, `concurrency` green;
+  `conflicts` was red, the replication-role fix went in, **and the re-run was
+  cut off before it finished**. Start here.
+- Python suite, `dbcenter-serve`, the cost rig: not run in the new shape at all.
+
+### Next, on a machine that stays up
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# 1. the thing that was interrupted
+DBCENTER_INHERITED_DELTA=1 cargo test -p dbcenter-core -- --test-threads=1
+cargo test -p dbcenter-core -- --test-threads=1          # and the old shape still
+
+# 2. clippy, which has not been run on this branch at all
+cargo clippy -p dbcenter-core -p dbcenter-serve --all-targets -- -D warnings
+
+# 3. the Python bindings, both ways
+VIRTUAL_ENV=<venv> maturin develop
+cd python_tests && python -m pytest
+DBCENTER_INHERITED_DELTA=1 python -m pytest
+
+# 4. a migration test that does not exist yet: build a collection in view
+#    shape, put rows in all three tables, migrate, assert the same rows come
+#    back exactly once. `migrate_to_inherited` is written and unexercised.
+
+# 5. the fly.io rig, in the new shape, which is the number the change is for
+docker compose -f scripts/cost-experiment/docker-compose.yml up -d storage storage-init
+python scripts/cost-experiment/run.py --rows 200000      # old shape, for the baseline
+DBCENTER_INHERITED_DELTA=1 python scripts/cost-experiment/run.py --rows 200000
+#    `recent_window` is the row to watch: 103.8 ms today, and the scratch
+#    experiment says it should land near PostgreSQL's 0.7 ms.
+#    Then the 20 ms latency profile, then scale.py for the read tier.
+
+# 6. only then flip the default to true in DBCenterConfig::default and
+#    DBCenterBuilder::new, update README/CLAUDE.md/docs, and merge.
+```
+
+### Traps this branch adds
+
+- **`write_table()` still writes straight to `_adds`**, bypassing the parent's
+  route trigger. That is deliberate and fast, and it is safe only because
+  `insert_one` strips a caller's `id`. Anything that starts honouring a
+  caller-supplied id has to go through the parent instead, or it will put the
+  same id in both children and the collection will show the row twice.
+- **No trigger on `_adds`, on purpose.** The compaction deletes from it a batch
+  at a time, and a per-row trigger there is exactly the cost this layer spent a
+  week removing. Tombstones are written by a trigger on `_base`, which is the
+  only table a pull can resurrect a row into.
+- **`_dels` is local and is never pushed.** It was like that before; the
+  inherited shape makes it load-bearing for the restore guard rather than for
+  every read, so a deletion still does not propagate between nodes. Worth
+  deciding on deliberately rather than inheriting by accident.
+
 ## Next, in order
 
-1. **Make the collection view answer an ordered, limited query without sorting
-   everything.** 103.8 ms against 0.7 ms is the largest single gap between
-   DBCenter and the PostgreSQL underneath it, and it is paid by every query that
-   is not a point lookup, in every deployment, synced or not. Making `_base` and
-   `_adds` partitions of one table rather than arms of a `UNION ALL` view would
-   let the planner do a merge append and stop after the rows it was asked for.
+1. **Finish the `delta-inheritance` branch.** Built, pushed, unmerged; the
+   handover section above says exactly what is left. The prize, measured in
+   `scripts/shape-experiment/run.sh` over 200,000 rows, best of seven on 1 core
+   and 1 GB:
 
-   `scripts/shape-experiment/run.sh` builds all three shapes of the same 200,000
-   rows in a throwaway PostgreSQL and times them, so the size of the prize is
-   measured rather than argued. Best of seven, 1 core and 1 GB:
-
-   | | plain table | view (today) | partitioned |
+   | | plain table | view (today) | inherited (branch) |
    |---|---|---|---|
-   | 100 rows by timestamp | 0.09 ms | 256.9 ms | **0.16 ms** |
-   | count+avg over the table | 63.9 ms | 197.9 ms | **69.6 ms** |
-   | point lookup, indexed | 0.10 ms | 0.19 ms | **0.13 ms** |
+   | 100 rows by timestamp | 0.09 ms | 295.7 ms | **0.15 ms** |
+   | count+avg over the table | 61.3 ms | 264.6 ms | **56.9 ms** |
+   | point lookup, indexed | 0.10 ms | 0.21 ms | **0.12 ms** |
    | insert | - | 0.038 ms | 0.040 ms |
    | update a row held in base | - | 0.083 ms | **0.069 ms** |
    | delete | - | 0.068 ms | **0.034 ms** |
 
-   The plan confirms why: `Limit -> Merge Append -> Index Scan` over both
-   partitions, nine buffers, stopping at a hundred rows. Writes come out even or
-   better, because a partitioned update is one row movement where the trigger
-   does a delete, an upsert and an insert.
-
-   It is not free. The primary key of a partitioned table must contain the
-   partition key, so `id` alone is no longer globally unique: an id written into
-   `_adds` while the same id sits in `_base` shows up **twice**, where the view
-   shows the newer one once. The experiment provokes exactly that. `insert_one`
-   strips a caller's `id` so ordinary writes cannot reach it, but the restore
-   path writes explicit ids into `_base` and has to exclude anything already in
-   `_adds`. That guard is the correctness core of the change, and it wants a test
-   before any of the rest is written.
+   Which is to say: the view tax disappears rather than shrinks, aggregates and
+   point lookups are unaffected, and writes come out even or slightly better.
+   This is the largest single gap between DBCenter and the PostgreSQL
+   underneath it and every deployment pays it, synced or not.
 2. **Make compaction stream.** It reads the whole base snapshot into memory to
    rewrite it, so a 1 GB machine cannot compact a million-row table - which is
    the machine the whole argument rests on.

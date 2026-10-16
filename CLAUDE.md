@@ -27,11 +27,23 @@ column. Anything writing SQL against a collection must resolve which it is -
 `Collection::field_as_text` does this. Assuming one layout is how `fuzzy_search`
 and `create_index` came to be broken for every ordinary collection.
 
-**In delta mode a collection is a view**, over `<name>_base`, `<name>_adds` and
-`<name>_dels`, with INSTEAD OF triggers. `list_collections` reads `pg_tables`,
-which does not include views, so the collection name never appears in it. Derive
-names from the `_adds` tables instead. This is why the sync loop once found
-nothing to push and the bucket silently stayed empty.
+**In delta mode a collection has one of two shapes, and code has to ask which.**
+Historically it is a view over `<name>_base`, `<name>_adds` and `<name>_dels`
+with INSTEAD OF triggers; `list_collections` reads `pg_tables`, which does not
+include views, so the collection name never appears in it, and the sync loop
+once found nothing to push and the bucket silently stayed empty. On the
+`delta-inheritance` branch it is instead a table the first two *inherit* from,
+which is what lets an ordered, limited read stop early. `DeltaManager::
+shape_on_disk` is the only correct way to tell them apart - never infer it from
+configuration, because an existing collection keeps the shape it was made with.
+
+**With the inherited shape, a sync write is replication, not an edit.**
+`ON CONFLICT (id) DO UPDATE` on `_base` is an UPDATE, and `_base` carries a
+trigger that moves an updated row into `_adds` so the next push will see it.
+The restore therefore promoted every row it touched straight back out of
+`_base`, and the collection came up empty. Both sync transactions set
+`session_replication_role = 'replica'` for the duration. Anything new that
+writes to `_base` on the sync path has to do the same.
 
 **There are two read paths and they are separate on purpose.** `<name>` is the
 collection - ordinary PostgreSQL, where writes and point lookups go.
