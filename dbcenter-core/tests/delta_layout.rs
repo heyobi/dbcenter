@@ -454,3 +454,30 @@ fn a_delta_collection_works_on_postgresql_12() {
     assert_eq!(orders.count(None).unwrap(), 2);
     db.shutdown().unwrap();
 }
+
+#[test]
+fn a_sync_gives_back_the_space_it_empties_in_adds() {
+    // Every scan of the collection reads _adds too, so empty pages left there
+    // by the move cost every aggregate, not just disk.
+    let dir = workspace("adds_space");
+    let store = dir.join("store");
+    std::fs::create_dir_all(&store).unwrap();
+
+    let a = node(&dir, "a", &store);
+    a.db.collection("events")
+        .insert_one(&json!({"n": 0, "pad": "x"}))
+        .unwrap();
+    a.db.query(
+        "INSERT INTO events_adds (id, n, pad) \
+         SELECT gen_random_uuid(), g, md5(g::text) FROM generate_series(1, 20000) g",
+        &[],
+    )
+    .unwrap();
+    assert_eq!(a.engine.sync_table("events", 100_000).unwrap(), 20_001);
+
+    let size =
+        a.db.query("SELECT pg_relation_size('events_adds') AS b", &[])
+            .unwrap();
+    assert_eq!(size[0]["b"], json!(0), "_adds kept its empty pages");
+    a.db.shutdown().unwrap();
+}

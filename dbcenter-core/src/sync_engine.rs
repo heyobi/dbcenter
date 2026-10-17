@@ -580,6 +580,23 @@ impl SyncEngine {
             crate::error::DBCenterError::QueryError(crate::utils::format_postgres_error(&e))
         })?;
 
+        // The move leaves _adds full of dead rows, and nothing gave the space
+        // back: after syncing a million rows _adds was 237 MB of empty pages
+        // that every scan of the collection still read, and a whole-table
+        // aggregate took twice as long as on a plain table. VACUUM truncates
+        // the empty tail without blocking writers. The rows are already safe,
+        // so a failure here is only worth a warning.
+        if let Err(e) = client.batch_execute(&format!(
+            "VACUUM {}",
+            crate::query::quote_ident(&adds_table)
+        )) {
+            tracing::warn!(
+                "Could not vacuum {} after syncing: {}",
+                adds_table,
+                crate::utils::format_postgres_error(&e)
+            );
+        }
+
         // Give the connection back before asking for another one. Committing
         // does not release it - the guard lives until the end of the function -
         // and refreshing the view needs a connection of its own.
