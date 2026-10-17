@@ -96,7 +96,18 @@ PostgreSQL 18 and 12, the newest and oldest majors offered.
 
 ## What is still wrong
 
-**PyPI is at 0.4.2**, published 17 October 2026: delta collections on
+**PyPI is at 0.4.3**, published 17 October 2026: a row looked up in the
+bucket takes one request instead of ten (292 ms to 61 ms at 20 ms latency),
+`shutdown()` stops the server in 0.1 s instead of 15, Python can sync to
+S3/R2/MinIO with `S3StorageAdapter`, and installing the package gives pytest a
+`dbcenter_db` fixture. Verified from a real `pip install "dbcenter[mcp]==0.4.3"`
+in a clean environment as an unprivileged user: `read_only=True` refusing a
+`DELETE` inside a CTE, psycopg connecting through `db.dsn` and `db.url`,
+shutdown in 0.25 s with no postgres left behind, a sync to MinIO restored into
+a second database, the pytest fixtures, `dbcenter-mcp`, and the four scripts of
+`examples/colab_quickstart.ipynb` run one after another on one data directory.
+
+0.4.2, published 17 October 2026: delta collections on
 PostgreSQL 12, a node killed mid-restore starts again, the restore applies a
 record batch per statement (cold start 38 s to about 7 s), `_adds` is vacuumed
 after each sync, and starting as root says what to do. Verified from a real
