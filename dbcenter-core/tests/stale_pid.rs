@@ -1,4 +1,7 @@
 //! A server that was killed leaves its postmaster.pid and socket lock behind.
+//!
+//! Linux only: the check reads /proc, and the stand-in process is a `sleep`.
+#![cfg(target_os = "linux")]
 
 use dbcenter_core::DBCenter;
 
