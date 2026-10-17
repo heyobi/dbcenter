@@ -1,6 +1,6 @@
 # DBCenter
 
-> Real PostgreSQL 18 inside a Python process, with a MongoDB-style collection API, optional sync of each collection to storage as columnar Parquet, and optional DuckDB-backed columnar reads. `pip install dbcenter`. MIT licensed.
+> A real PostgreSQL 18 for a Python app, notebook or AI agent, started inside the Python process: `pip install dbcenter`, no server, no Docker. SQL with bound parameters, a read-only mode PostgreSQL itself enforces, an MCP server, pgvector/PostGIS, optional sync of each table to a bucket as Parquet with DuckDB-backed columnar reads, and a MongoDB-style collection API as an alternative to SQL. MIT licensed.
 
 DBCenter starts an actual `postgres` server as a child process against a data directory and talks to it over a local socket. Everything is ordinary PostgreSQL underneath: any SQL works through `db.query`, and any PostgreSQL client can connect. Python is the supported binding; the C, Go, Java and Node bindings are experimental.
 
@@ -44,7 +44,7 @@ db.shutdown()
 
 - In `multi_user_sync` mode a collection `orders` is a table partitioned into `orders_base` (synced) and `orders_adds` (pending), with `orders_dels` (ids deleted here) and `orders_conflicts` (versions a pull discarded) beside it. Read and write `orders`; never write the other tables directly.
 - `SyncEngine(db, storage)`: `sync_table(name, limit)`, `pull_and_apply(name, partial=False)` (rebuild from storage; `partial=True` skips the base snapshot), `vacuum(name)` (compact deltas into a new base), `ensure_columnar_view(name)`, `smart_query(name, id)` (a point lookup straight from Parquet, no extension needed).
-- Storage adapters in Python: `LocalStorageAdapter(path)` and `GoogleDriveAdapter(credential_path, root_folder_name)`. S3 is used from Rust and from the `dbcenter-serve` container, not from the Python package.
+- Storage adapters in Python: `LocalStorageAdapter(path)`, `S3StorageAdapter(bucket, endpoint=None, access_key=None, secret_key=None, region=None, prefix="")` for AWS S3, Cloudflare R2, Tigris or MinIO (leave the keys out to read `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ENDPOINT_URL_S3`), and `GoogleDriveAdapter(credential_path, root_folder_name)`.
 - Conflicts are last-write-wins on `updated_at`; ties break identically on every node; the losing version goes to `<name>_conflicts`. Two nodes incrementing one counter still end at one increment.
 - `columnar=True` (with `multi_user_sync=True`) publishes `<name>_columnar`, the synced Parquet read through DuckDB: use it for aggregates. Use the collection itself for writes and point lookups - DuckDB cannot use PostgreSQL's indexes.
 

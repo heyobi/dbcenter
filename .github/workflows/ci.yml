@@ -134,7 +134,28 @@ jobs:
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/.venv
 
+      # test_s3.py skips itself without an endpoint, which would quietly mean
+      # the S3 adapter is never exercised from Python. Same server as the Rust
+      # job's.
+      - name: Object storage
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=dbcenter -e MINIO_ROOT_PASSWORD=dbcenter123 \
+            -e MINIO_DEFAULT_BUCKETS=dbcenter-test \
+            bitnamilegacy/minio:2025.7.23-debian-12-r5
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/dbcenter-test/ || true)
+            [ "$code" = 403 ] && exit 0
+            sleep 2
+          done
+          docker logs minio
+          echo "MinIO or its bucket did not become ready (last answer: $code)" >&2
+          exit 1
+
       # Serial: each test class starts its own server.
       - name: Test
         working-directory: python_tests
+        env:
+          DBCENTER_S3_TEST_ENDPOINT: http://127.0.0.1:9000
+          DBCENTER_S3_TEST_BUCKET: dbcenter-test
         run: ../.venv/bin/python -m unittest discover -v -p 'test_*.py'
