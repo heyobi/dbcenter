@@ -1,12 +1,8 @@
 # DBCenter
 
-**Real PostgreSQL inside your Python process, with a MongoDB-style API - and an
-optional sync of every collection to object storage as columnar Parquet.**
-
-`pip install dbcenter` brings a PostgreSQL 18 server with it. There is nothing
-to install or run separately: `DBCenter(path=...)` starts it against a data
-directory, and `shutdown()` stops it. Under the API it is ordinary PostgreSQL,
-so psql, pgAdmin and every PostgreSQL driver can connect to the same database.
+**A real PostgreSQL for your Python app, notebook or AI agent - one `pip
+install`, no server, no Docker. Agents get a read-only connection that
+PostgreSQL itself enforces, and your data keeps a copy in a bucket you own.**
 
 ```bash
 pip install dbcenter
@@ -15,33 +11,93 @@ pip install dbcenter
 ```python
 import dbcenter
 
-db = dbcenter.DBCenter(path="./data")      # starts PostgreSQL; the data stays in ./data
-users = db.collection("users")
-
-users.insert_many([{"name": "Ali", "age": 25}, {"name": "Ayşe", "age": 31}])
-users.update_one({"name": "Ali"}, {"$set": {"age": 26}})
-
-print(users.find({"age": {"$gt": 18}}))    # documents, as dicts
-print(db.query("SELECT name, age FROM users WHERE age > $1 ORDER BY age", [20]))
-
+db = dbcenter.DBCenter(path="./data")      # starts PostgreSQL 18; the data stays in ./data
+db.query("CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text)")
+db.query("INSERT INTO notes (body) VALUES ($1), ($2)", ["buy milk", "call Ayşe"])
+print(db.query("SELECT id, body FROM notes ORDER BY id"))
 db.shutdown()
 ```
 
-Turn on sync and each collection keeps track of what changed since the last
-sync, so it can ship just that to storage and rebuild from it on another machine:
+It is the actual `postgres` binary, started as a child process and stopped
+with it: every SQL feature works, and psql, pgAdmin and any PostgreSQL driver
+can connect to the same database.
+
+## For AI agents
+
+Hand an agent SQL without handing it your data. `read_only=True` runs a
+statement in a READ ONLY transaction that is rolled back, so PostgreSQL refuses
+a write however it is phrased - a `DELETE` inside a CTE, `nextval()`, DDL. The
+SQL is never inspected; there is nothing to slip past.
 
 ```python
 import dbcenter
 
-db = dbcenter.DBCenter(path="./data", multi_user_sync=True)
-sync = dbcenter.SyncEngine(db, dbcenter.LocalStorageAdapter("./bucket"))
+db = dbcenter.DBCenter(path="./data")
+db.query("CREATE TABLE IF NOT EXISTS orders (id serial PRIMARY KEY, total numeric)")
+db.query("INSERT INTO orders (total) VALUES (10.5), (99)")
 
-orders = db.collection("orders")
-orders.insert_one({"ref": "A-1", "total": 10.5})
-print(sync.sync_table("orders", 10_000))   # rows written out as Parquet: 1
-
+print(db.query("SELECT sum(total) AS revenue FROM orders", read_only=True))
+try:
+    db.query("DELETE FROM orders", read_only=True)
+except Exception as e:
+    print("refused:", e)
 db.shutdown()
 ```
+
+The same guarantee, as an MCP server for Claude, Cursor or any MCP client:
+
+```bash
+pip install "dbcenter[mcp]"
+dbcenter-mcp --path /absolute/path/to/data            # read-only
+dbcenter-mcp --path /absolute/path/to/data --allow-writes
+```
+
+Memory for an agent is a table with a vector column - pgvector is one call
+away:
+
+```python
+import dbcenter
+
+db = dbcenter.DBCenter(path="./data")
+db.install_extension("pgvector")
+db.query("CREATE TABLE IF NOT EXISTS memories (id serial PRIMARY KEY, text text, embedding vector(3))")
+db.query("INSERT INTO memories (text, embedding) VALUES ('likes tea', '[1,0,0]'), ('lives in Ankara', '[0,1,0]')")
+print(db.query("SELECT text FROM memories ORDER BY embedding <-> '[0.9,0.1,0]' LIMIT 1"))
+db.shutdown()
+```
+
+See [docs/mcp.md](docs/mcp.md) for the tools and what read-only covers.
+
+## Your data in your own bucket
+
+With `multi_user_sync=True`, each table remembers what changed since the last
+sync and ships just that to storage as Parquet, one column per field. Another
+machine - or this one after losing its disk - rebuilds from the bucket:
+
+```python
+import dbcenter
+
+bucket = dbcenter.LocalStorageAdapter("./bucket")   # a folder here; S3 or R2 in production
+
+laptop = dbcenter.DBCenter(path="./laptop", multi_user_sync=True)
+laptop.collection("notes").insert_one({"body": "remember the milk"})
+dbcenter.SyncEngine(laptop, bucket).sync_table("notes", 10_000)
+laptop.shutdown()
+
+server = dbcenter.DBCenter(path="./server", multi_user_sync=True)
+dbcenter.SyncEngine(server, bucket).pull_and_apply("notes")
+print(server.query("SELECT body FROM notes"))
+server.shutdown()
+```
+
+The same Parquet is what makes analytics cheap: with `columnar=True`,
+`<table>_columnar` reads it through DuckDB, 4.5x to 8.7x faster than
+PostgreSQL on a whole-table aggregate on a one-core machine. Reads and writes
+of individual rows stay on the local PostgreSQL, where they take a fraction of
+a millisecond; the bucket is the durable copy and the analytics source, not
+where a request should fetch one row. [The measurements](docs/cost-and-scale.md).
+
+## Running it
 
 PostgreSQL refuses to run as root, so run as an ordinary user - inside a
 container too. The error says what to do if you forget.
@@ -56,29 +112,26 @@ script as them, with a data directory they can write to:
 
 ## Features
 
-- **Embedded PostgreSQL 18**, downloaded once and cached; no server to install.
-- **MongoDB-style collections**: `insert_one/many`, `find`, `update_one/many`,
-  `delete_one/many`, `count`, with `$eq $ne $gt $gte $lt $lte $in $nin $exists
-  $regex`, and `$set` for updates. Each document field becomes a real column, so SQL sees
-  an ordinary table. An unknown operator is an error, never a silently dropped
-  condition.
-- **Sync to storage** in `multi_user_sync` mode: changes go out as Parquet with
-  one column per field, and another machine can rebuild the collection from
+- **Embedded PostgreSQL 18**, downloaded once and cached; Linux, macOS and
+  Windows; PostgreSQL 12 to 18 selectable.
+- **SQL with bound parameters**: `db.query(sql, params, read_only=False)`
+  returns rows as dicts; `$1, $2` placeholders are bound, never interpolated.
+- **Extensions**: `install_extension("pgvector")`, `"postgis"`, `"pg_trgm"`,
+  `"pg_duckdb"`, verified against pinned checksums.
+- **An MCP server** with read-only tools by default, write tools only with
+  `--allow-writes`.
+- **Sync to storage** in `multi_user_sync` mode: changes go out as Parquet,
+  compaction folds them into a base file, and another machine rebuilds from
   them. Conflicts are last-write-wins, and the losing version is kept in
-  `<collection>_conflicts`.
-- **Columnar reads** with `columnar=True`: `<collection>_columnar` reads the
-  synced Parquet through DuckDB (pg_duckdb) - about 10x PostgreSQL on an
-  aggregate - while the collection itself stays plain PostgreSQL for writes and
-  lookups.
-- **Extensions**: `install_extension("postgis")`, `"pgvector"`,
-  `"pg_trgm"`, `"pg_duckdb"`, verified against pinned checksums. Geo and vector
-  helpers: `geo_collection`, `vector_store`, `fuzzy_search`.
+  `<table>_conflicts`. Read nodes can start from the bucket holding no data.
+- **Columnar reads** with `columnar=True`, through DuckDB (pg_duckdb).
+- **A document API too**, for code that prefers it: `collection(name)` with
+  `insert_one/many`, `find`, `update_one/many`, `delete_one/many` and MongoDB-style
+  `$eq $ne $gt $gte $lt $lte $in $nin $exists $regex` and `$set`. Each field
+  becomes a real column, so SQL sees an ordinary table. An unknown operator is
+  an error, never a silently dropped condition.
 - **The PostgreSQL wire protocol**, so any language can connect with its normal
   driver; `dbcenter-serve` runs it as a container with S3 behind it.
-- **An MCP server for language models**: `pip install "dbcenter[mcp]"`, then
-  `dbcenter-mcp --path ./data`. Read-only unless started with `--allow-writes`,
-  and read-only means PostgreSQL refuses the write, not that the SQL was
-  inspected. See [docs/mcp.md](docs/mcp.md).
 
 ## Language Bindings
 
@@ -476,16 +529,15 @@ Parquet object behind and cold starts get slower without bound.
 ## What it costs, and what it costs you
 
 `docs/cost-and-scale.md` measures the whole argument on one core and 1 GB - the
-cheapest tier anyone rents - against a plain PostgreSQL with the same limits.
-The short version: an aggregate over the table is 9.6x faster read as Parquet
-out of a bucket than out of PostgreSQL's own storage, a node holding none of the
-table answers it on a quarter of the disk, and the bill is about a fifth. A
-point lookup that has to reach object storage costs ninety times what a local
-indexed one does - and with the bucket a real network away, 20 ms a round trip,
-five hundred times. The collection view, which is what makes the delta layer
-work, costs 103.8 ms against 0.7 ms on an ordered, limited query. All of it is in
-the document, with the rig that produced it, including how to put the latency
-back in.
+cheapest tier anyone rents - against a plain PostgreSQL with the same limits,
+re-run on 17 October 2026. The short version: on what an application does all
+day - the newest rows, a lookup by key, an insert - DBCenter and PostgreSQL are
+the same speed. An aggregate over the whole table is 4.5x faster read as Parquet
+(8.7x at a million rows), and a node holding none of the table answers it on a
+quarter of the disk. Where it costs you: a row that lives only in the bucket
+takes 238 ms with the bucket 20 ms away, against 0.3 ms locally; a node that
+restores from the bucket takes 7 s to start against PostgreSQL's 1.4 s; and it
+uses three times the memory.
 
 The bill, per month, for a table that occupies this much in PostgreSQL - one
 shared-cpu-1x/1GB machine in every column, so only the storage differs:
@@ -527,16 +579,16 @@ beside it. The headline ones:
 
 | | DBCenter | PostgreSQL |
 |---|---|---|
-| aggregate over 200,000 rows, 1 core and 1 GB | 19.7 ms (columnar) | 188.7 ms |
-| aggregate over 1,000,000 rows | 45.7x faster (columnar) | baseline |
+| aggregate over 200,000 rows, 1 core and 1 GB | 20.4 ms (columnar) | 92.2 ms |
+| aggregate over 1,000,000 rows, same machine | 44.5 ms (columnar) | 389.1 ms |
+| newest 100 of 200,000 rows | 0.6 ms | 0.6 ms |
+| lookup by key, row held locally | 0.4 ms | 0.4 ms |
 | 100 GB, on list prices | about $7.69 a month | $36.50 (Supabase Pro) |
 
-A synced collection answers an ordered `LIMIT` from its indexes, like a plain
-table: the newest 100 of 200,000 rows in 0.07 ms, where 0.3.0 took 46.7 ms.
-
-And where it is weaker: a point lookup that has to reach object storage costs
-216 ms against 0.4 ms, so lazy restore is for archival tables, not the one an
-API reads; and compacting a million-row table does not yet fit in 1 GB.
+And where it is weaker: a lookup that has to reach object storage costs 238 ms
+with the bucket 20 ms away, so a node that holds no data is for analytics and
+archives, not for the table an API reads; a node that restores from the bucket
+starts in 7 s rather than 1.4; and it uses about three times the memory.
 [docs/cost-and-scale.md](docs/cost-and-scale.md) and
 [docs/columnar-reads.md](docs/columnar-reads.md) have the rigs and the rest.
 

@@ -96,11 +96,16 @@ PostgreSQL 18 and 12, the newest and oldest majors offered.
 
 ## What is still wrong
 
-**Delta mode on PostgreSQL 12 needs pgcrypto** for `gen_random_uuid()`, which
-became built-in in 13. Nothing installs it. Not new either; found while checking
-the partitioned shape on 12.
+**PyPI is at 0.4.2**, published 17 October 2026: delta collections on
+PostgreSQL 12, a node killed mid-restore starts again, the restore applies a
+record batch per statement (cold start 38 s to about 7 s), `_adds` is vacuumed
+after each sync, and starting as root says what to do. Verified from a real
+`pip install "dbcenter[mcp]==0.4.2"` in a clean environment as an unprivileged
+user - sync, update, fuzzy search on a synced table, `read_only=True` refusing
+a write, compaction, `dbcenter-mcp` - and, as root, that the error names the
+Colab and Dockerfile fixes.
 
-**PyPI is at 0.4.1**, published 16 October 2026: Windows as administrator,
+0.4.1, published 16 October 2026: Windows as administrator,
 fuzzy search on synced collections, the MCP server (`pip install
 "dbcenter[mcp]"`), the S3 lock race and the streaming compaction. Verified from
 a real `pip install "dbcenter[mcp]==0.4.1"` in a clean environment, outside the
