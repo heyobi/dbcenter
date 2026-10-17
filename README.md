@@ -365,7 +365,7 @@ flowchart TB
     subgraph bindings["Bindings"]
         py["dbcenter-python<br/>PyO3, the one that is exercised"]
         ffi["dbcenter-ffi<br/>C ABI"]
-        other["dbcenter-go / -java / -node / -r<br/>thin, treat as experimental"]
+        other["dbcenter-go / -java / -node<br/>thin, treat as experimental"]
     end
 
     core["dbcenter-core<br/>process lifecycle, collections, query builder,<br/>delta layer, sync engine, storage adapters, extensions"]
@@ -397,10 +397,6 @@ a public repository holding nothing but the builds. There used to be a CDN run b
 the project, with a fixed `?token=admin-secret-key` compiled into every client -
 a shared secret in everyone's binary, guarding a service that had to stay up or
 the feature stopped existing. GitHub Releases needs no secret and no server.
-
-The assets are in a separate repository because this one is private, and GitHub
-serves release assets from a private repository only to authenticated callers -
-which a user's machine, downloading anonymously, is not.
 
 Because these archives are loaded into the database process, a substituted one
 is arbitrary code execution. Every download is checked against a SHA-256 pinned
