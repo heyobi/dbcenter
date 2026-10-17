@@ -44,7 +44,15 @@ db.shutdown()
 ```
 
 PostgreSQL refuses to run as root, so run as an ordinary user - inside a
-container too.
+container too. The error says what to do if you forget.
+
+In Google Colab, which runs everything as root, create a user and run your
+script as them, with a data directory they can write to:
+
+```bash
+!id -u dbuser >/dev/null 2>&1 || useradd -m dbuser
+!sudo -u dbuser python3 /path/to/your_script.py
+```
 
 ## Features
 

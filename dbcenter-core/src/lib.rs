@@ -369,6 +369,12 @@ impl DBCenter {
         multi_user_sync_mode: bool,
         columnar: bool,
     ) -> Result<Arc<Self>> {
+        // initdb says only "cannot be run as root", and Colab, where many people
+        // try this first, runs everything as root.
+        if utils::running_as_root() {
+            return Err(DBCenterError::ConfigError(utils::ROOT_REFUSED.to_string()));
+        }
+
         // Validation: service mode requires persist
         if daemon_mode && !persist {
             return Err(DBCenterError::ConfigError(

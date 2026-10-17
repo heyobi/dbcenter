@@ -309,3 +309,39 @@ pub fn remove_dir_all_with_retry(path: &std::path::Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// Whether this process runs as root, which PostgreSQL refuses.
+///
+/// Asked of `id -u` rather than through libc, which this crate does not
+/// otherwise need. Anything that goes wrong asking reads as "not root", so the
+/// worst case is PostgreSQL's own, terser refusal.
+#[cfg(unix)]
+pub fn running_as_root() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "0")
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+pub fn running_as_root() -> bool {
+    false
+}
+
+/// What to do about it, for the places people usually meet it.
+pub const ROOT_REFUSED: &str = "PostgreSQL refuses to run as root, and this process is \
+running as root - which Google Colab, Docker containers and many CI runners do by \
+default. Run Python as an ordinary user instead.
+
+In Colab or a notebook:
+
+    !id -u dbuser >/dev/null 2>&1 || useradd -m dbuser
+    !sudo -u dbuser python3 /path/to/your_script.py
+
+The data directory must be one that user can write to, such as /home/dbuser/data.
+
+In a Dockerfile, create a user and switch to it before running Python:
+
+    RUN useradd --create-home app
+    USER app";
