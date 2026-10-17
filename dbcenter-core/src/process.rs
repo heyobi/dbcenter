@@ -230,10 +230,18 @@ impl PostgresProcess {
             let log_file = fs::File::create(&log_path)?;
             cmd.stdout(Stdio::from(log_file.try_clone()?));
             cmd.stderr(Stdio::from(log_file));
-            let child = cmd.spawn().map_err(|e| {
+            let mut child = cmd.spawn().map_err(|e| {
                 DBCenterError::ProcessError(format!("Failed to start PostgreSQL: {}", e))
             })?;
             pid = Some(child.id());
+            // Reap the postmaster the moment it exits. Nothing else waits on
+            // it, and an exited child nobody waits on stays a zombie that
+            // `kill -0` still reports as alive - so `pg_ctl stop -w` waited out
+            // its whole timeout on a server that had already stopped, the
+            // fallback waited out its own, and every shutdown took 15 s.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
         }
 
         let mut process = PostgresProcess {
