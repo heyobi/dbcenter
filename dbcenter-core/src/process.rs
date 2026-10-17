@@ -66,6 +66,33 @@ fn choose_socket_dir(data_dir: &Path, port: u16) -> Result<PathBuf> {
     Ok(fallback)
 }
 
+/// A killed server leaves its socket lock behind, and PostgreSQL itself then
+/// refuses to start: it finds the pid in the lock alive. In a container it
+/// usually is - processes are numbered from 1 on every start, so the dead
+/// server's pid belongs to some other process of the next run - and the node
+/// could not start again. The socket directory lives on the data volume, which
+/// is what keeps the lock across the restart; in /tmp it would have gone.
+///
+/// Only one cluster ever uses this directory, and the caller has already
+/// established that it is not running, so a lock naming anything but a live
+/// postgres is stale.
+fn remove_stale_socket_lock(socket_dir: &Path, port: u16) {
+    let lock = socket_dir.join(format!(".s.PGSQL.{}.lock", port));
+    let Ok(content) = fs::read_to_string(&lock) else {
+        return;
+    };
+    let pid = content
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok());
+    if pid.is_some_and(is_process_running_global) {
+        return;
+    }
+    tracing::info!("Removing stale socket lock {}", lock.display());
+    let _ = fs::remove_file(&lock);
+    let _ = fs::remove_file(socket_dir.join(format!(".s.PGSQL.{}", port)));
+}
+
 /// `pg_ctl`, which sits beside `postgres` in the distribution's `bin`.
 fn pg_ctl_path(postgres_path: &Path) -> Option<PathBuf> {
     postgres_path.parent().and_then(|p| p.parent()).map(|p| {
@@ -110,6 +137,7 @@ impl PostgresProcess {
             let port = config.port.unwrap_or(5432);
             let socket_dir = choose_socket_dir(&config.data_dir, port)?;
             fs::create_dir_all(&socket_dir)?;
+            remove_stale_socket_lock(&socket_dir, port);
             let host = socket_dir.to_string_lossy().to_string();
             (host, port, Some(socket_dir))
         };
