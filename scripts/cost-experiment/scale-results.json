@@ -5,131 +5,130 @@
     {
       "clients": 1,
       "nodes": 1,
-      "queries": 470,
-      "per_second": 23.5,
-      "median_ms": 40.7,
+      "queries": 785,
+      "per_second": 39.2,
+      "median_ms": 24.9,
       "target": "postgres-3-cores"
     },
     {
       "clients": 2,
       "nodes": 1,
-      "queries": 423,
-      "per_second": 21.1,
-      "median_ms": 94.9,
+      "queries": 985,
+      "per_second": 49.2,
+      "median_ms": 38.4,
       "target": "postgres-3-cores"
     },
     {
       "clients": 4,
       "nodes": 1,
-      "queries": 445,
-      "per_second": 22.1,
-      "median_ms": 176.2,
+      "queries": 1020,
+      "per_second": 50.9,
+      "median_ms": 79.9,
       "target": "postgres-3-cores"
     },
     {
       "clients": 8,
       "nodes": 1,
-      "queries": 498,
-      "per_second": 24.7,
-      "median_ms": 298.2,
+      "queries": 1311,
+      "per_second": 65.4,
+      "median_ms": 111.1,
       "target": "postgres-3-cores"
     },
     {
       "clients": 1,
       "nodes": 1,
-      "queries": 511,
-      "per_second": 25.5,
-      "median_ms": 37.7,
+      "queries": 403,
+      "per_second": 20.1,
+      "median_ms": 47.9,
       "target": "dbcenter-1-node"
     },
     {
       "clients": 2,
       "nodes": 1,
-      "queries": 530,
-      "per_second": 26.4,
-      "median_ms": 82.9,
-      "target": "dbcenter-1-node"
-    },
-    {
-      "clients": 4,
-      "nodes": 1,
-      "queries": 454,
-      "per_second": 22.5,
-      "median_ms": 189.6,
-      "target": "dbcenter-1-node"
-    },
-    {
-      "clients": 8,
-      "nodes": 1,
-      "queries": 434,
-      "per_second": 21.5,
-      "median_ms": 381.7,
-      "target": "dbcenter-1-node"
-    },
-    {
-      "clients": 1,
-      "nodes": 2,
-      "queries": 493,
-      "per_second": 24.6,
-      "median_ms": 37.9,
-      "target": "dbcenter-2-node"
-    },
-    {
-      "clients": 2,
-      "nodes": 2,
-      "queries": 829,
-      "per_second": 41.4,
-      "median_ms": 47.7,
-      "target": "dbcenter-2-node"
-    },
-    {
-      "clients": 4,
-      "nodes": 2,
-      "queries": 952,
-      "per_second": 47.5,
+      "queries": 479,
+      "per_second": 23.9,
       "median_ms": 87.9,
+      "target": "dbcenter-1-node"
+    },
+    {
+      "clients": 4,
+      "nodes": 1,
+      "queries": 461,
+      "per_second": 23.0,
+      "median_ms": 186.3,
+      "target": "dbcenter-1-node"
+    },
+    {
+      "clients": 8,
+      "nodes": 1,
+      "queries": 433,
+      "per_second": 21.4,
+      "median_ms": 384.9,
+      "target": "dbcenter-1-node"
+    },
+    {
+      "clients": 1,
+      "nodes": 2,
+      "queries": 398,
+      "per_second": 19.9,
+      "median_ms": 48.0,
+      "target": "dbcenter-2-node"
+    },
+    {
+      "clients": 2,
+      "nodes": 2,
+      "queries": 813,
+      "per_second": 40.6,
+      "median_ms": 47.2,
+      "target": "dbcenter-2-node"
+    },
+    {
+      "clients": 4,
+      "nodes": 2,
+      "queries": 992,
+      "per_second": 49.4,
+      "median_ms": 85.5,
       "target": "dbcenter-2-node"
     },
     {
       "clients": 8,
       "nodes": 2,
-      "queries": 892,
-      "per_second": 44.5,
-      "median_ms": 189.6,
+      "queries": 911,
+      "per_second": 45.3,
+      "median_ms": 188.4,
       "target": "dbcenter-2-node"
     },
     {
       "clients": 1,
       "nodes": 3,
-      "queries": 514,
-      "per_second": 25.7,
-      "median_ms": 37.8,
+      "queries": 389,
+      "per_second": 19.4,
+      "median_ms": 49.1,
       "target": "dbcenter-3-node"
     },
     {
       "clients": 2,
       "nodes": 3,
-      "queries": 840,
-      "per_second": 41.9,
-      "median_ms": 47.0,
+      "queries": 817,
+      "per_second": 40.8,
+      "median_ms": 47.1,
       "target": "dbcenter-3-node"
     },
     {
       "clients": 4,
       "nodes": 3,
-      "queries": 1088,
-      "per_second": 54.3,
-      "median_ms": 65.1,
+      "queries": 1234,
+      "per_second": 61.6,
+      "median_ms": 55.4,
       "target": "dbcenter-3-node"
     },
     {
       "clients": 8,
       "nodes": 3,
-      "queries": 1070,
-      "per_second": 53.2,
-      "median_ms": 136.2,
+      "queries": 1452,
+      "per_second": 72.4,
+      "median_ms": 103.8,
       "target": "dbcenter-3-node"
     }
-  ],
-  "note": "the three-node sweep was measured separately, with PostgreSQL stopped: three readers and a three-core PostgreSQL together exceeded the host's memory"
+  ]
 }
