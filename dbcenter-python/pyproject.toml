@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "dbcenter"
-version = "0.4.2"
+version = "0.4.3"
 description = "A real PostgreSQL in one pip install, for apps, notebooks, tests and AI agents: read-only SQL, an MCP server, pgvector, and sync to your own S3/R2 bucket"
 readme = "README.md"
 requires-python = ">=3.8"
