@@ -102,8 +102,9 @@ def wait_for_relation(conn, name, timeout=900):
 def wait_for_collection(conn, name, timeout=900):
     """Wait for a whole collection, not just the first table of one.
 
-    A collection is three tables, a view and the triggers that route writes
-    into it, created in that order. Waiting for any one of them means racing
+    A collection is a partitioned table with `_base` and `_adds` as its
+    partitions, `_dels` beside it, and the triggers that keep an id in one
+    partition, created in that order. Waiting for any one of them means racing
     the rest.
     """
     for relation in (f"{name}_base", f"{name}_adds", f"{name}_dels", name):
@@ -113,7 +114,9 @@ def wait_for_collection(conn, name, timeout=900):
     while time.time() < deadline:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT count(*) FROM pg_trigger WHERE tgname = %s", (f"trg_insert_{name}",)
+                "SELECT count(*) FROM pg_trigger "
+                "WHERE tgname = 'dbcenter_claim' AND tgrelid = to_regclass(%s)",
+                (name,),
             )
             if cur.fetchone()[0]:
                 break
@@ -227,7 +230,7 @@ def load_postgres(conn, rows):
 def load_dbcenter(conn, rows):
     """Write straight into the pending table, which is what a sync then pushes.
 
-    Going through the collection view row by row would measure psycopg's round
+    Going through the collection row by row would measure psycopg's round
     trips rather than anything about the database.
     """
     with conn.cursor() as cur:
@@ -244,12 +247,10 @@ def load_dbcenter(conn, rows):
         load = time.perf_counter() - started
 
         started = time.perf_counter()
-        # The same indexes the plain PostgreSQL gets, on both delta tables -
-        # the collection is a view over them, so an index on one side only
-        # would make half the rows a sequential scan.
-        for table in ("events_base", "events_adds"):
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_user ON {table} (user_id)")
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table} (ts_epoch)")
+        # The same indexes the plain PostgreSQL gets. Created on the
+        # collection, PostgreSQL builds them on both partitions.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON events (user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts_epoch)")
         cur.execute("ANALYZE events_adds")
         cur.execute("ANALYZE events_base")
         index = time.perf_counter() - started
