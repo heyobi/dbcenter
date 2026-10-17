@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,228 +15,343 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script>
-  // Before first paint, so a light-mode visitor never sees a dark flash.
+  // Dark unless the visitor picked light before; set before first paint.
   try {
-    var t = localStorage.getItem("theme");
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    if (localStorage.getItem("dbcenter-theme") === "light") document.documentElement.setAttribute("data-theme", "light");
   } catch (e) {}
 </script>
 <style>
   :root {
     --bg: #f8fafc;
+    --bg-alt: #eef2f9;
     --surface: #ffffff;
-    --surface-2: #f1f5f9;
-    --border: #e2e8f0;
+    --border: rgba(148, 163, 184, 0.35);
     --text: #0f172a;
     --muted: #475569;
     --faint: #64748b;
     --brand: #2563eb;
-    --brand-soft: #dbeafe;
-    --good: #15803d;
+    --brand-2: #0ea5e9;
+    --chip-bg: rgba(37, 99, 235, 0.08);
+    --nav-bg: rgba(255, 255, 255, 0.85);
+    --hero-bg:
+      radial-gradient(circle at 85% 0%, rgba(59, 130, 246, 0.22) 0%, transparent 45%),
+      radial-gradient(circle at 0% 100%, rgba(14, 165, 233, 0.16) 0%, transparent 50%),
+      linear-gradient(180deg, #e0ecff 0%, #f8fafc 100%);
+    --deco: rgba(37, 99, 235, 0.28);
+    --deco-2: rgba(14, 116, 144, 0.25);
+    --deco-3: rgba(236, 72, 153, 0.22);
+    --card-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92));
+    --card-glow: radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 62%);
+    --track: rgba(226, 232, 240, 0.95);
+    --good: #047857;
+    --good-bg: rgba(187, 247, 208, 0.55);
     --warn: #b45309;
     --code-bg: #0f172a;
+    --code-head: #111c30;
     --code-text: #e2e8f0;
     --code-comment: #94a3b8;
     --code-string: #86efac;
     --code-key: #93c5fd;
-    --shadow: 0 18px 40px -18px rgba(15, 23, 42, 0.25);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #050b17;
-      --surface: #0b1424;
-      --surface-2: #111c30;
-      --border: #1e2a40;
-      --text: #e2e8f0;
-      --muted: #a3b1c6;
-      --faint: #7c8ba1;
-      --brand: #60a5fa;
-      --brand-soft: #172554;
-      --good: #4ade80;
-      --warn: #fbbf24;
-      --code-bg: #0b1424;
-      --shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.6);
-    }
+    --shadow: 0 30px 70px -40px rgba(15, 23, 42, 0.45);
   }
   :root[data-theme="dark"] {
     --bg: #050b17;
-    --surface: #0b1424;
-    --surface-2: #111c30;
-    --border: #1e2a40;
+    --bg-alt: #08101f;
+    --surface: #0d1628;
+    --border: rgba(148, 163, 184, 0.16);
     --text: #e2e8f0;
     --muted: #a3b1c6;
     --faint: #7c8ba1;
-    --brand: #60a5fa;
-    --brand-soft: #172554;
-    --good: #4ade80;
+    --brand: #3b82f6;
+    --brand-2: #22d3ee;
+    --chip-bg: rgba(59, 130, 246, 0.12);
+    --nav-bg: rgba(5, 11, 23, 0.85);
+    --hero-bg:
+      radial-gradient(circle at 85% 0%, rgba(59, 130, 246, 0.30) 0%, transparent 45%),
+      radial-gradient(circle at 0% 100%, rgba(37, 99, 235, 0.28) 0%, transparent 55%),
+      linear-gradient(180deg, #0b1a3a 0%, #071229 55%, #050b17 100%);
+    --deco: rgba(147, 197, 253, 0.42);
+    --deco-2: rgba(45, 212, 191, 0.32);
+    --deco-3: rgba(249, 168, 212, 0.32);
+    --card-bg: linear-gradient(135deg, rgba(9, 13, 24, 0.96), rgba(17, 25, 44, 0.9));
+    --card-glow: radial-gradient(circle at top right, rgba(59, 130, 246, 0.26), transparent 68%);
+    --track: rgba(148, 163, 184, 0.18);
+    --good: #6ee7b7;
+    --good-bg: rgba(34, 197, 94, 0.18);
     --warn: #fbbf24;
     --code-bg: #0b1424;
-    --shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.6);
+    --code-head: #0f1a2e;
+    --shadow: 0 38px 90px -50px rgba(0, 0, 0, 0.9);
   }
 
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
+    margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.6 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
+    -webkit-font-smoothing: antialiased; overflow-x: hidden;
   }
   a { color: var(--brand); text-decoration: none; }
   a:hover { text-decoration: underline; }
   code, pre { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
-  :not(pre) > code {
-    font-size: 0.9em;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.1em 0.35em;
-  }
-
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  :not(pre) > code { font-size: 0.88em; background: var(--chip-bg); border-radius: 6px; padding: 0.1em 0.4em; }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 16px; position: relative; z-index: 2; }
   @media (min-width: 720px) { .wrap { padding: 0 32px; } }
 
-  /* Header */
+  /* Nav */
   header {
-    position: sticky; top: 0; z-index: 10;
-    background: color-mix(in srgb, var(--bg) 85%, transparent);
-    backdrop-filter: blur(10px);
+    position: fixed; inset: 0 0 auto 0; z-index: 20;
+    background: var(--nav-bg); backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
   }
-  .bar { display: flex; align-items: center; gap: 20px; height: 60px; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; color: var(--text); }
+  .bar { display: flex; align-items: center; gap: 24px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 19px; color: var(--text); letter-spacing: -0.01em; }
   .brand:hover { text-decoration: none; }
   .logo {
-    width: 30px; height: 34px; flex: none;
-    background: var(--brand);
+    width: 30px; height: 34px; flex: none; background: var(--brand);
     -webkit-mask: url(dbcenterlogo.svg) center / contain no-repeat;
     mask: url(dbcenterlogo.svg) center / contain no-repeat;
   }
-  nav { display: none; gap: 22px; margin-left: 12px; }
-  nav a { color: var(--muted); font-weight: 500; font-size: 15px; }
-  nav a:hover { color: var(--text); text-decoration: none; }
-  @media (min-width: 820px) { nav { display: flex; } }
+  nav.top { display: none; gap: 26px; margin-left: auto; }
+  nav.top a { color: var(--muted); font-weight: 500; font-size: 15px; }
+  nav.top a:hover { color: var(--text); text-decoration: none; }
+  @media (min-width: 880px) { nav.top { display: flex; } }
   .bar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  @media (min-width: 880px) { .bar-right { margin-left: 8px; } }
   .icon-btn {
-    width: 38px; height: 38px; display: grid; place-items: center;
-    border: 1px solid var(--border); border-radius: 10px;
-    background: var(--surface); color: var(--muted); cursor: pointer;
+    width: 40px; height: 40px; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 12px; background: transparent; color: var(--muted); cursor: pointer;
   }
   .icon-btn:hover { color: var(--brand); border-color: var(--brand); text-decoration: none; }
-  .icon-btn svg { width: 18px; height: 18px; }
+  .icon-btn svg { width: 19px; height: 19px; }
+  .nav-cta { display: none; }
+  @media (min-width: 640px) { .nav-cta { display: inline-flex; } }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 13px 22px; border-radius: 14px; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { text-decoration: none; border-color: var(--brand); }
+  .btn.primary {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8); border-color: transparent; color: #fff;
+    box-shadow: 0 18px 40px -18px rgba(37, 99, 235, 0.8);
+  }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.small { padding: 9px 16px; font-size: 14px; border-radius: 11px; }
+  .btn.install { font-family: "JetBrains Mono", monospace; font-weight: 500; }
+  .btn.install .copy { font: 600 12px Inter, sans-serif; opacity: 0.75; border-left: 1px solid rgba(255, 255, 255, 0.35); padding-left: 10px; }
+
+  /* Decorations */
+  .deco { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+  .deco svg { position: absolute; }
+  .d1 { color: var(--deco); } .d2 { color: var(--deco-2); } .d3 { color: var(--deco-3); }
+  @media (max-width: 959px) { .deco .d2 { display: none; } .deco svg { opacity: 0.6; } }
 
   /* Hero */
-  .hero { padding: 56px 0 40px; }
-  @media (min-width: 900px) {
-    .hero { padding: 88px 0 64px; }
-    .hero-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center; }
-  }
+  .hero { position: relative; background: var(--hero-bg); padding: 120px 0 72px; overflow: hidden; }
+  @media (min-width: 960px) { .hero { padding: 168px 0 112px; } }
+  .hero-grid { display: grid; gap: 44px; align-items: center; }
+  @media (min-width: 960px) { .hero-grid { grid-template-columns: 1.05fr 1fr; gap: 56px; } }
+  .hero-grid > * { min-width: 0; }
   .pill {
-    display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center;
-    font-size: 13px; font-weight: 600; color: var(--brand);
-    background: var(--brand-soft); border-radius: 999px; padding: 5px 12px;
-  }
-  h1 {
-    font-size: clamp(34px, 6vw, 56px); line-height: 1.08; letter-spacing: -0.03em;
-    margin: 18px 0 18px; font-weight: 800;
-  }
-  h1 .accent { color: var(--brand); }
-  .lede { font-size: clamp(17px, 2.2vw, 19px); color: var(--muted); margin: 0 0 28px; max-width: 34em; }
-  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-  .install {
-    display: inline-flex; align-items: center; gap: 12px;
-    background: var(--code-bg); color: var(--code-text);
-    border: 1px solid var(--border); border-radius: 12px;
-    padding: 12px 14px 12px 18px; font: 500 15px "JetBrains Mono", monospace;
-    cursor: pointer; max-width: 100%;
-  }
-  .install .dollar { color: var(--code-comment); }
-  .install .copy { font: 600 12px Inter, sans-serif; color: var(--code-comment); border-left: 1px solid #334155; padding-left: 12px; }
-  .btn {
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 12px 18px; border-radius: 12px; font-weight: 600; font-size: 15px;
-    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    font-size: 13px; font-weight: 600; color: var(--brand);
+    border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
+    background: var(--chip-bg); border-radius: 999px; padding: 5px 14px;
   }
-  .btn:hover { border-color: var(--brand); text-decoration: none; }
-  .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
-  :root[data-theme="dark"] .btn.primary { color: #04101f; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04101f; } }
-  .facts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 22px; color: var(--faint); font-size: 14px; }
-  .facts span::before { content: "✓ "; color: var(--good); font-weight: 700; }
+  .pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 25%, transparent); }
+  h1 { font-size: clamp(38px, 6.4vw, 66px); line-height: 1.04; letter-spacing: -0.035em; margin: 22px 0 22px; font-weight: 800; }
+  .grad {
+    background: linear-gradient(90deg, var(--brand) 0%, var(--brand-2) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { font-size: clamp(17px, 2.1vw, 19px); color: var(--muted); margin: 0 0 32px; max-width: 33em; }
+  .lede strong { color: var(--text); }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 28px; font-size: 14px; color: var(--muted); }
+  .checks span { display: inline-flex; align-items: center; gap: 7px; }
+  .checks svg { width: 16px; height: 16px; color: #22c55e; }
 
-  /* Code windows */
-  .code {
-    background: var(--code-bg); color: var(--code-text);
-    border: 1px solid var(--border); border-radius: 14px;
-    box-shadow: var(--shadow); overflow: hidden; min-width: 0;
+  /* Code window with tabs */
+  .window {
+    background: var(--code-bg); color: var(--code-text); border-radius: 18px; overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.22); box-shadow: var(--shadow); min-width: 0;
   }
-  .code-head {
-    display: flex; align-items: center; gap: 6px; padding: 10px 14px;
-    border-bottom: 1px solid #1e293b; font: 500 12px Inter, sans-serif; color: var(--code-comment);
+  .window-head { display: flex; align-items: center; background: var(--code-head); border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+  .dots { display: flex; gap: 7px; padding: 0 16px; flex: none; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .dots i:nth-child(1) { background: #ef4444; } .dots i:nth-child(2) { background: #eab308; } .dots i:nth-child(3) { background: #22c55e; }
+  .tabs { display: flex; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    font: 500 13px Inter, sans-serif; color: var(--code-comment); background: none; border: 0; cursor: pointer;
+    padding: 13px 16px; border-bottom: 2px solid transparent; white-space: nowrap;
   }
-  .code-head i { width: 10px; height: 10px; border-radius: 50%; background: #334155; display: inline-block; }
-  .code-head b { margin-left: 8px; font-weight: 500; }
-  .code pre { margin: 0; padding: 16px 18px; overflow-x: auto; font-size: 13.5px; line-height: 1.65; }
-  .c { color: var(--code-comment); }
-  .s { color: var(--code-string); }
-  .k { color: var(--code-key); }
-  .hero .code { margin-top: 36px; }
-  @media (min-width: 900px) { .hero .code { margin-top: 0; } }
+  .tab[aria-selected="true"] { color: #fff; border-bottom-color: #3b82f6; background: rgba(59, 130, 246, 0.08); }
+  .pane { display: none; }
+  .pane.on { display: block; }
+  .window pre { margin: 0; padding: 20px 22px; overflow-x: auto; font-size: 13.5px; line-height: 1.7; }
+  .c { color: var(--code-comment); } .s { color: var(--code-string); } .k { color: var(--code-key); }
 
   /* Sections */
-  section { padding: 56px 0; border-top: 1px solid var(--border); }
-  @media (min-width: 900px) { section { padding: 80px 0; } }
-  .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--brand); margin: 0 0 10px; }
-  h2 { font-size: clamp(26px, 4vw, 36px); line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 14px; font-weight: 800; }
-  h3 { font-size: 19px; margin: 0 0 8px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 17px; max-width: 40em; margin: 0 0 32px; }
+  section { position: relative; padding: 80px 0; overflow: hidden; }
+  @media (min-width: 960px) { section { padding: 112px 0; } }
+  section.alt { background: var(--bg-alt); }
+  .head { text-align: center; max-width: 720px; margin: 0 auto 52px; }
+  .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brand); margin: 0 0 12px; }
+  h2 { font-size: clamp(28px, 4.2vw, 40px); line-height: 1.12; letter-spacing: -0.025em; margin: 0 0 14px; font-weight: 800; }
+  .head p { color: var(--muted); font-size: 17px; margin: 0; }
 
-  .cards { display: grid; gap: 16px; }
-  @media (min-width: 760px) { .cards { grid-template-columns: repeat(3, 1fr); } }
-  .card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px;
+  /* Feature cards */
+  .features { display: grid; gap: 18px; }
+  @media (min-width: 680px) { .features { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 1000px) { .features { grid-template-columns: repeat(3, 1fr); } }
+  .feature {
+    position: relative; background: var(--card-bg); border: 1px solid var(--border); border-radius: 22px;
+    padding: 28px; transition: transform 0.25s ease, border-color 0.25s ease;
   }
-  .card p { margin: 0; color: var(--muted); font-size: 15px; }
-  .card .num { font-size: 13px; font-weight: 700; color: var(--brand); margin-bottom: 6px; }
-  .card a.more { display: inline-block; margin-top: 12px; font-weight: 600; font-size: 14px; }
+  .feature:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--brand) 50%, transparent); }
+  .feature h3 { font-size: 18px; margin: 18px 0 8px; letter-spacing: -0.01em; }
+  .feature p { margin: 0; color: var(--muted); font-size: 15px; }
+  .ico { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; }
+  .ico svg { width: 22px; height: 22px; }
+  .ico.red { background: rgba(239, 68, 68, 0.14); color: #ef4444; }
+  .ico.violet { background: rgba(139, 92, 246, 0.16); color: #8b5cf6; }
+  .ico.green { background: rgba(34, 197, 94, 0.14); color: #22c55e; }
+  .ico.blue { background: rgba(59, 130, 246, 0.16); color: #3b82f6; }
+  .ico.amber { background: rgba(245, 158, 11, 0.16); color: #f59e0b; }
+  .ico.cyan { background: rgba(6, 182, 212, 0.16); color: #06b6d4; }
 
-  .split { display: grid; gap: 28px; align-items: start; }
-  @media (min-width: 900px) { .split { grid-template-columns: 1fr 1.15fr; gap: 48px; } }
-  .points { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
-  .points li { padding-left: 26px; position: relative; color: var(--muted); }
-  .points li::before { content: ""; position: absolute; left: 4px; top: 0.6em; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
-  .points strong { color: var(--text); }
-  .stack { display: grid; gap: 16px; min-width: 0; }
+  /* See it in action */
+  .examples { display: grid; gap: 14px; max-width: 920px; margin: 0 auto; }
+  details.ex { background: var(--card-bg); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
+  details.ex summary { display: flex; align-items: center; gap: 16px; padding: 18px 22px; cursor: pointer; list-style: none; }
+  details.ex summary::-webkit-details-marker { display: none; }
+  details.ex summary .ico { width: 40px; height: 40px; border-radius: 12px; flex: none; }
+  details.ex summary .ico svg { width: 19px; height: 19px; }
+  details.ex summary b { display: block; font-size: 16px; }
+  details.ex summary small { color: var(--faint); font-size: 14px; }
+  details.ex summary .chev { margin-left: auto; color: var(--faint); transition: transform 0.2s ease; flex: none; }
+  details.ex[open] summary .chev { transform: rotate(180deg); }
+  details.ex .window { border-radius: 0; border: 0; border-top: 1px solid var(--border); box-shadow: none; }
+  details.ex .why { padding: 16px 22px 18px; color: var(--muted); font-size: 15px; border-top: 1px solid var(--border); }
 
-  /* Numbers */
-  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
-  table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 520px; }
-  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-  th { font-size: 13px; color: var(--faint); font-weight: 600; background: var(--surface-2); }
-  tr:last-child td { border-bottom: 0; }
-  td.n { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  td.win { color: var(--good); font-weight: 700; }
-  td.lose { color: var(--warn); font-weight: 600; }
-  .note { color: var(--faint); font-size: 14px; margin-top: 14px; }
-  .two { display: grid; gap: 28px; }
-  .two > div, .split > div { min-width: 0; }
-  @media (min-width: 900px) { .two { grid-template-columns: 1fr 1fr; } }
+  /* Performance */
+  .perf { display: grid; gap: 20px; }
+  @media (min-width: 900px) { .perf { grid-template-columns: 1fr 1fr; } }
+  .pcard {
+    position: relative; background: var(--card-bg); border: 1px solid color-mix(in srgb, var(--brand) 28%, transparent);
+    border-radius: 24px; padding: 30px; box-shadow: var(--shadow); overflow: hidden;
+  }
+  .pcard::after { content: ""; position: absolute; inset: 0; background: var(--card-glow); pointer-events: none; }
+  .pcard > * { position: relative; z-index: 1; }
+  .pcard-head { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; flex-wrap: wrap; }
+  .picon { width: 48px; height: 48px; border-radius: 15px; display: grid; place-items: center; color: #fff; flex: none; }
+  .picon svg { width: 23px; height: 23px; }
+  .picon.emerald { background: linear-gradient(135deg, #34d399, #10b981); box-shadow: 0 18px 34px -18px rgba(16, 185, 129, 0.7); }
+  .picon.violet { background: linear-gradient(135deg, #a855f7, #6366f1); box-shadow: 0 18px 34px -18px rgba(99, 102, 241, 0.7); }
+  .plabel { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+  .ptitle { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+  .chip {
+    margin-left: auto; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    background: var(--good-bg); color: var(--good); border-radius: 999px; padding: 6px 13px; white-space: nowrap;
+  }
+  .pdesc { color: var(--faint); font-size: 14px; margin: 6px 0 24px; }
+  .series + .series { margin-top: 20px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; font-size: 15px; color: var(--muted); }
+  .row .v { font-variant-numeric: tabular-nums; }
+  .row .v.good { color: var(--good); } .row .v.violet { color: #a78bfa; }
+  .track { margin-top: 9px; height: 10px; border-radius: 999px; background: var(--track); overflow: hidden; }
+  .fill { height: 100%; border-radius: inherit; }
+  .fill.emerald { background: linear-gradient(90deg, #34d399, #059669); }
+  .fill.violet { background: linear-gradient(90deg, #a855f7, #6366f1); }
+  .fill.base { background: linear-gradient(90deg, rgba(148, 163, 184, 0.9), rgba(148, 163, 184, 0.55)); }
+  .tradeoffs { margin-top: 20px; display: grid; gap: 14px; }
+  @media (min-width: 760px) { .tradeoffs { grid-template-columns: repeat(3, 1fr); } }
+  .mini { background: var(--card-bg); border: 1px solid var(--border); border-radius: 18px; padding: 20px 22px; }
+  .mini .plabel { margin-bottom: 6px; }
+  .mini .big { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .mini .big span { font-size: 15px; font-weight: 600; color: var(--faint); }
+  .mini p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+  .mini.warn .big { color: var(--warn); }
+  .note { text-align: center; color: var(--faint); font-size: 14px; margin-top: 26px; }
 
-  .compare { display: grid; gap: 12px; }
+  /* CTA band */
+  .band {
+    margin-top: 64px; border-radius: 26px; padding: 36px 32px; color: #fff;
+    background: linear-gradient(110deg, #2563eb 0%, #1d4ed8 35%, #0891b2 75%, #22d3ee 100%);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 22px;
+    box-shadow: 0 30px 70px -35px rgba(37, 99, 235, 0.8);
+  }
+  .band h3 { margin: 0 0 4px; font-size: 24px; letter-spacing: -0.02em; }
+  .band p { margin: 0; opacity: 0.9; }
+  .band .btn { background: #0b1424; color: #fff; border-color: transparent; }
+
+  /* Architecture */
+  .arch { display: grid; gap: 48px; align-items: center; }
+  @media (min-width: 960px) { .arch { grid-template-columns: 1fr 1fr; } }
+  .arch > * { min-width: 0; }
+  .arch h2 { text-align: left; }
+  .steps { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 22px; counter-reset: s; }
+  .steps li { display: grid; grid-template-columns: 34px 1fr; gap: 14px; }
+  .steps li::before {
+    counter-increment: s; content: counter(s);
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 700; font-size: 14px; color: var(--brand); background: var(--chip-bg);
+    border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+  }
+  .steps b { display: block; margin-bottom: 2px; }
+  .steps span { color: var(--muted); font-size: 15px; }
+  .diagram {
+    position: relative; aspect-ratio: 1 / 0.86; border-radius: 26px; border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent);
+    background: radial-gradient(circle at 50% 46%, rgba(59, 130, 246, 0.22), transparent 60%), var(--card-bg);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .ring {
+    position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    width: 52%; aspect-ratio: 1; border-radius: 50%;
+    border: 1px solid rgba(96, 165, 250, 0.5); background: rgba(37, 99, 235, 0.12);
+    display: grid; place-items: center;
+  }
+  .ring::before { content: ""; position: absolute; inset: -14%; border-radius: 50%; border: 1px dashed rgba(96, 165, 250, 0.35); }
+  .core {
+    width: 56%; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; text-align: center;
+    background: linear-gradient(135deg, #1d4ed8, #0b1a3a); color: #fff; font-weight: 700; font-size: clamp(11px, 1.6vw, 14px);
+    line-height: 1.3; box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.18), 0 20px 50px -20px rgba(37, 99, 235, 0.9);
+  }
+  .core small { display: block; font-weight: 500; opacity: 0.8; font-size: 0.8em; }
+  .ring-label { position: absolute; top: 9%; left: 50%; transform: translateX(-50%); font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #93c5fd; white-space: nowrap; }
+  .node {
+    position: absolute; transform: translate(-50%, -50%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 7px 12px; font-size: clamp(11px, 1.5vw, 13px); font-weight: 600; white-space: nowrap; color: var(--text);
+    box-shadow: 0 10px 24px -14px rgba(0, 0, 0, 0.6);
+  }
+  .node.n1 { left: 18%; top: 14%; } .node.n2 { left: 82%; top: 14%; }
+  .node.n3 { left: 16%; top: 72%; } .node.n4 { left: 84%; top: 72%; }
+  .node.bucket { left: 50%; top: 91%; border-color: rgba(34, 211, 238, 0.55); color: #0891b2; }
+  :root[data-theme="dark"] .node.bucket { color: #67e8f9; }
+
+  /* Compare */
+  .compare { display: grid; gap: 16px; }
   @media (min-width: 760px) { .compare { grid-template-columns: repeat(2, 1fr); } }
-  .compare .card h3 { font-size: 16px; }
+  .compare .feature h3 { margin-top: 0; font-size: 17px; }
 
-  /* CTA + footer */
-  .cta { text-align: center; }
-  .cta .actions { justify-content: center; }
-  footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--faint); font-size: 14px; }
-  .foot { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; }
-  .foot nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; }
+  /* Footer */
+  footer { border-top: 1px solid var(--border); padding: 56px 0 40px; background: var(--bg); }
+  .fgrid { display: grid; gap: 32px; }
+  @media (min-width: 760px) { .fgrid { grid-template-columns: 2fr 1fr 1fr; } }
+  .fgrid p { color: var(--faint); font-size: 14px; max-width: 30em; margin: 12px 0 0; }
+  .fgrid h4 { margin: 0 0 12px; font-size: 15px; }
+  .fgrid ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+  .fgrid ul a { color: var(--muted); }
+  .fbottom { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; color: var(--faint); font-size: 13px; }
 
   .toast {
-    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
-    background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 10px;
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); z-index: 30;
+    background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 12px;
     font-size: 14px; font-weight: 600; opacity: 0; transition: all 0.2s ease; pointer-events: none;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -246,18 +361,19 @@
 
 <header>
   <div class="wrap bar">
-    <a class="brand" href="#"><span class="logo" aria-hidden="true"></span>DBCenter</a>
-    <nav aria-label="Sections">
-      <a href="#agents">Agents</a>
-      <a href="#tests">Tests</a>
-      <a href="#bucket">Your bucket</a>
-      <a href="#numbers">Numbers</a>
+    <a class="brand" href="#"><span class="logo" aria-hidden="true"></span>dbcenter</a>
+    <nav class="top" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#examples">Examples</a>
+      <a href="#performance">Performance</a>
+      <a href="#architecture">Architecture</a>
       <a href="https://github.com/heyobi/dbcenter#readme">Docs</a>
     </nav>
     <div class="bar-right">
       <a class="icon-btn" href="https://github.com/heyobi/dbcenter" aria-label="GitHub">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
       </a>
+      <a class="btn primary small nav-cta" href="https://colab.research.google.com/github/heyobi/dbcenter/blob/main/examples/colab_quickstart.ipynb">Try in Colab</a>
       <button class="icon-btn" id="theme" type="button" aria-label="Switch light or dark">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
       </button>
@@ -266,140 +382,213 @@
 </header>
 
 <main>
-  <div class="wrap hero">
-    <div class="hero-grid">
+  <div class="hero">
+    <div class="deco" aria-hidden="true">
+      <svg class="d1" style="top:-180px;left:-200px;width:480px;height:480px" viewBox="0 0 460 460" fill="none">
+        <circle cx="180" cy="220" r="160" stroke="currentColor" stroke-width="1.4" stroke-dasharray="14 18"/>
+        <circle cx="240" cy="120" r="60" stroke="currentColor" stroke-width="1.2" opacity="0.7"/>
+        <path d="M60 320C140 240 220 240 300 320" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" opacity="0.6"/>
+      </svg>
+      <svg class="d2" style="top:12%;right:-12%;width:420px;height:420px" viewBox="0 0 400 400" fill="none">
+        <g stroke="currentColor" stroke-width="0.9" stroke-linecap="round" stroke-dasharray="6 10">
+          <path d="M40 60H360"/><path d="M40 140H360"/><path d="M40 220H360"/><path d="M40 300H360"/>
+          <path d="M80 40V360"/><path d="M160 40V360"/><path d="M240 40V360"/><path d="M320 40V360"/>
+        </g>
+        <rect x="150" y="150" width="100" height="100" rx="26" stroke="currentColor" stroke-width="1.3"/>
+      </svg>
+      <svg class="d3" style="bottom:-200px;right:-150px;width:420px;height:420px" viewBox="0 0 380 380" fill="none">
+        <polygon points="60,220 150,120 260,160 320,260 190,320" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
+        <circle cx="260" cy="90" r="52" stroke="currentColor" stroke-width="1" stroke-dasharray="8 12"/>
+      </svg>
+    </div>
+    <div class="wrap hero-grid">
       <div>
-        <span class="pill">0.4.3 · PostgreSQL 18 · MIT</span>
-        <h1>A real PostgreSQL<br>in <span class="accent">one pip install</span>.</h1>
-        <p class="lede">For your Python app, notebook, tests or AI agent. No server to run, no Docker. Agents get a read-only connection that PostgreSQL itself enforces, and your data can keep a copy in a bucket you own.</p>
+        <span class="pill"><i></i>0.4.3 on PyPI · PostgreSQL 18 · MIT</span>
+        <h1>A real PostgreSQL.<br><span class="grad">One pip install.</span></h1>
+        <p class="lede">For your <strong>Python app</strong>, <strong>notebook</strong>, <strong>tests</strong> or <strong>AI agent</strong>. No server to run, no Docker. Agents get a read-only connection that PostgreSQL itself enforces, and your data can keep a copy in a bucket you own.</p>
         <div class="actions">
-          <button class="install" type="button" data-copy="pip install dbcenter" aria-label="Copy the install command">
-            <span><span class="dollar">$</span> pip install dbcenter</span><span class="copy">Copy</span>
+          <button class="btn primary install" type="button" data-copy="pip install dbcenter" aria-label="Copy the install command">
+            pip install dbcenter <span class="copy">Copy</span>
           </button>
-          <a class="btn primary" href="https://colab.research.google.com/github/heyobi/dbcenter/blob/main/examples/colab_quickstart.ipynb">Try it in Colab</a>
+          <a class="btn" href="https://colab.research.google.com/github/heyobi/dbcenter/blob/main/examples/colab_quickstart.ipynb">Try it in Colab</a>
         </div>
-        <div class="facts">
-          <span>Linux, macOS, Windows</span>
-          <span>psql and every driver connect</span>
-          <span>pgvector, PostGIS, pg_trgm</span>
+        <div class="checks">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Linux, macOS, Windows</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>pgvector &amp; PostGIS</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>MCP server</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>pytest fixture</span>
         </div>
       </div>
-      <div class="code">
-        <div class="code-head"><i></i><i></i><i></i><b>app.py</b></div>
+
+      <div class="window" data-tabs>
+        <div class="window-head">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="tabs" role="tablist">
+            <button class="tab" role="tab" aria-selected="true" data-pane="p-quick">Quickstart</button>
+            <button class="tab" role="tab" aria-selected="false" data-pane="p-agent">Agents</button>
+            <button class="tab" role="tab" aria-selected="false" data-pane="p-test">Tests</button>
+            <button class="tab" role="tab" aria-selected="false" data-pane="p-bucket">Bucket</button>
+          </div>
+        </div>
+        <div class="pane on" id="p-quick">
 <pre><span class="k">import</span> dbcenter
 
-db = dbcenter.DBCenter(path=<span class="s">"./data"</span>)   <span class="c"># starts PostgreSQL 18</span>
+<span class="c"># starts PostgreSQL 18; the data stays in ./data</span>
+db = dbcenter.DBCenter(path=<span class="s">"./data"</span>)
 db.query(<span class="s">"CREATE TABLE notes (body text)"</span>)
 db.query(<span class="s">"INSERT INTO notes VALUES ($1)"</span>, [<span class="s">"milk"</span>])
 <span class="k">print</span>(db.query(<span class="s">"SELECT * FROM notes"</span>))
 
 <span class="k">print</span>(db.url)   <span class="c"># for psql, psycopg, SQLAlchemy</span>
 db.shutdown()     <span class="c"># stops with your program</span></pre>
+        </div>
+        <div class="pane" id="p-agent">
+<pre>db.query(<span class="s">"SELECT sum(total) FROM orders"</span>,
+         read_only=<span class="k">True</span>)          <span class="c"># fine</span>
+
+db.query(<span class="s">"WITH x AS (DELETE FROM orders "</span>
+         <span class="s">"RETURNING *) SELECT 1"</span>,
+         read_only=<span class="k">True</span>)
+<span class="c"># refused by PostgreSQL itself:</span>
+<span class="c"># cannot execute SELECT in a read-only transaction</span></pre>
+        </div>
+        <div class="pane" id="p-test">
+<pre><span class="c"># pip install dbcenter - and pytest has it</span>
+<span class="k">def</span> test_orders(dbcenter_db):
+    dbcenter_db.query(<span class="s">"CREATE TABLE orders (total int)"</span>)
+    dbcenter_db.query(<span class="s">"INSERT INTO orders VALUES (10)"</span>)
+    n = dbcenter_db.query(<span class="s">"SELECT count(*) AS n FROM orders"</span>)
+    <span class="k">assert</span> n[0][<span class="s">"n"</span>] == 1
+
+<span class="k">def</span> test_sqlalchemy(postgres_url):
+    engine = create_engine(postgres_url)</pre>
+        </div>
+        <div class="pane" id="p-bucket">
+<pre>bucket = dbcenter.S3StorageAdapter(<span class="s">"my-bucket"</span>, ...)
+
+laptop = dbcenter.DBCenter(path=<span class="s">"./laptop"</span>,
+                           multi_user_sync=<span class="k">True</span>)
+laptop.collection(<span class="s">"notes"</span>).insert_one({<span class="s">"body"</span>: <span class="s">"hi"</span>})
+dbcenter.SyncEngine(laptop, bucket).sync_table(<span class="s">"notes"</span>, 10_000)
+
+<span class="c"># any other machine rebuilds from the bucket</span>
+dbcenter.SyncEngine(server, bucket).pull_and_apply(<span class="s">"notes"</span>)</pre>
+        </div>
       </div>
     </div>
   </div>
 
-  <section id="what">
+  <section id="features">
     <div class="wrap">
-      <p class="eyebrow">What it is</p>
-      <h2>The actual <code>postgres</code> binary, started by your program.</h2>
-      <p class="sub">Not an emulation and not a fork. DBCenter downloads PostgreSQL once, runs it as a child process against a data directory, and stops it with your program. Every SQL feature works, because it is PostgreSQL.</p>
-      <div class="cards">
-        <div class="card">
-          <div class="num">For AI agents</div>
-          <h3>SQL without handing over your data</h3>
-          <p><code>read_only=True</code> runs a statement in a read-only transaction that is rolled back. PostgreSQL refuses the write, however the SQL is phrased. An MCP server ships with it.</p>
-          <a class="more" href="#agents">How it works →</a>
+      <div class="head">
+        <p class="eyebrow">What you get</p>
+        <h2>The actual postgres, started by your program.</h2>
+        <p>Not an emulation and not a fork. DBCenter downloads PostgreSQL once, runs it as a child process against a data directory, and stops it with your program. Every SQL feature works.</p>
+      </div>
+      <div class="features">
+        <div class="feature">
+          <div class="ico red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+          <h3>Read-only for AI agents</h3>
+          <p><code>read_only=True</code> runs SQL in a read-only transaction that is rolled back. PostgreSQL refuses the write, however it is phrased. Nothing parses the SQL, so nothing can slip past.</p>
         </div>
-        <div class="card">
-          <div class="num">In tests</div>
-          <h3>A pytest fixture, no service container</h3>
-          <p>Installing the package gives pytest a <code>dbcenter_db</code> fixture: one real server per session and an empty schema for every test.</p>
-          <a class="more" href="#tests">See the fixture →</a>
+        <div class="feature">
+          <div class="ico violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-12 0V8Z"/></svg></div>
+          <h3>An MCP server</h3>
+          <p><code>dbcenter-mcp</code> gives Claude, Cursor or any MCP client its own PostgreSQL. Read-only unless you pass <code>--allow-writes</code>.</p>
         </div>
-        <div class="card">
-          <div class="num">In your bucket</div>
-          <h3>A copy on S3 or R2 that you own</h3>
-          <p>Each table can ship what changed to your bucket as Parquet, and another machine rebuilds from it. Aggregates can read that Parquet through DuckDB.</p>
-          <a class="more" href="#bucket">Sync and restore →</a>
+        <div class="feature">
+          <div class="ico green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v7.5L4.2 18a2 2 0 0 0 1.8 3h12a2 2 0 0 0 1.8-3L15 9.5V2"/><path d="M8 2h8"/><path d="M7 15h10"/></svg></div>
+          <h3>A pytest fixture</h3>
+          <p>Installing the package gives pytest <code>dbcenter_db</code>: one real server per session and an empty schema for every test. No Docker, no service container.</p>
+        </div>
+        <div class="feature">
+          <div class="ico blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12.5 3.5 3.5 0 0 0 6 19Z"/><path d="M12 12v6"/><path d="m9 15 3-3 3 3"/></svg></div>
+          <h3>A copy in your own bucket</h3>
+          <p>Each table ships what changed to S3, Cloudflare R2, Tigris or MinIO as Parquet, and another machine rebuilds from it. Lose the machine, keep the data.</p>
+        </div>
+        <div class="feature">
+          <div class="ico amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></div>
+          <h3>Fast analytics from the same files</h3>
+          <p>With <code>columnar=True</code>, aggregates read that Parquet through DuckDB: 4.5x to 8.7x faster than PostgreSQL on one core. Lookups stay on PostgreSQL.</p>
+        </div>
+        <div class="feature">
+          <div class="ico cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></div>
+          <h3>Extensions in one call</h3>
+          <p><code>install_extension("pgvector")</code>, PostGIS, pg_trgm or pg_duckdb. Every download is checked against a pinned SHA-256 before it is loaded.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <section id="agents">
-    <div class="wrap split">
-      <div>
-        <p class="eyebrow">For AI agents</p>
-        <h2>Read-only is enforced by PostgreSQL, not by a filter.</h2>
-        <p class="sub">Most read-only database tools check the SQL text, and the text can hide a write. DBCenter never inspects the SQL, so there is nothing to slip past.</p>
-        <ul class="points">
-          <li><strong>Refused, however it is phrased:</strong> a <code>DELETE</code> inside a CTE, <code>nextval()</code>, DDL. The test suite tries the usual bypasses.</li>
-          <li><strong>An MCP server</strong> for Claude, Cursor or any MCP client. Read-only unless you pass <code>--allow-writes</code>.</li>
-          <li><strong>Memory with pgvector</strong>, one call away: a table with a vector column, queried by distance.</li>
-        </ul>
+  <section id="examples" class="alt">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">See it in action</p>
+        <h2>Three things it is for.</h2>
+        <p>Click each example to expand it. Every one runs as-is after <code>pip install dbcenter</code>.</p>
       </div>
-      <div class="stack">
-        <div class="code">
-          <div class="code-head"><i></i><i></i><i></i><b>agent.py</b></div>
-<pre>db.query(<span class="s">"SELECT sum(total) FROM orders"</span>, read_only=<span class="k">True</span>)  <span class="c"># fine</span>
+      <div class="examples">
+        <details class="ex" open>
+          <summary>
+            <span class="ico red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg></span>
+            <span><b>SQL for an agent, without handing it your data</b><small>read_only=True, enforced by PostgreSQL</small></span>
+            <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </summary>
+          <div class="window">
+<pre><span class="k">import</span> dbcenter
 
-db.query(<span class="s">"WITH gone AS (DELETE FROM orders RETURNING *) "</span>
-         <span class="s">"SELECT count(*) FROM gone"</span>, read_only=<span class="k">True</span>)
-<span class="c"># Error: cannot execute SELECT in a read-only transaction</span>
-<span class="c"># and every order is still there</span></pre>
-        </div>
-        <div class="code">
-          <div class="code-head"><i></i><i></i><i></i><b>terminal</b></div>
-<pre>pip install <span class="s">"dbcenter[mcp]"</span>
-claude mcp add dbcenter -- dbcenter-mcp --path /abs/path/to/data</pre>
-        </div>
-      </div>
-    </div>
-  </section>
+db = dbcenter.DBCenter(path=<span class="s">"./data"</span>)
+db.query(<span class="s">"CREATE TABLE IF NOT EXISTS orders (id serial, total numeric)"</span>)
+db.query(<span class="s">"INSERT INTO orders (total) VALUES (10.5), (99)"</span>)
 
-  <section id="tests">
-    <div class="wrap split">
-      <div>
-        <p class="eyebrow">In tests</p>
-        <h2>Test against PostgreSQL, not something like it.</h2>
-        <p class="sub">SQLite in tests misses what production PostgreSQL does, and testcontainers needs Docker on every machine and in CI. Here the fixture is there as soon as the package is installed.</p>
-        <ul class="points">
-          <li><strong>One server per test session</strong>, so the cost of starting PostgreSQL is paid once.</li>
-          <li><strong>An empty <code>public</code> schema for every test</strong>, so tests cannot see each other's tables.</li>
-          <li><strong>Your own driver too:</strong> <code>postgres_dsn</code> for psycopg, <code>postgres_url</code> for SQLAlchemy.</li>
-        </ul>
-      </div>
-      <div class="code">
-        <div class="code-head"><i></i><i></i><i></i><b>test_orders.py</b></div>
-<pre><span class="k">def</span> test_orders(dbcenter_db):
+<span class="k">print</span>(db.query(<span class="s">"SELECT sum(total) AS revenue FROM orders"</span>, read_only=<span class="k">True</span>))
+<span class="k">for</span> sql <span class="k">in</span> [<span class="s">"DELETE FROM orders"</span>,
+            <span class="s">"WITH gone AS (DELETE FROM orders RETURNING *) SELECT count(*) FROM gone"</span>,
+            <span class="s">"DROP TABLE orders"</span>]:
+    <span class="k">try</span>:
+        db.query(sql, read_only=<span class="k">True</span>)
+    <span class="k">except</span> Exception:
+        <span class="k">print</span>(<span class="s">"refused:"</span>, sql)
+db.shutdown()</pre>
+          </div>
+          <div class="why">The same guarantee as an MCP server: <code>pip install "dbcenter[mcp]"</code>, then <code>claude mcp add dbcenter -- dbcenter-mcp --path /abs/path/to/data</code>.</div>
+        </details>
+
+        <details class="ex">
+          <summary>
+            <span class="ico green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v7.5L4.2 18a2 2 0 0 0 1.8 3h12a2 2 0 0 0 1.8-3L15 9.5V2"/><path d="M8 2h8"/></svg></span>
+            <span><b>Test against PostgreSQL, not something like it</b><small>pytest fixtures, no Docker</small></span>
+            <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </summary>
+          <div class="window">
+<pre><span class="k">import</span> psycopg
+
+<span class="k">def</span> test_orders(dbcenter_db):
     dbcenter_db.query(<span class="s">"CREATE TABLE orders (id serial, total numeric)"</span>)
     dbcenter_db.query(<span class="s">"INSERT INTO orders (total) VALUES (10)"</span>)
-    rows = dbcenter_db.query(<span class="s">"SELECT count(*) AS n FROM orders"</span>)
-    <span class="k">assert</span> rows[0][<span class="s">"n"</span>] == 1
+    <span class="k">assert</span> dbcenter_db.query(<span class="s">"SELECT count(*) AS n FROM orders"</span>)[0][<span class="s">"n"</span>] == 1
 
-<span class="k">def</span> test_with_sqlalchemy(postgres_url):
-    engine = create_engine(postgres_url)
-    ...</pre>
-      </div>
-    </div>
-  </section>
+<span class="k">def</span> test_tables_do_not_leak(dbcenter_db):
+    <span class="c"># every test starts with an empty public schema</span>
+    <span class="k">assert</span> dbcenter_db.query(<span class="s">"SELECT count(*) AS n FROM pg_tables WHERE tablename = 'orders'"</span>)[0][<span class="s">"n"</span>] == 0
 
-  <section id="bucket">
-    <div class="wrap split">
-      <div>
-        <p class="eyebrow">Your data in your own bucket</p>
-        <h2>Lose the machine, keep the data.</h2>
-        <p class="sub">With <code>multi_user_sync=True</code> each table remembers what changed since its last sync and ships just that to S3, Cloudflare R2, Tigris or MinIO, as Parquet with one column per field.</p>
-        <ul class="points">
-          <li><strong>Rebuild anywhere:</strong> another machine, or this one after losing its disk, restores from the bucket.</li>
-          <li><strong>Several writers</strong> can share one bucket. The newest edit wins and the losing version is kept, not dropped.</li>
-          <li><strong>Analytics from the same files:</strong> with <code>columnar=True</code>, aggregates read the Parquet through DuckDB, 4.5x to 8.7x faster than PostgreSQL on one core.</li>
-        </ul>
-      </div>
-      <div class="code">
-        <div class="code-head"><i></i><i></i><i></i><b>sync.py</b></div>
-<pre>bucket = dbcenter.S3StorageAdapter(
+<span class="k">def</span> test_your_own_driver(postgres_dsn):
+    <span class="k">with</span> psycopg.connect(postgres_dsn) <span class="k">as</span> conn:
+        <span class="k">assert</span> conn.execute(<span class="s">"SELECT 1"</span>).fetchone() == (1,)</pre>
+          </div>
+          <div class="why">One server per test session, so PostgreSQL starts once. <code>postgres_url</code> gives SQLAlchemy the same database.</div>
+        </details>
+
+        <details class="ex">
+          <summary>
+            <span class="ico blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12.5 3.5 3.5 0 0 0 6 19Z"/></svg></span>
+            <span><b>Your data in a bucket you own</b><small>S3, R2, Tigris or MinIO, as Parquet</small></span>
+            <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </summary>
+          <div class="window">
+<pre><span class="k">import</span> dbcenter
+
+bucket = dbcenter.S3StorageAdapter(
     <span class="s">"my-bucket"</span>,
     endpoint=<span class="s">"https://&lt;account&gt;.r2.cloudflarestorage.com"</span>,
     access_key=<span class="s">"..."</span>, secret_key=<span class="s">"..."</span>,
@@ -408,94 +597,155 @@ claude mcp add dbcenter -- dbcenter-mcp --path /abs/path/to/data</pre>
 laptop = dbcenter.DBCenter(path=<span class="s">"./laptop"</span>, multi_user_sync=<span class="k">True</span>)
 laptop.collection(<span class="s">"notes"</span>).insert_one({<span class="s">"body"</span>: <span class="s">"remember the milk"</span>})
 dbcenter.SyncEngine(laptop, bucket).sync_table(<span class="s">"notes"</span>, 10_000)
+laptop.shutdown()
 
-<span class="c"># on another machine</span>
 server = dbcenter.DBCenter(path=<span class="s">"./server"</span>, multi_user_sync=<span class="k">True</span>)
-dbcenter.SyncEngine(server, bucket).pull_and_apply(<span class="s">"notes"</span>)</pre>
+dbcenter.SyncEngine(server, bucket).pull_and_apply(<span class="s">"notes"</span>)
+<span class="k">print</span>(server.query(<span class="s">"SELECT body FROM notes"</span>))</pre>
+          </div>
+          <div class="why">Only what changed since the last sync is sent. Several writers can share one bucket: the newest edit wins, and the losing version is kept rather than dropped.</div>
+        </details>
       </div>
     </div>
   </section>
 
-  <section id="numbers">
+  <section id="performance">
     <div class="wrap">
-      <p class="eyebrow">Measured</p>
-      <h2>Where it is faster, and where it is not.</h2>
-      <p class="sub">Measured against a plain PostgreSQL with the same limits, 1 CPU and 1 GB, the cheapest tier anyone rents. Re-run on 17 October 2026, and the rig is in the repository.</p>
-      <div class="two">
-        <div>
-          <h3>Speed</h3>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th></th><th>PostgreSQL</th><th>DBCenter</th></tr></thead>
-              <tbody>
-                <tr><td>Newest 100 of 200,000 rows</td><td class="n">0.6 ms</td><td class="n">0.6 ms</td></tr>
-                <tr><td>Lookup by key, row held locally</td><td class="n">0.4 ms</td><td class="n">0.4 ms</td></tr>
-                <tr><td>Aggregate, 200,000 rows</td><td class="n">92.2 ms</td><td class="n win">20.4 ms</td></tr>
-                <tr><td>Aggregate, 1,000,000 rows</td><td class="n">389.1 ms</td><td class="n win">44.5 ms</td></tr>
-                <tr><td>Cold start</td><td class="n">1.4 s</td><td class="n lose">7.3 s</td></tr>
-                <tr><td>Memory</td><td class="n">41 MB</td><td class="n lose">123 MB</td></tr>
-              </tbody>
-            </table>
+      <div class="head">
+        <p class="eyebrow">Measured, not claimed</p>
+        <h2>Performance that matters.</h2>
+        <p>Against a plain PostgreSQL with the same limits: 1 CPU and 1 GB, the cheapest tier anyone rents. Re-run on 17 October 2026.</p>
+      </div>
+      <div class="perf">
+        <div class="pcard">
+          <div class="pcard-head">
+            <div class="picon emerald"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></div>
+            <div><div class="plabel">Whole-table aggregate</div><div class="ptitle">1,000,000 rows on one core</div></div>
+            <span class="chip">8.7x faster</span>
           </div>
-          <p class="note">A row read from the bucket instead of the local table takes about 60 ms with the bucket 20 ms away. The bucket is for durability and analytics, not for serving requests.</p>
+          <p class="pdesc">columnar=True, reading the synced Parquet through DuckDB</p>
+          <div class="series">
+            <div class="row"><span>DBCenter (columnar)</span><span class="v good">44.5 ms</span></div>
+            <div class="track"><div class="fill emerald" style="width:11.4%"></div></div>
+          </div>
+          <div class="series">
+            <div class="row"><span>PostgreSQL</span><span class="v">389.1 ms</span></div>
+            <div class="track"><div class="fill base" style="width:100%"></div></div>
+          </div>
         </div>
-        <div>
-          <h3>Cost per month, by table size</h3>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Table</th><th>Supabase Pro</th><th>PostgreSQL on Fly</th><th>DBCenter, Fly + R2</th></tr></thead>
-              <tbody>
-                <tr><td>10 GB</td><td class="n">$25.25</td><td class="n">$7.72</td><td class="n win">$6.50</td></tr>
-                <tr><td>100 GB</td><td class="n">$36.50</td><td class="n">$23.92</td><td class="n win">$7.69</td></tr>
-                <tr><td>500 GB</td><td class="n">$86.50</td><td class="n">$95.92</td><td class="n win">$12.97</td></tr>
-                <tr><td>1 TB</td><td class="n">$152.00</td><td class="n">$190.24</td><td class="n win">$19.89</td></tr>
-              </tbody>
-            </table>
+        <div class="pcard">
+          <div class="pcard-head">
+            <div class="picon violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12.5 3.5 3.5 0 0 0 6 19Z"/></svg></div>
+            <div><div class="plabel">Monthly bill</div><div class="ptitle">A 100 GB table</div></div>
+            <span class="chip">4.7x cheaper</span>
           </div>
-          <p class="note">List prices, the same one-core machine in every column, so only storage differs. Managed disk costs about eight times what object storage does.</p>
+          <p class="pdesc">List prices, the same one-core machine in both, so only storage differs</p>
+          <div class="series">
+            <div class="row"><span>DBCenter on Fly + R2</span><span class="v violet">$7.69</span></div>
+            <div class="track"><div class="fill violet" style="width:21.1%"></div></div>
+          </div>
+          <div class="series">
+            <div class="row"><span>Supabase Pro</span><span class="v">$36.50</span></div>
+            <div class="track"><div class="fill base" style="width:100%"></div></div>
+          </div>
         </div>
       </div>
-      <p class="note"><a href="https://github.com/heyobi/dbcenter/blob/main/docs/cost-and-scale.md">The method, the rig and the rest of the numbers →</a></p>
+
+      <div class="tradeoffs">
+        <div class="mini">
+          <div class="plabel">Everyday queries</div>
+          <div class="big">0.6 ms <span>vs 0.6 ms</span></div>
+          <p>The newest 100 of 200,000 rows: the same speed as PostgreSQL, because it is PostgreSQL.</p>
+        </div>
+        <div class="mini warn">
+          <div class="plabel">Trade-off: cold start</div>
+          <div class="big">7.3 s <span>vs 1.4 s</span></div>
+          <p>A node that rebuilds from the bucket takes longer to come up.</p>
+        </div>
+        <div class="mini warn">
+          <div class="plabel">Trade-off: memory</div>
+          <div class="big">123 MB <span>vs 41 MB</span></div>
+          <p>About three times plain PostgreSQL. The bucket is for durability and analytics, not for serving requests.</p>
+        </div>
+      </div>
+      <p class="note"><a href="https://github.com/heyobi/dbcenter/blob/main/docs/cost-and-scale.md">The method, the rig and every number →</a></p>
+
+      <div class="band">
+        <div>
+          <h3>Try it in a minute.</h3>
+          <p>A Colab notebook runs SQL, agent safety, pgvector memory and a bucket sync.</p>
+        </div>
+        <a class="btn" href="https://colab.research.google.com/github/heyobi/dbcenter/blob/main/examples/colab_quickstart.ipynb">Open in Colab</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture" class="alt">
+    <div class="wrap arch">
+      <div>
+        <p class="eyebrow">Architecture</p>
+        <h2>Small on purpose.</h2>
+        <p style="color:var(--muted);margin:0">Storage, planning and transactions are PostgreSQL's. DBCenter adds the lifecycle and the copy in your bucket.</p>
+        <ol class="steps">
+          <li><div><b>A real postgres binary</b><span>Downloaded once to <code>~/.dbcenter</code>, then started against your data directory.</span></div></li>
+          <li><div><b>Stopped with your program</b><span>A small watcher process shuts PostgreSQL down cleanly, even if your program crashes.</span></div></li>
+          <li><div><b>An ordinary connection</b><span><code>db.query()</code> from Python, or <code>db.url</code> for psql, psycopg, SQLAlchemy and any driver in any language.</span></div></li>
+          <li><div><b>Parquet in your bucket</b><span>One column per field, so DuckDB can read it directly for analytics.</span></div></li>
+        </ol>
+      </div>
+      <div class="diagram" aria-label="Your app, an AI agent, pytest and any driver connect to one PostgreSQL, which syncs to your bucket">
+        <div class="ring"><span class="ring-label">STARTED BY DBCENTER</span><div class="core"><div>PostgreSQL 18<small>embedded</small></div></div></div>
+        <span class="node n1">Your Python app</span>
+        <span class="node n2">AI agent · MCP</span>
+        <span class="node n3">pytest</span>
+        <span class="node n4">psql &amp; drivers</span>
+        <span class="node bucket">S3 / R2 bucket · Parquet</span>
+      </div>
     </div>
   </section>
 
   <section id="compare">
     <div class="wrap">
-      <p class="eyebrow">Alternatives</p>
-      <h2>How it compares.</h2>
-      <div class="compare">
-        <div class="card"><h3>SQLite (+ Litestream)</h3><p>Lighter and simpler. But it is not PostgreSQL: no pgvector, no PostGIS, and different SQL from the database you deploy.</p></div>
-        <div class="card"><h3>testcontainers / Docker</h3><p>Real PostgreSQL too, but it needs Docker on every laptop and CI runner, and it does not run in Colab.</p></div>
-        <div class="card"><h3>pgserver, postgresql-wheel</h3><p>The same idea, in Python. Neither has been updated since 2024 and 2021, and they stop at PostgreSQL 16 and 14.</p></div>
-        <div class="card"><h3>PGlite</h3><p>PostgreSQL compiled to WASM, for JavaScript. A single connection, and in the browser rather than in Python.</p></div>
+      <div class="head">
+        <p class="eyebrow">Alternatives</p>
+        <h2>How it compares.</h2>
       </div>
-    </div>
-  </section>
-
-  <section class="cta">
-    <div class="wrap">
-      <h2>Try it in a minute.</h2>
-      <p class="sub" style="margin-left:auto;margin-right:auto">Python is the supported binding. C, Go, Java and Node bindings exist and are experimental, and any language can connect over the PostgreSQL wire protocol.</p>
-      <div class="actions">
-        <button class="install" type="button" data-copy="pip install dbcenter" aria-label="Copy the install command">
-          <span><span class="dollar">$</span> pip install dbcenter</span><span class="copy">Copy</span>
-        </button>
-        <a class="btn" href="https://github.com/heyobi/dbcenter">GitHub</a>
-        <a class="btn" href="https://pypi.org/project/dbcenter/">PyPI</a>
+      <div class="compare">
+        <div class="feature"><h3>SQLite (+ Litestream)</h3><p>Lighter and simpler. But it is not PostgreSQL: no pgvector, no PostGIS, and different SQL from the database you deploy.</p></div>
+        <div class="feature"><h3>testcontainers / Docker</h3><p>Real PostgreSQL too, but it needs Docker on every laptop and CI runner, and it does not run in Colab.</p></div>
+        <div class="feature"><h3>pgserver, postgresql-wheel</h3><p>The same idea in Python. Neither has been updated since 2024 and 2021, and they stop at PostgreSQL 16 and 14.</p></div>
+        <div class="feature"><h3>PGlite</h3><p>PostgreSQL compiled to WASM, for JavaScript. A single connection, in the browser rather than in Python.</p></div>
       </div>
     </div>
   </section>
 </main>
 
 <footer>
-  <div class="wrap foot">
-    <span>DBCenter · MIT licensed · by İbrahim Polat</span>
-    <nav aria-label="Links">
-      <a href="https://github.com/heyobi/dbcenter#readme">Docs</a>
-      <a href="https://github.com/heyobi/dbcenter/blob/main/docs/mcp.md">MCP server</a>
-      <a href="https://github.com/heyobi/dbcenter/blob/main/docs/cost-and-scale.md">Measurements</a>
-      <a href="https://github.com/heyobi/dbcenter/issues">Issues</a>
-    </nav>
+  <div class="wrap">
+    <div class="fgrid">
+      <div>
+        <a class="brand" href="#"><span class="logo" aria-hidden="true"></span>dbcenter</a>
+        <p>A real PostgreSQL in one pip install, for Python apps, notebooks, tests and AI agents. Python is the supported binding; C, Go, Java and Node are experimental.</p>
+      </div>
+      <div>
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="https://github.com/heyobi/dbcenter#readme">Documentation</a></li>
+          <li><a href="https://github.com/heyobi/dbcenter/blob/main/docs/mcp.md">MCP server</a></li>
+          <li><a href="https://github.com/heyobi/dbcenter/blob/main/docs/cost-and-scale.md">Measurements</a></li>
+          <li><a href="https://colab.research.google.com/github/heyobi/dbcenter/blob/main/examples/colab_quickstart.ipynb">Colab notebook</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/heyobi/dbcenter">GitHub</a></li>
+          <li><a href="https://github.com/heyobi/dbcenter/issues">Issues</a></li>
+          <li><a href="https://pypi.org/project/dbcenter/">PyPI</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="fbottom"><span>© 2026 İbrahim Polat · MIT licensed</span><span>Built on PostgreSQL</span></div>
   </div>
 </footer>
 
@@ -505,24 +755,29 @@ dbcenter.SyncEngine(server, bucket).pull_and_apply(<span class="s">"notes"</span
   (function () {
     var root = document.documentElement;
     document.getElementById("theme").addEventListener("click", function () {
-      var dark = root.getAttribute("data-theme")
-        ? root.getAttribute("data-theme") === "dark"
-        : window.matchMedia("(prefers-color-scheme: dark)").matches;
-      var next = dark ? "light" : "dark";
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
       root.setAttribute("data-theme", next);
-      try { localStorage.setItem("theme", next); } catch (e) {}
+      try { localStorage.setItem("dbcenter-theme", next); } catch (e) {}
+    });
+
+    document.querySelectorAll("[data-tabs]").forEach(function (win) {
+      win.querySelectorAll(".tab").forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          win.querySelectorAll(".tab").forEach(function (t) { t.setAttribute("aria-selected", t === tab ? "true" : "false"); });
+          win.querySelectorAll(".pane").forEach(function (p) { p.classList.toggle("on", p.id === tab.getAttribute("data-pane")); });
+        });
+      });
     });
 
     var toast = document.getElementById("toast"), timer;
     document.querySelectorAll("[data-copy]").forEach(function (el) {
       el.addEventListener("click", function () {
-        var text = el.getAttribute("data-copy");
-        var done = function () {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(el.getAttribute("data-copy")).then(function () {
           toast.classList.add("show");
           clearTimeout(timer);
           timer = setTimeout(function () { toast.classList.remove("show"); }, 1400);
-        };
-        if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+        }, function () {});
       });
     });
   })();
