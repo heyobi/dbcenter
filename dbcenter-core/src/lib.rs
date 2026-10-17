@@ -952,6 +952,13 @@ impl DBCenter {
         self.process.lock().unwrap().get_port()
     }
 
+    /// A libpq connection string for this server, for any other client: psql,
+    /// psycopg, a driver in another language. Over a Unix socket the host is
+    /// the socket directory.
+    pub fn connection_string(&self) -> String {
+        self.process.lock().unwrap().connection_string(&self.config)
+    }
+
     /// Get internal client for advanced operations
     /// Columns this table is known to have, if we have looked before.
     pub(crate) fn cached_columns(&self, table: &str) -> Option<std::collections::HashSet<String>> {

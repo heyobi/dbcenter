@@ -1,5 +1,7 @@
 # DBCenter
 
+<!-- mcp-name: io.github.heyobi/dbcenter -->
+
 A real PostgreSQL, embedded in your process. No server to install, no Docker, no
 connection string to configure - the binaries are fetched once and the database
 runs as a child process against a directory you choose.
