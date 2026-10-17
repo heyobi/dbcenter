@@ -2,7 +2,7 @@
 
 > Real PostgreSQL 18 inside a Python process, with a MongoDB-style collection API, optional sync of each collection to storage as columnar Parquet, and optional DuckDB-backed columnar reads. `pip install dbcenter`. MIT licensed.
 
-DBCenter starts an actual `postgres` server as a child process against a data directory and talks to it over a local socket. Everything is ordinary PostgreSQL underneath: any SQL works through `db.query`, and any PostgreSQL client can connect. Python is the supported binding; the C, Go, Java, Node and R bindings are experimental.
+DBCenter starts an actual `postgres` server as a child process against a data directory and talks to it over a local socket. Everything is ordinary PostgreSQL underneath: any SQL works through `db.query`, and any PostgreSQL client can connect. Python is the supported binding; the C, Go, Java and Node bindings are experimental.
 
 ## Quick start
 

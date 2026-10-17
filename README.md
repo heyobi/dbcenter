@@ -78,10 +78,10 @@ container too.
 (`python_tests/`, run on every push), the one published to PyPI, and the one
 every feature lands in first.
 
-The C, Go, Java, Node and R bindings are **experimental**. They are thin
-wrappers over the same `dbcenter-ffi` surface and CI keeps them compiling, but
-Go has one test file and the others have none, so nothing is known about them
-beyond that they build. Use them if you are willing to find the bugs; do not
+The C, Go, Java and Node bindings are **experimental**. They are thin
+wrappers over the same `dbcenter-ffi` surface and CI keeps them compiling. Go
+has one test file, which passes; Java and Node wrap only the vector store and
+have no tests, so nothing is known about them beyond that they build. Use them if you are willing to find the bugs; do not
 build something you have to keep running on top of one.
 
 ```c
@@ -123,7 +123,7 @@ an ordinary connection string.
 flowchart TB
     subgraph clients["Everything that connects"]
         driver["psql, DBeaver, pgAdmin<br/>any PostgreSQL driver"]
-        api["collection API<br/>Python (supported)<br/>C, Go, Java, Node, R (experimental)"]
+        api["collection API<br/>Python (supported)<br/>C, Go, Java, Node (experimental)"]
     end
 
     subgraph engine["DBCenter"]

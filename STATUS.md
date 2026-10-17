@@ -206,10 +206,12 @@ picks the same version. `tests/conflicts.rs` pins all three cases.
 This is resolution, not merging. Two nodes incrementing a shared counter still
 end at one increment. `DBCENTER_PULL` stays off by default.
 
-**Everything except Python is marked experimental.** Go has one test file; Java,
-Node and R have none. They are thin wrappers over `dbcenter-ffi` and CI keeps
-them compiling, which is all anyone knows about them, and each one now says so in
-its own README. Python is the supported binding: it has the test suite, it is
+**Everything except Python is marked experimental.** Go has one test file, and
+on 17 October it passed against the current engine: lifecycle, extensions and
+the vector store. Java and Node wrap only the vector store and have no tests;
+CI keeps their Rust side compiling, which is all anyone knows about them, and
+each says so in its own README. The R package was removed: every function in it
+printed "stub" and did nothing. Python is the supported binding: it has the test suite, it is
 what is on PyPI, and features land there first. Anyone who needs another language
 today should connect over the PostgreSQL wire protocol with an ordinary driver -
 that path is tested.
@@ -265,7 +267,7 @@ rig, is in `docs/cost-and-scale.md`.
 
 ## Next, in order
 
-1. **Give the Go, Java, Node and R bindings a test each, or stop shipping them.**
+1. **Give the Java and Node bindings a test each, or stop shipping them.**
    Marked experimental is honest; it is not a resting place.
 2. Build pg_duckdb from source rather than repackaging upstream's binary.
    `build-systems/pg_duckdb` is written and correct; DuckDB wants more memory to

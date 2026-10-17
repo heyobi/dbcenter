@@ -14,7 +14,7 @@ Read `STATUS.md` first. It says what is done, what is broken, and what is next.
 | `dbcenter-core` | the engine: process lifecycle, collections, delta sync, storage adapters |
 | `dbcenter-ffi` | C ABI |
 | `dbcenter-python` | PyO3 bindings, the binding that matters |
-| `dbcenter-go` / `-java` / `-node` / `-r` | thin, barely exercised; treat as experimental |
+| `dbcenter-go` / `-java` / `-node` | thin, barely exercised; treat as experimental |
 | `dbcenter-watcher` | sidecar that shuts PostgreSQL down when the parent dies |
 | `dbcenter-serve` | the engine as a container workload, with object storage behind it |
 
