@@ -4,6 +4,8 @@
 install`, no server, no Docker. Agents get a read-only connection that
 PostgreSQL itself enforces, and your data keeps a copy in a bucket you own.**
 
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/heyobi/dbcenter/blob/main/examples/colab_quickstart.ipynb)
+
 ```bash
 pip install dbcenter
 ```
@@ -88,6 +90,19 @@ server = dbcenter.DBCenter(path="./server", multi_user_sync=True)
 dbcenter.SyncEngine(server, bucket).pull_and_apply("notes")
 print(server.query("SELECT body FROM notes"))
 server.shutdown()
+```
+
+In production the bucket is S3, Cloudflare R2, Tigris or MinIO. Pass the keys,
+or leave them out to read the usual `AWS_*` environment variables:
+
+```python
+bucket = dbcenter.S3StorageAdapter(
+    "my-bucket",
+    endpoint="https://<account>.r2.cloudflarestorage.com",
+    access_key="...",
+    secret_key="...",
+    prefix="myapp",          # several databases can share one bucket
+)
 ```
 
 The same Parquet is what makes analytics cheap: with `columnar=True`,
