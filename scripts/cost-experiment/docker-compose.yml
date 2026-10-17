@@ -19,20 +19,24 @@ name: dbcenter-cost
 
 services:
   storage:
-    image: minio/minio:latest
-    command: server /data
+    # minio/minio is no longer on Docker Hub. Bitnami's archived build is
+    # frozen, which is fine for a benchmark, and creates the bucket itself.
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     environment:
       MINIO_ROOT_USER: dbcenter
       MINIO_ROOT_PASSWORD: dbcenter123
+      MINIO_DEFAULT_BUCKETS: events
     ports:
       - "29000:9000"
     volumes:
-      - minio-data:/data
+      - minio-data:/bitnami/minio/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # Ready means the bucket exists: an anonymous request is refused (403)
+      # once it does and answers 404 until then.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/events/ | grep -q 403"]
       interval: 3s
       timeout: 2s
-      retries: 20
+      retries: 40
 
   # Object storage that is a network away, which is what it is in production.
   #
@@ -56,15 +60,14 @@ services:
              tc qdisc show dev eth0"
     profiles: ["latency"]
 
+  # The bucket is created by the storage service itself now; this only stands
+  # for "storage is ready", so the nodes and run.py have one thing to wait on.
   storage-init:
-    image: minio/minio:latest
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     depends_on:
       storage:
         condition: service_healthy
-    entrypoint: >
-      sh -c "mc alias set s3 http://storage:9000 dbcenter dbcenter123 &&
-             mc mb --ignore-existing s3/events &&
-             echo bucket ready"
+    entrypoint: ["sh", "-c", "echo bucket ready"]
 
   # A managed PostgreSQL, sized like the machine next to it.
   postgres:
