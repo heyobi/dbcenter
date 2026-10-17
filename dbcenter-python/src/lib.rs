@@ -398,7 +398,7 @@ impl DBCenter {
     }
 
     /// Shutdown the database
-    fn shutdown(&self) -> PyResult<()> {
+    fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         // Check if already closed
         let mut closed = self.closed.lock().unwrap();
         if *closed {
@@ -406,12 +406,20 @@ impl DBCenter {
             return Ok(());
         }
 
-        // Don't call inner.shutdown() - let watcher handle it
-        // Just notify watcher that we're done
+        // Stop the server here, and only then tell the watcher we are done.
+        //
+        // This used to leave the stopping to the watcher, which does it after
+        // this call returns and, when the server is slow to go, with SIGKILL.
+        // A script that shut down and then reopened the same directory - or
+        // the next cell of a notebook - found the old server still up and was
+        // refused with "PostgreSQL is already running", and every server was
+        // left to crash recovery on its next start. pg_ctl stops it cleanly and
+        // waits. The watcher stays as the safety net for a process that dies
+        // without calling this.
+        let stopped = py.allow_threads(|| self.inner.shutdown());
         self.notify_instance_watcher("SUCCESS")?;
-
         *closed = true;
-        Ok(())
+        stopped.map_err(|e| PyException::new_err(e.to_string()))
     }
 
     /// Force shutdown a specific path (class method)
@@ -501,6 +509,7 @@ impl DBCenter {
     /// Context manager support: __exit__
     fn __exit__(
         &mut self,
+        py: Python<'_>,
         _exc_type: Option<PyObject>,
         _exc_value: Option<PyObject>,
         _traceback: Option<PyObject>,
@@ -519,10 +528,12 @@ impl DBCenter {
                 self.path
             );
 
-            // Watcher will handle PostgreSQL shutdown and cleanup
+            // Stopped here, as in shutdown(), so the directory can be opened
+            // again as soon as the block ends.
+            let stopped = py.allow_threads(|| self.inner.shutdown());
             self.notify_instance_watcher("SUCCESS")?;
-
             *closed = true;
+            stopped.map_err(|e| PyException::new_err(e.to_string()))?;
         } else {
             tracing::info!("Context manager __exit__ called for DBCenter at {} (service mode, keeping running)", self.path);
         }
