@@ -1,8 +1,88 @@
 # Can a small machine and a bucket stand in for a database server?
 
 That is the question behind DBCenter, and it deserves an answer with numbers in
-it rather than an argument. This is the answer as of 9 September 2026, measured
-on one machine with `scripts/cost-experiment/`, which anyone can re-run.
+it rather than an argument. It was first answered on 9 September 2026 and
+re-run on 17 October 2026, on one machine, with `scripts/cost-experiment/`,
+which anyone can re-run. The October numbers come first; everything after them
+is the September run, kept because it is what the fixes since were measured
+against.
+
+## 17 October 2026, on 0.4.2
+
+Same rig: three containers with 1 CPU and 1 GB each, the same 200,000 rows,
+PostgreSQL 18. Between the runs the collection became a partitioned table
+instead of a view, the Parquet gained compression, compaction learned to
+stream, the restore went from a statement per row to one per record batch, and
+the pending partition is vacuumed after each sync. The network case puts a
+forwarder in front of the bucket that holds every chunk 10 ms each way; this
+kernel has no netem, and the forwarder does not delay the TCP handshake, so it
+slightly flatters the remote columns.
+
+```
+| | postgres | dbcenter | lazy | dbcenter, 20 ms | lazy, 20 ms |
+|---|---|---|---|---|---|
+| aggregate, collection | 92.2 ms | 96.4 ms | - | 94.7 ms | - |
+| aggregate, columnar view | - | 20.4 ms | 49.1 ms | 84.6 ms | 259.7 ms |
+| newest 100 rows by timestamp | 0.6 ms | 0.6 ms | 43.9 ms | 0.6 ms | 255.1 ms |
+| point lookup by indexed column | 0.4 ms | 0.4 ms | 33.8 ms | 0.5 ms | 238.0 ms |
+| cold start to serving | 1.4 s | 7.3 s | 2.2 s | 14.7 s | 2.7 s |
+| local disk | 154 MB | 400 MB | 39 MB | 400 MB | 39 MB |
+| object storage | 0 | 88 MB | 88 MB | 88 MB | 88 MB |
+| resident memory | 41 MB | 123 MB | 65 MB | 124 MB | 61 MB |
+```
+
+And at a million rows, bucket next door:
+
+```
+| | postgres | dbcenter | lazy |
+|---|---|---|---|
+| aggregate, collection | 389.1 ms | 612.0 ms | - |
+| aggregate, columnar view | - | 44.5 ms | 159.5 ms |
+| newest 100 rows by timestamp | 0.5 ms | 0.6 ms | 134.8 ms |
+| point lookup by indexed column | 0.4 ms | 0.5 ms | 64.9 ms |
+| cold start to serving | 1.4 s | 37.6 s | 2.2 s |
+| local disk | 606 MB | 1,432 MB | 39 MB |
+| object storage | 0 | 110 MB | 110 MB |
+| resident memory | 40 MB | 210 MB | 89 MB |
+```
+
+What changed in the reading of it:
+
+- **The view tax is gone.** The newest hundred rows took 103.8 ms in
+  September and take 0.6 ms now, the same as a plain table.
+- **The columnar lead grows with the table**: 4.5x at 200,000 rows, 8.7x at a
+  million. Over the network it shrinks to 1.1x at 200,000 rows; the million-row
+  run over the network has not been done.
+- **A million rows now fit on 1 GB.** Compaction streams, and finished in
+  about 50 s.
+- **The ordinary collection is 1.6x slower than a plain table at a million
+  rows**, because its rows carry the sync columns. Aggregates belong on the
+  columnar view. Most of its extra local disk is write-ahead log from moving
+  every row between partitions, which PostgreSQL recycles.
+- **The point lookup from the bucket is still the weak spot.** Neither the
+  DuckDB path above nor `scan_smart` (one id, about ten requests, 292 ms at
+  20 ms a round trip - `examples/bench_lookup.rs`) is fit for a request path.
+
+Scaling, same rig, bucket next door: one PostgreSQL with three cores against
+one to three readers with one core each, holding no data. This machine runs
+PostgreSQL's aggregate much faster than September's, so per core they are now
+about even; capacity is still added by machines that hold 39 MB each.
+
+```
+| clients | postgres, 3 cores | 1 reader | 2 readers | 3 readers |
+|---|---|---|---|---|
+| 1 | 39.2 q/s | 20.1 q/s | 19.9 q/s | 19.4 q/s |
+| 2 | 49.2 q/s | 23.9 q/s | 40.6 q/s | 40.8 q/s |
+| 4 | 50.9 q/s | 23.0 q/s | 49.4 q/s | 61.6 q/s |
+| 8 | 65.4 q/s | 21.4 q/s | 45.3 q/s | 72.4 q/s |
+```
+
+The prices below were checked on 8 September 2026 and assume the Parquet takes
+0.88x the bytes of the PostgreSQL table; with compression it now takes 0.57x at
+200,000 rows and 0.18x at a million, so the object-storage line is smaller
+still.
+
+# The September run
 
 ## The rig
 
