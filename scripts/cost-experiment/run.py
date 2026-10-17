@@ -328,11 +328,27 @@ def cold_start(service, port, engine):
     stopped when idle.
     """
     compose("stop", service)
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
     started = time.perf_counter()
     compose("start", service)
-    conn = connect(port, timeout=900)
     if engine == "dbcenter":
-        wait_for_relation(conn, "events_columnar")
+        # PostgreSQL accepts connections before the restore has finished, and
+        # the columnar view survives a restart, so neither says the node is
+        # ready. A query that happened to queue behind the restore's lock
+        # measured the restore and one that did not measured nothing, which
+        # made this number a coin toss. The node says when it is serving.
+        deadline = time.time() + 900
+        while time.time() < deadline:
+            logs = subprocess.run(
+                ["docker", "logs", "--since", since, container_id(service)],
+                capture_output=True, text=True,
+            )
+            if "DBCenter is serving" in logs.stdout + logs.stderr:
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(f"{service} never said it was serving")
+    conn = connect(port, timeout=900)
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM events")
         cur.fetchone()
