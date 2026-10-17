@@ -1040,12 +1040,14 @@ impl SyncEngine {
                         // surrounding pair is the caller's job.
                         let key = format!("'{}'", quote_sql_literal(f.name()));
                         let expr = match f.data_type() {
-                            DataType::Int64 => format!("($4::jsonb->>{})::bigint", key),
+                            DataType::Int64 => format!("(dbc_r.value->'doc'->>{})::bigint", key),
                             DataType::Float64 => {
-                                format!("($4::jsonb->>{})::double precision", key)
+                                format!("(dbc_r.value->'doc'->>{})::double precision", key)
                             }
-                            DataType::Boolean => format!("($4::jsonb->>{})::boolean", key),
-                            _ => format!("$4::jsonb->>{}", key),
+                            DataType::Boolean => {
+                                format!("(dbc_r.value->'doc'->>{})::boolean", key)
+                            }
+                            _ => format!("dbc_r.value->'doc'->>{}", key),
                         };
                         (f.name().clone(), expr)
                     })
@@ -1077,10 +1079,12 @@ impl SyncEngine {
                     "data".to_string(),
                     "updated_at".to_string(),
                 ];
+                // A missing "data" key reads as SQL NULL, which is what a row
+                // with no `data` has; see where the rows are built below.
                 let mut values = vec![
-                    "$1::uuid".to_string(),
-                    "$2::jsonb".to_string(),
-                    "$3::text::timestamptz".to_string(),
+                    "(dbc_r.value->>'id')::uuid".to_string(),
+                    "dbc_r.value->'data'".to_string(),
+                    "(dbc_r.value->>'updated_at')::timestamptz".to_string(),
                 ];
                 let mut assignments = vec![
                     "data = EXCLUDED.data".to_string(),
@@ -1131,19 +1135,29 @@ impl SyncEngine {
                 //
                 // `before` reads the collection rather than _base so that it
                 // finds the pending version too.
+                //
+                // A whole record batch goes in one statement, as a jsonb array
+                // of rows. One statement a row spent the restore in round
+                // trips, half of it waiting on each side: 200,000 rows took 53
+                // s, and a node restarting in a container restores before it
+                // serves. All the CTEs see the same snapshot, so a row's
+                // `before` is still the row as it was before this upsert; the
+                // rows of one statement just must not share an id, which the
+                // caller makes sure of.
                 let upsert_base = format!(
                     r#"
                     WITH incoming AS (
                         SELECT {select_list}
+                        FROM jsonb_array_elements($1::jsonb) AS dbc_r
                     ),
                     before AS (
-                        SELECT * FROM "{coll}" WHERE id = $1::uuid
+                        SELECT * FROM "{coll}" WHERE id IN (SELECT id FROM incoming)
                     ),
                     applied AS (
                         INSERT INTO "{base}" ({cols})
-                        SELECT {cols} FROM incoming
-                        WHERE NOT EXISTS (SELECT 1 FROM "{adds}" WHERE id = $1::uuid)
-                          AND NOT EXISTS (SELECT 1 FROM "{dels}" WHERE id = $1::uuid)
+                        SELECT {cols} FROM incoming AS dbc_n
+                        WHERE NOT EXISTS (SELECT 1 FROM "{adds}" WHERE id = dbc_n.id)
+                          AND NOT EXISTS (SELECT 1 FROM "{dels}" WHERE id = dbc_n.id)
                         ON CONFLICT (id) DO UPDATE SET {assignments}
                         WHERE EXCLUDED.updated_at > "{base}".updated_at
                            OR (EXCLUDED.updated_at = "{base}".updated_at
@@ -1154,9 +1168,10 @@ impl SyncEngine {
                         RETURNING id
                     )
                     INSERT INTO "{conflicts}" (id, incoming_won, incoming, existing)
-                    SELECT dbc_i.id, EXISTS (SELECT 1 FROM applied), to_jsonb(dbc_i.*),
-                           to_jsonb(dbc_b.*) - '{layer}'
-                    FROM before AS dbc_b, incoming AS dbc_i
+                    SELECT dbc_i.id,
+                           EXISTS (SELECT 1 FROM applied WHERE applied.id = dbc_i.id),
+                           to_jsonb(dbc_i.*), to_jsonb(dbc_b.*) - '{layer}'
+                    FROM before AS dbc_b JOIN incoming AS dbc_i ON dbc_b.id = dbc_i.id
                     WHERE ({b_tuple}) IS DISTINCT FROM ({i_tuple})
                     "#,
                     select_list = columns
@@ -1195,20 +1210,14 @@ impl SyncEngine {
                     ))
                 })?;
 
+                // Rows that share an id cannot go in one statement: ON
+                // CONFLICT may not touch a row twice. A file does not normally
+                // hold an id twice, but if one does, the later row goes in a
+                // later statement, so they apply in file order as before.
+                let mut chunks: Vec<Vec<serde_json::Value>> = Vec::new();
+                let mut chunk_ids: Vec<std::collections::HashSet<uuid::Uuid>> = Vec::new();
                 for i in 0..batch.num_rows() {
                     let (mut fields, data_json) = arrow_row_to_document(&batch, i);
-
-                    // A JSON null is not an empty column: binding the value as
-                    // it stands writes jsonb 'null' into `data`, where the row
-                    // it came from had SQL NULL. Two nodes then disagree about a
-                    // row they hold identically - one side renders "null" and
-                    // the other renders nothing - and each accepts the other's
-                    // version forever.
-                    let data_param: Option<&serde_json::Value> = if data_json.is_null() {
-                        None
-                    } else {
-                        Some(&data_json)
-                    };
 
                     let Some(serde_json::Value::String(id_str)) = fields.remove("id") else {
                         // A row with no id cannot be upserted into _base, and
@@ -1225,7 +1234,6 @@ impl SyncEngine {
                     };
                     fields.remove("created_at");
                     fields.remove("data");
-                    let document = serde_json::Value::Object(fields);
 
                     let id_uuid = uuid::Uuid::parse_str(&id_str).map_err(|e| {
                         crate::error::DBCenterError::QueryError(format!(
@@ -1233,17 +1241,44 @@ impl SyncEngine {
                             file, id_str, e
                         ))
                     })?;
-                    transaction
-                        .execute(
-                            &statement,
-                            &[&id_uuid, &data_param, &updated_at_val, &document],
-                        )
-                        .map_err(|e| {
-                            crate::error::DBCenterError::QueryError(format!(
-                                "Failed to apply parquet row to base: {:?}",
-                                e
-                            ))
-                        })?;
+
+                    let mut row = serde_json::Map::new();
+                    row.insert("id".into(), serde_json::Value::String(id_str));
+                    row.insert(
+                        "updated_at".into(),
+                        serde_json::Value::String(updated_at_val),
+                    );
+                    row.insert("doc".into(), serde_json::Value::Object(fields));
+                    // A JSON null is not an empty column: written as it stands
+                    // it would be jsonb 'null' in `data`, where the row it came
+                    // from had SQL NULL. Two nodes then disagree about a row
+                    // they hold identically - one side renders "null" and the
+                    // other renders nothing - and each accepts the other's
+                    // version forever. Left out, the key reads as SQL NULL.
+                    if !data_json.is_null() {
+                        row.insert("data".into(), data_json);
+                    }
+
+                    let slot = chunk_ids
+                        .iter()
+                        .rposition(|ids| ids.contains(&id_uuid))
+                        .map_or(0, |last| last + 1);
+                    if slot == chunks.len() {
+                        chunks.push(Vec::new());
+                        chunk_ids.push(std::collections::HashSet::new());
+                    }
+                    chunks[slot].push(serde_json::Value::Object(row));
+                    chunk_ids[slot].insert(id_uuid);
+                }
+
+                for rows in chunks {
+                    let rows = serde_json::Value::Array(rows);
+                    transaction.execute(&statement, &[&rows]).map_err(|e| {
+                        crate::error::DBCenterError::QueryError(format!(
+                            "Failed to apply parquet rows to base: {:?}",
+                            e
+                        ))
+                    })?;
                 }
             }
 
