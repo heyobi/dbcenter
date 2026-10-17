@@ -4,6 +4,7 @@ use dbcenter_core::postgres::types::{IsNull, ToSql, Type as PgType};
 use dbcenter_core::storage::{LocalStorageAdapter as CoreLocalStorageAdapter, StorageAdapter};
 use dbcenter_core::sync_engine::SyncEngine as CoreSyncEngine;
 use dbcenter_core::vfs::google_drive::GoogleDriveAdapter as CoreGoogleDriveAdapter;
+use dbcenter_core::vfs::s3::{S3Config, S3StorageAdapter as CoreS3StorageAdapter};
 use dbcenter_core::DBCenter as CoreDBCenter;
 use pyo3::exceptions::{PyAttributeError, PyException, PyValueError};
 use pyo3::prelude::*;
@@ -1686,6 +1687,7 @@ fn dbcenter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VectorStore>()?;
     m.add_class::<LocalStorageAdapter>()?;
     m.add_class::<GoogleDriveAdapter>()?;
+    m.add_class::<S3StorageAdapter>()?;
     m.add_class::<SyncEngine>()?;
     m.add_class::<LazyFrame>()?;
 
@@ -1771,6 +1773,85 @@ impl GoogleDriveAdapter {
     }
 }
 
+/// Any S3-compatible bucket: AWS S3, Cloudflare R2, Tigris, MinIO.
+///
+/// Pass the keys, or leave both out to read the standard environment
+/// variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`,
+/// `AWS_ENDPOINT_URL_S3`). `prefix` keeps several databases apart in one
+/// bucket.
+#[pyclass]
+struct S3StorageAdapter {
+    inner: Arc<Box<dyn StorageAdapter + Send + Sync>>,
+}
+
+#[pymethods]
+impl S3StorageAdapter {
+    #[new]
+    #[pyo3(signature = (bucket, endpoint=None, access_key=None, secret_key=None, region=None, prefix="", path_style=None, session_token=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        bucket: String,
+        endpoint: Option<String>,
+        access_key: Option<String>,
+        secret_key: Option<String>,
+        region: Option<String>,
+        prefix: &str,
+        path_style: Option<bool>,
+        session_token: Option<String>,
+    ) -> PyResult<Self> {
+        let mut config = match (access_key, secret_key) {
+            (Some(access_key), Some(secret_key)) => {
+                let endpoint = endpoint
+                    .clone()
+                    .unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
+                S3Config {
+                    bucket,
+                    region: "auto".to_string(),
+                    // A plain http:// endpoint is a local MinIO, and MinIO
+                    // wants the bucket in the path.
+                    path_style: endpoint.starts_with("http://"),
+                    endpoint,
+                    access_key,
+                    secret_key,
+                    session_token: None,
+                }
+            }
+            (None, None) => S3Config::from_env(Some(&bucket))
+                .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "pass both access_key and secret_key, or neither to read them \
+                     from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
+                ))
+            }
+        };
+        if let Some(endpoint) = endpoint {
+            config.path_style = endpoint.starts_with("http://");
+            config.endpoint = endpoint;
+        }
+        if let Some(region) = region {
+            config.region = region;
+        }
+        if let Some(path_style) = path_style {
+            config.path_style = path_style;
+        }
+        if session_token.is_some() {
+            config.session_token = session_token;
+        }
+        let adapter = CoreS3StorageAdapter::with_prefix(config, prefix)
+            .map_err(|e| PyException::new_err(e.to_string()))?;
+        Ok(S3StorageAdapter {
+            inner: Arc::new(Box::new(adapter)),
+        })
+    }
+
+    fn list(&self, prefix: &str) -> PyResult<Vec<String>> {
+        self.inner
+            .list(prefix)
+            .map_err(|e| PyException::new_err(e.to_string()))
+    }
+}
+
 /// Python wrapper for SyncEngine
 #[pyclass]
 struct SyncEngine {
@@ -1786,9 +1867,11 @@ impl SyncEngine {
                 local.inner.clone()
             } else if let Ok(drive) = storage.extract::<PyRef<GoogleDriveAdapter>>() {
                 drive.inner.clone()
+            } else if let Ok(s3) = storage.extract::<PyRef<S3StorageAdapter>>() {
+                s3.inner.clone()
             } else {
                 return Err(PyValueError::new_err(
-                    "storage must be LocalStorageAdapter or GoogleDriveAdapter",
+                    "storage must be LocalStorageAdapter, S3StorageAdapter or GoogleDriveAdapter",
                 ));
             };
 
