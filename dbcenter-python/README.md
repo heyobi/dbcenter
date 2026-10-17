@@ -59,6 +59,14 @@ PostgreSQL refuses to run as root, so neither can this. In a container that runs
 as root - which most base images do - create a user first and start the database
 as them; the error says so if you forget.
 
+In Google Colab, which runs everything as root, create a user and run your
+script as them, with a data directory they can write to:
+
+```bash
+!id -u dbuser >/dev/null 2>&1 || useradd -m dbuser
+!sudo -u dbuser python3 /path/to/your_script.py
+```
+
 Extensions are built per PostgreSQL major version. Asking for one with no
 published build is an error naming the versions that exist, rather than a
 download that fails later.
