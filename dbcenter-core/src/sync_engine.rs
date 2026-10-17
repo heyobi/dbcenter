@@ -64,6 +64,7 @@ impl SyncColumn {
 pub struct SyncEngine {
     db: Arc<DBCenter>,
     storage: Arc<Box<dyn StorageAdapter + Send + Sync>>,
+    lookups: crate::vfs::smart_reader::LookupIndex,
 }
 
 /// How much of what is in object storage a pull brings down.
@@ -297,7 +298,22 @@ fn pg_type_for(arrow: &DataType) -> &'static str {
 
 impl SyncEngine {
     pub fn new(db: Arc<DBCenter>, storage: Arc<Box<dyn StorageAdapter + Send + Sync>>) -> Self {
-        Self { db, storage }
+        let lookups = crate::vfs::smart_reader::LookupIndex::new(
+            Arc::clone(&storage),
+            db.get_path().join(".meta"),
+        );
+        Self {
+            db,
+            storage,
+            lookups,
+        }
+    }
+
+    /// How long a lookup trusts the list of objects in storage before listing
+    /// again; rows another node pushes become visible to `scan_smart` within
+    /// this long. Writes made through this engine are visible at once.
+    pub fn set_lookup_listing_ttl(&self, ttl: std::time::Duration) {
+        self.lookups.set_listing_ttl(ttl);
     }
 
     /// The columns a table's rows are written as, in table order.
@@ -457,8 +473,20 @@ impl SyncEngine {
         let batch = self.rows_to_record_batch(&columns, rows)?;
 
         // 4. Write to Parquet (In-Memory)
+        //
+        // An id bloom filter, like the base's. A delta is written in arrival
+        // order, so its id range is the whole id space and min/max can rule
+        // nothing out: without a filter, every lookup in the table fetched
+        // every delta's rows to find out the id was not there.
         let mut buffer = Vec::new();
-        let props = WriterProperties::builder().build();
+        let id_column = parquet::schema::types::ColumnPath::from("id");
+        let props = WriterProperties::builder()
+            .set_column_bloom_filter_enabled(id_column.clone(), true)
+            .set_column_bloom_filter_ndv(id_column, row_count.max(1) as u64)
+            .set_compression(parquet::basic::Compression::ZSTD(
+                parquet::basic::ZstdLevel::default(),
+            ))
+            .build();
         let mut writer =
             ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).map_err(|e| {
                 crate::error::DBCenterError::SerializationError(serde::ser::Error::custom(
@@ -604,6 +632,8 @@ impl SyncEngine {
 
         // A new delta object changes which deduplication the view needs.
         self.refresh_columnar_view(table_name);
+        // And which objects a lookup has to consult.
+        self.lookups.invalidate(table_name);
 
         Ok(row_count)
     }
@@ -911,6 +941,7 @@ impl SyncEngine {
             // A compaction replaces the deltas with a single base, which is the
             // largest change the view's definition can see.
             self.refresh_columnar_view(table_name);
+            self.lookups.invalidate(table_name);
             Ok(())
         })();
 
@@ -1520,8 +1551,6 @@ impl SyncEngine {
         Ok(())
     }
 
-    /// Task 5.3: Smart Scan (Predicate Pushdown)
-    /// Finds the latest BASE file and executes a smart scan on it using RemoteFile.
     /// Look one id up in object storage, reading as little as possible.
     ///
     /// Every Parquet object for the table is consulted, not only the newest base
@@ -1530,51 +1559,18 @@ impl SyncEngine {
     /// everything written since the last vacuum. Later objects win, which matches
     /// how the rows were applied locally.
     ///
-    /// Row groups whose id range cannot contain the target are skipped without
-    /// being fetched. See `tests/lazy_read.rs` for what that saves.
+    /// What it costs is in [`crate::vfs::smart_reader::LookupIndex`]: after the
+    /// first lookup on a table, normally one request.
     pub fn scan_smart(
         &self,
         table_name: &str,
         target_id: &str,
     ) -> crate::error::Result<Vec<serde_json::Value>> {
-        use crate::vfs::remote_file::RemoteFile;
-        use crate::vfs::smart_reader::SmartParquetReader;
-
-        // Names carry a unix timestamp, so sorting them puts the base first and
-        // the deltas after it in the order they were written.
-        let mut objects: Vec<String> = self
-            .storage
-            .list(table_name)?
+        Ok(self
+            .lookups
+            .lookup(table_name, target_id)?
+            .map(|row| row_to_document(&row))
             .into_iter()
-            .filter(|f| f.ends_with(".parquet") && (f.contains("_BASE_") || f.contains("_DELTA_")))
-            .collect();
-        objects.sort();
-
-        let meta_dir = self.db.get_path().join(".meta");
-        std::fs::create_dir_all(&meta_dir).ok();
-
-        let mut newest: Option<serde_json::Value> = None;
-
-        for key in objects {
-            let size = self.storage.size(&key).unwrap_or(0);
-            if size == 0 {
-                continue;
-            }
-
-            let remote_file = RemoteFile::new(
-                self.storage.clone(),
-                key.clone(),
-                size,
-                5 * 1024 * 1024,
-                Some(meta_dir.join(format!("{}.meta", key.replace('/', "_")))),
-            );
-
-            let reader = SmartParquetReader::new(remote_file)?;
-            for row in reader.scan_for_id(target_id)? {
-                newest = Some(row_to_document(&row));
-            }
-        }
-
-        Ok(newest.into_iter().collect())
+            .collect())
     }
 }
