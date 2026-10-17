@@ -44,6 +44,7 @@ fn a_stale_pid_file_naming_a_live_process_that_is_not_postgres_is_ignored() {
         .expect("a stale postmaster.pid must not stop the server starting");
     db.shutdown().unwrap();
     let _ = other.kill();
+    let _ = other.wait();
     drop(db);
     let _ = std::fs::remove_dir_all(&path);
 }
