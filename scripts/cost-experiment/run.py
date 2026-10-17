@@ -30,6 +30,9 @@ import psycopg
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMPOSE = ["docker", "compose", "-f", os.path.join(HERE, "docker-compose.yml")]
 
+# Where the storage container keeps the bucket's objects.
+BUCKET_DIR = "/bitnami/minio/data"
+
 TARGETS = {
     "postgres": {"port": 25432, "engine": "postgres", "data_dir": "/var/lib/postgresql"},
     "dbcenter": {"port": 25433, "engine": "dbcenter", "data_dir": "/data"},
@@ -186,7 +189,7 @@ def memory_bytes(service):
 def bucket_bytes():
     cid = container_id("storage")
     out = subprocess.run(
-        ["docker", "exec", cid, "du", "-sb", "/data"], capture_output=True, text=True
+        ["docker", "exec", cid, "du", "-sb", BUCKET_DIR], capture_output=True, text=True
     )
     return int(out.stdout.split()[0]) if out.returncode == 0 else None
 
@@ -347,9 +350,9 @@ def wait_for_base(timeout=1800):
     started = time.perf_counter()
     while time.time() < deadline:
         out = subprocess.run(
-            # MinIO lays objects out as /data/<bucket>/<key>, and the keys are
+            # MinIO lays objects out as <data>/<bucket>/<key>, and the keys are
             # flat under the prefix rather than in a directory per table.
-            ["docker", "exec", cid, "sh", "-c", "ls /data/events/bench/ 2>/dev/null"],
+            ["docker", "exec", cid, "sh", "-c", f"ls {BUCKET_DIR}/events/bench/ 2>/dev/null"],
             capture_output=True, text=True,
         )
         names = out.stdout.split()
