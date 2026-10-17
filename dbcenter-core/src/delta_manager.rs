@@ -94,7 +94,12 @@ impl DeltaManager {
         };
 
         transaction
-            .batch_execute(&format!("{}\n{}", ddl, triggers_sql(table_name)))
+            .batch_execute(&format!(
+                "{}\n{}\n{}",
+                UUID_DEFAULT_SQL,
+                ddl,
+                triggers_sql(table_name)
+            ))
             .map_err(lookup_failed)?;
         transaction.commit().map_err(lookup_failed)?;
         Ok(())
@@ -174,6 +179,15 @@ fn names(table_name: &str) -> (String, String, String, String) {
         quote_ident(&format!("{}_dels", table_name)),
     )
 }
+
+/// `gen_random_uuid()`, the id default, is built in from PostgreSQL 13. On 12
+/// it comes from pgcrypto, which every PostgreSQL build ships but nothing
+/// creates, so the first delta collection on 12 failed without this.
+const UUID_DEFAULT_SQL: &str = "DO $$ BEGIN
+    IF current_setting('server_version_num')::int < 130000 THEN
+        CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    END IF;
+END $$;";
 
 fn create_sql(table_name: &str) -> String {
     let (coll, base, adds, dels) = names(table_name);
