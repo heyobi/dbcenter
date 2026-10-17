@@ -419,6 +419,43 @@ fn a_view_shaped_collection_is_converted_when_the_database_opens() {
 }
 
 #[test]
+fn a_delta_collection_works_on_postgresql_12() {
+    // The id default, gen_random_uuid(), is built in from 13; on 12 it comes
+    // from pgcrypto, and creating the first collection used to fail.
+    let dir = workspace("pg12");
+    let store = dir.join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    let db = DBCenter::builder()
+        .path(dir.join("a").to_str().unwrap())
+        .persist(true)
+        .multi_user_sync_mode(true)
+        .postgres_version("12")
+        .build()
+        .expect("embedded postgres 12 should start");
+    let adapter: Arc<Box<dyn StorageAdapter + Send + Sync>> =
+        Arc::new(Box::new(LocalStorageAdapter::new(store.clone())));
+    let engine = SyncEngine::new(Arc::clone(&db), adapter);
+
+    let orders = db.collection("orders");
+    orders.insert_one(&json!({"ref": "v1"})).unwrap();
+    // A client on the wire leaves the id to the column default.
+    db.query(
+        "INSERT INTO orders (\"ref\") VALUES ('wire') RETURNING id",
+        &[],
+    )
+    .unwrap();
+    assert_eq!(engine.sync_table("orders", 100).unwrap(), 2);
+
+    let mut query = HashMap::new();
+    query.insert("ref".to_string(), json!("v1"));
+    let mut update = HashMap::new();
+    update.insert("$set".to_string(), json!({"ref": "v2"}));
+    assert_eq!(orders.update_one(&query, &update).unwrap(), 1);
+    assert_eq!(orders.count(None).unwrap(), 2);
+    db.shutdown().unwrap();
+}
+
+#[test]
 fn a_sync_gives_back_the_space_it_empties_in_adds() {
     // Every scan of the collection reads _adds too, so empty pages left there
     // by the move cost every aggregate, not just disk.
