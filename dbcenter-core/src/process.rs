@@ -926,6 +926,20 @@ pub fn is_process_running_global(pid: u32) -> bool {
             .unwrap_or(false)
     }
 
+    // A live pid is not enough: it has to be a postgres. A container starts
+    // its processes from pid 1 every time, so the pid a killed server left in
+    // postmaster.pid is soon some other process of the next run - and the
+    // node refused to start ever again, on a server that no longer existed.
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string(format!("/proc/{}/comm", pid)) {
+            Ok(comm) => return comm.trim() == "postgres",
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+            // /proc mounted with hidepid: fall back to asking the kernel.
+            Err(_) => {}
+        }
+    }
+
     #[cfg(unix)]
     {
         Command::new("kill")
