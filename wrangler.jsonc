@@ -1,0 +1,10 @@
+// db.center: Cloudflare Workers Builds deploys the static site in
+// dbcenterwebsite/ on every push to main. There is no Worker script, only
+// these files. "name" has to match the project name in Cloudflare.
+{
+  "name": "dbcenter",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dbcenterwebsite"
+  }
+}
