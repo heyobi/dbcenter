@@ -97,6 +97,25 @@ of individual rows stay on the local PostgreSQL, where they take a fraction of
 a millisecond; the bucket is the durable copy and the analytics source, not
 where a request should fetch one row. [The measurements](docs/cost-and-scale.md).
 
+## In tests
+
+Installing dbcenter gives pytest a real PostgreSQL - no Docker, no service
+container. One server per test session; each test starts with an empty
+`public` schema.
+
+```python
+def test_orders(dbcenter_db):
+    dbcenter_db.query("CREATE TABLE orders (id serial, total numeric)")
+    dbcenter_db.query("INSERT INTO orders (total) VALUES (10)")
+    assert dbcenter_db.query("SELECT count(*) AS n FROM orders")[0]["n"] == 1
+
+def test_with_your_own_driver(postgres_dsn, postgres_url):
+    conn = psycopg.connect(postgres_dsn)          # or SQLAlchemy with postgres_url
+```
+
+`db.dsn` and `db.url` give the same connection details outside pytest, for
+psql, psycopg, SQLAlchemy or a driver in another language.
+
 ## Running it
 
 PostgreSQL refuses to run as root, so run as an ordinary user - inside a

@@ -128,8 +128,9 @@ jobs:
         run: |
           python -m venv .venv
           # mcp so test_mcp.py runs rather than skipping; it is the optional
-          # extra that provides the MCP server.
-          .venv/bin/pip install --quiet maturin "mcp>=2,<3"
+          # extra that provides the MCP server. pytest for the fixtures in
+          # dbcenter.testing, which test_pytest_plugin.py runs through pytest.
+          .venv/bin/pip install --quiet maturin "mcp>=2,<3" pytest
           .venv/bin/maturin develop --manifest-path dbcenter-python/Cargo.toml
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/.venv

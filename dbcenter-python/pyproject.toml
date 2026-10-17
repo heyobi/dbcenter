@@ -5,12 +5,12 @@ build-backend = "maturin"
 [project]
 name = "dbcenter"
 version = "0.4.2"
-description = "Embedded PostgreSQL with a MongoDB-style API, PostGIS and pgvector included"
+description = "A real PostgreSQL in one pip install, for apps, notebooks, tests and AI agents: read-only SQL, an MCP server, pgvector, and sync to your own S3/R2 bucket"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [{ name = "İbrahim Polat", email = "ipolat2001@gmail.com" }]
-keywords = ["postgresql", "postgres", "embedded", "database", "postgis", "pgvector", "gis", "vector"]
+keywords = ["postgresql", "postgres", "embedded", "database", "pytest", "mcp", "ai-agents", "llm", "pgvector", "postgis", "s3", "parquet", "duckdb"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -22,11 +22,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Database",
     "Topic :: Database :: Database Engines/Servers",
+    "Framework :: Pytest",
+    "Topic :: Software Development :: Testing",
     "Topic :: Scientific/Engineering :: GIS",
 ]
 
 [project.urls]
-Homepage = "https://db.center"
+Homepage = "https://github.com/heyobi/dbcenter"
 Source = "https://github.com/heyobi/dbcenter"
 "Extension builds" = "https://github.com/heyobi/dbcenter-extensions"
 
@@ -37,6 +39,11 @@ mcp = ["mcp>=2,<3"]
 
 [project.scripts]
 dbcenter-mcp = "dbcenter.mcp_server:main"
+
+# pytest loads these fixtures by itself once dbcenter is installed:
+# dbcenter_db, postgres_dsn, postgres_url. See dbcenter/testing.py.
+[project.entry-points.pytest11]
+dbcenter = "dbcenter.testing"
 
 [tool.maturin]
 # Mixed layout: the native module is dbcenter.dbcenter, and python/dbcenter

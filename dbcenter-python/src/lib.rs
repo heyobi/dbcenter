@@ -476,6 +476,59 @@ impl DBCenter {
         Ok(self.inner.get_port())
     }
 
+    /// A libpq connection string ("host=... port=... dbname=... user=..."),
+    /// which psycopg, psql and most drivers take as it is.
+    #[getter]
+    fn dsn(&self) -> String {
+        self.inner.connection_string()
+    }
+
+    /// The same as a postgresql:// URL, which SQLAlchemy and most ORMs want.
+    /// Over a Unix socket the host goes in the query string, the form libpq
+    /// and psycopg read.
+    #[getter]
+    fn url(&self) -> String {
+        let mut fields = HashMap::new();
+        for part in self.inner.connection_string().split_whitespace() {
+            if let Some((k, v)) = part.split_once('=') {
+                fields.insert(k.to_string(), v.to_string());
+            }
+        }
+        let get = |k: &str| fields.get(k).cloned().unwrap_or_default();
+        let enc = |v: &str| -> String {
+            v.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                        (b as char).to_string()
+                    }
+                    _ => format!("%{:02X}", b),
+                })
+                .collect()
+        };
+        let auth = match fields.get("password") {
+            Some(p) => format!("{}:{}", enc(&get("user")), enc(p)),
+            None => enc(&get("user")),
+        };
+        let host = get("host");
+        if host.starts_with('/') {
+            format!(
+                "postgresql://{}@/{}?host={}&port={}",
+                auth,
+                enc(&get("dbname")),
+                enc(&host),
+                get("port")
+            )
+        } else {
+            format!(
+                "postgresql://{}@{}:{}/{}",
+                auth,
+                host,
+                get("port"),
+                enc(&get("dbname"))
+            )
+        }
+    }
+
     /// Support attribute access: db.users -> Collection
     /// But don't override special attributes like 'path'
     fn __getattr__(&self, name: &str) -> PyResult<PyObject> {
